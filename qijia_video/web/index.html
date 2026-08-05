@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>齐家 AI 短视频生产工作台</title>
+  <link rel="stylesheet" href="/qijia-video/assets/app.css">
+</head>
+<body>
+  <a class="skip-link" href="#workspace">跳到工作区</a>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">独立内容生产模块</p>
+      <h1>齐家 AI 短视频生产工作台</h1>
+      <p class="subtitle">教育与心理学知识内容 · 脚本确认 · 成片确认</p>
+    </div>
+    <form action="/logout" method="post">
+      <button class="back-link" type="submit">退出登录</button>
+    </form>
+  </header>
+
+  <main id="workspace" class="shell" tabindex="-1">
+    <section id="system-status" class="status-card" aria-live="polite">
+      <span class="status-dot"></span>
+      <span>正在检查独立模块能力…</span>
+    </section>
+
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+    <div class="workspace-grid">
+      <aside class="left-column">
+        <section class="panel">
+          <div class="panel-heading">
+            <div><p class="step">01</p><h2>开始一条视频</h2></div>
+            <button id="new-card-button" class="button secondary" type="button">新建</button>
+          </div>
+          <p class="panel-note intake-intro">输入一个人物和他的核心观点，系统会把观点中的冲突、反直觉与现实意义展开成完整视频脚本。</p>
+          <form id="source-card-form" class="form-stack">
+            <label class="primary-field">
+              <span class="question-line"><span class="question-number">1</span>你想讲谁？</span>
+              <input name="person_name" required maxlength="120" autocomplete="off" placeholder="例如：阿尔弗雷德·阿德勒">
+              <span class="field-hint">输入教育、心理学或思想领域的人物。</span>
+            </label>
+            <label class="primary-field">
+              <span class="question-line"><span class="question-number">2</span>这个人物最值得展开的观点是什么？</span>
+              <textarea name="viewpoint" required minlength="10" maxlength="1800" rows="7" placeholder="例如：真正影响孩子的，不是父母说了什么，而是孩子如何理解自己在家庭中的位置。"></textarea>
+              <span class="field-hint">直接写观点即可。系统会寻找它与常见认知的真实冲突，但不会虚构人物经历或引语。</span>
+            </label>
+            <section class="reference-input" aria-labelledby="reference-input-title">
+              <div class="reference-input-heading">
+                <div>
+                  <strong id="reference-input-title">有喜欢的画面风格？</strong>
+                  <span>上传 1 张参考图（可选）</span>
+                </div>
+                <button id="remove-reference-image" class="reference-remove" type="button" hidden>移除</button>
+              </div>
+              <div id="reference-dropzone" class="reference-dropzone" role="button" tabindex="0" aria-label="选择全局参考图">
+                <input id="reference-image-input" name="reference_image" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+                <div id="reference-empty" class="reference-empty">
+                  <span class="reference-add">+</span>
+                  <span>拖入图片，或点击选择</span>
+                </div>
+                <div id="reference-preview" class="reference-preview" hidden>
+                  <img id="reference-preview-image" alt="已选择的全局参考图">
+                  <span id="reference-file-name"></span>
+                </div>
+              </div>
+              <p class="field-hint">上传后，它会成为 5 个镜头的最高优先级视觉基准，但不作为观点依据。JPG、PNG 或 WebP，最大 10 MB。</p>
+            </section>
+            <div class="actions source-form-actions">
+              <button id="source-submit-button" class="button primary" type="submit">生成脚本</button>
+            </div>
+          </form>
+          <details id="generation-prompt-settings" class="advanced-settings prompt-settings global-prompt-settings">
+            <summary>调整 AI 写法和画面风格（实验用）</summary>
+            <p class="field-hint">默认值可以直接使用。修改后会用于下一条新建视频，并保存在当前浏览器中；系统先为 5 个章节各生成 1 张首帧，再用其中 3 张生成 8-10 秒、480p 的 AI 视频，另外 2 张直接进入成片。</p>
+            <label>脚本生成提示词
+              <textarea id="script-generation-prompt" rows="11" maxlength="8000" spellcheck="false"></textarea>
+              <span class="field-hint">人物、观点和 JSON 输出结构由系统自动附加，你只需调整写作方式。</span>
+            </label>
+            <label>全片画面导演设定
+              <textarea id="seedance-generation-prompt" rows="8" maxlength="3200" spellcheck="false"></textarea>
+              <span class="field-hint">没有参考图时，它统一指导分镜、Seedream 首帧和 3 个 Seedance 视频；上传参考图后，由参考图接管画风与人物造型。</span>
+            </label>
+            <div class="prompt-actions">
+              <button id="restore-prompt-defaults" class="button secondary" type="button">恢复默认提示词</button>
+            </div>
+          </details>
+        </section>
+
+        <section class="panel list-panel">
+          <div class="panel-heading"><div><p class="step">观点库</p><h2>最近人物观点</h2></div></div>
+          <div id="source-card-list" class="card-list"><p class="empty">还没有创作过人物观点。</p></div>
+        </section>
+      </aside>
+
+      <section class="right-column">
+        <section class="panel">
+          <div class="panel-heading">
+            <div><p class="step">02—05</p><h2>视频任务</h2></div>
+            <button id="refresh-button" class="button secondary" type="button">刷新</button>
+          </div>
+          <div id="job-list" class="job-list"><p class="empty">输入人物和观点，开始第一条视频。</p></div>
+        </section>
+
+        <section id="job-detail" class="panel detail-panel" hidden>
+          <div class="panel-heading">
+            <div><p class="step">当前任务</p><h2 id="job-title">视频详情</h2></div>
+            <span id="job-state" class="state-pill"></span>
+          </div>
+          <section id="job-reference-image" class="job-reference-image" hidden>
+            <img id="job-reference-preview" alt="本任务的全局参考图">
+            <div><strong>全局参考图已应用</strong><span>优先统一 5 个镜头的画风、色彩与人物造型</span></div>
+          </section>
+          <ol id="stage-track" class="stage-track" aria-label="生产进度"></ol>
+          <section class="workflow-summary" aria-live="polite" aria-label="当前链路状态">
+            <div class="workflow-summary-item current">
+              <span>当前动作</span>
+              <strong id="current-action">等待任务开始</strong>
+            </div>
+            <div class="workflow-summary-item">
+              <span>本轮耗时</span>
+              <strong id="stage-elapsed">—</strong>
+            </div>
+            <div class="workflow-summary-item">
+              <span>下一步</span>
+              <strong id="next-action">系统将自动继续</strong>
+            </div>
+          </section>
+          <section id="seedance-usage-summary" class="usage-summary" aria-label="AI 生成用量" hidden>
+            <div class="usage-stat">
+              <span>实际消耗</span>
+              <strong id="seedance-token-total">等待方舟返回</strong>
+            </div>
+            <div class="usage-stat">
+              <span>画面生成费用估算</span>
+              <strong id="seedance-cost-estimate">—</strong>
+            </div>
+            <div class="usage-stat">
+              <span>本任务规格</span>
+              <strong id="seedance-spec">—</strong>
+            </div>
+            <details class="usage-details">
+              <summary id="seedance-usage-status">查看首帧与逐镜头消耗</summary>
+              <div id="seedance-usage-list" class="usage-list"></div>
+              <p id="seedance-price-basis" class="field-hint"></p>
+            </details>
+          </section>
+          <div id="job-error" class="error-box" hidden></div>
+          <section id="script-review" class="review-section" hidden>
+            <div class="section-title"><h3>脚本确认</h3><span>确认后开始配音与画面生成</span></div>
+            <section class="script-document" aria-label="完整视频脚本">
+              <label class="script-title-field">视频标题
+                <input id="script-video-title" maxlength="200" autocomplete="off">
+              </label>
+              <div class="script-document-heading">
+                <strong>完整脚本</strong>
+                <span id="script-length-status" class="field-hint" aria-live="polite">只统计会被念出的旁白</span>
+              </div>
+              <div id="script-beat-editor" class="script-beat-editor"></div>
+              <p class="field-hint script-document-hint">每一段都包含画面、旁白和可选的屏幕文字。只有旁白会进入配音；屏幕文字由 Remotion 后期排版，不会让 AI 直接画字。</p>
+            </section>
+            <details class="advanced-settings prompt-settings job-prompt-settings">
+              <summary>本任务的全片画面导演设定</summary>
+              <label>确认前仍可修改
+                <textarea id="job-seedance-prompt" rows="7" maxlength="3200" spellcheck="false"></textarea>
+                <span class="field-hint">没有参考图时，它会指导五章节分镜、首帧和 3 个 480p、8-10 秒视频；有参考图时由参考图接管画风与人物造型。口播原句不会作为画面文字。</span>
+              </label>
+            </details>
+            <div class="actions">
+              <button id="save-script-button" class="button secondary" type="button">保存修改</button>
+              <button id="approve-script-button" class="button primary" type="button">确认脚本并生成</button>
+            </div>
+          </section>
+          <section id="production-progress" class="review-section" hidden>
+            <div class="section-title"><h3>自动流程进行中</h3><span id="task-progress">等待后台任务…</span></div>
+            <div id="task-progress-meter" class="progress" role="progressbar" aria-label="自动流程总进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="task-progress-bar"></span></div>
+          </section>
+          <section id="shot-storyboard" class="review-section storyboard-section" hidden>
+            <div class="section-title storyboard-heading">
+              <div><h3>AI 镜头故事板</h3><span id="storyboard-summary">3 段视频和 2 段动态图片会在这里逐个出现</span></div>
+              <span class="storyboard-hint">选中镜头，可查看首帧、提示词和历史版本</span>
+            </div>
+            <p id="frame-selection-warning" class="frame-selection-warning" hidden></p>
+            <div class="storyboard-layout">
+              <div id="shot-grid" class="shot-grid" role="list" aria-label="AI 镜头列表"></div>
+              <aside id="shot-inspector" class="shot-inspector" aria-label="镜头设置" hidden></aside>
+            </div>
+          </section>
+          <section id="final-review" class="review-section" hidden>
+            <div class="section-title"><h3>成片确认</h3><span>自动质检通过后仍需人工确认</span></div>
+            <video id="draft-video" controls preload="metadata" playsinline></video>
+            <figure class="cover-preview"><img id="draft-cover" alt="待确认视频封面"><figcaption>封面同时属于本次确认对象</figcaption></figure>
+            <div id="quality-summary" class="quality-grid"></div>
+            <button id="approve-final-button" class="button primary" type="button">确认成片包并生成发布版本</button>
+          </section>
+          <section id="artifact-section" class="review-section" hidden>
+            <div class="section-title"><h3>下载发布内容</h3><span>优先使用完整发布包</span></div>
+            <div class="release-downloads">
+              <a id="download-release-package" class="download-card primary-download" href="#">
+                <strong>下载完整发布包 ZIP</strong><span>成片、封面、文案、字幕和来源说明</span>
+              </a>
+              <a id="download-final-video" class="download-card" href="#">
+                <strong>下载成片 MP4</strong><span>只下载最终视频</span>
+              </a>
+            </div>
+            <details class="technical-artifacts">
+              <summary>查看技术产物</summary>
+              <div id="artifact-list" class="artifact-list"></div>
+            </details>
+          </section>
+          <button id="revise-script-button" class="button primary" type="button" hidden>返回修改脚本</button>
+          <button id="retry-button" class="button danger" type="button" hidden>从失败阶段重试</button>
+        </section>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="/qijia-video/assets/app.js"></script>
+</body>
+</html>

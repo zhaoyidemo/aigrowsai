@@ -1,0 +1,15 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.pytest_cache
+**/__pycache__
+**/*.pyc
+video_renderer/node_modules
+node_modules
+tmp
+*.mp4
+*.mp3
+*.wav
+*.webm

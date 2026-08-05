@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>登录 · 齐家 AI 短视频</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f1ea; color: #172033; padding: 24px; }
+    main { width: min(100%, 400px); background: #fff; border: 1px solid #dedbd3; border-radius: 18px; padding: 34px; box-shadow: 0 24px 70px rgba(31,35,45,.10); }
+    .eyebrow { margin: 0 0 8px; color: #9a5b38; font-size: 12px; font-weight: 700; letter-spacing: .1em; }
+    h1 { margin: 0; font-size: 25px; }
+    .subtitle { margin: 10px 0 28px; color: #687083; font-size: 14px; line-height: 1.6; }
+    label { display: grid; gap: 8px; margin-top: 17px; font-size: 13px; font-weight: 650; }
+    input { width: 100%; border: 1px solid #cdd1d8; border-radius: 10px; padding: 12px 13px; font: inherit; font-weight: 400; }
+    input:focus { outline: 3px solid rgba(154,91,56,.14); border-color: #9a5b38; }
+    button { width: 100%; margin-top: 24px; border: 0; border-radius: 10px; padding: 12px 16px; background: #172033; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+    .error { margin: 0 0 16px; border-radius: 9px; background: #fff1f1; color: #a52d2d; padding: 10px 12px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">QI JIA AI</p>
+    <h1>短视频生产工作台</h1>
+    <p class="subtitle">登录后继续生成教育与心理学短视频。</p>
+    {{ERROR}}
+    <form action="/login" method="post">
+      <input type="hidden" name="next" value="{{NEXT}}">
+      <label>账号<input name="username" autocomplete="username" required autofocus></label>
+      <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit">进入工作台</button>
+    </form>
+  </main>
+</body>
+</html>
