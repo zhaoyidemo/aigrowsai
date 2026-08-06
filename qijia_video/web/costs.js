@@ -181,6 +181,24 @@ function renderPerformance(data) {
   const targetViews = number(summary.target_views);
   const targetRatio = targetViews > 0 ? Math.min(1, currentViews / targetViews) : 0;
   const targetPercent = Math.round(targetRatio * 100);
+  const targetGap = $('#performance-target-gap');
+  const targetGapDetail = $('#performance-target-gap-detail');
+  if (!tracked) {
+    targetGap.textContent = '—';
+    targetGapDetail.textContent = '尚无已回流视频';
+  } else if (!hasCostBasis) {
+    targetGap.textContent = '—';
+    targetGapDetail.textContent = '尚无可计算成本基准';
+  } else if (summary.target_achieved) {
+    targetGap.textContent = '已达标';
+    targetGapDetail.textContent = `超出 ${formatInteger(Math.max(0, currentViews - targetViews))} 次播放`;
+  } else if (summary.target_achieved_provisional) {
+    targetGap.textContent = '暂时达标';
+    targetGapDetail.textContent = '仍有成本待对账';
+  } else {
+    targetGap.textContent = `还差 ${formatInteger(summary.remaining_views)}`;
+    targetGapDetail.textContent = `目标 ${formatInteger(targetViews)} 次播放${summary.cost_complete ? '' : ' · 暂估'}`;
+  }
   $('#performance-target-current').textContent = formatInteger(currentViews);
   $('#performance-target-views').textContent = formatInteger(targetViews);
   $('#performance-target-bar').style.width = `${targetPercent}%`;
@@ -206,7 +224,7 @@ function renderPerformance(data) {
     : `${rows.length} 条已回流`;
   const body = $('#performance-table-body');
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="5" class="empty">${
+    body.innerHTML = `<tr><td colspan="4" class="empty">${
       packaged
         ? `当前范围有 ${formatInteger(packaged)} 条已打包视频，但尚未手填绑定抖音链接。`
         : '当前范围内还没有已打包并绑定抖音的视频。'
@@ -235,11 +253,11 @@ function renderPerformance(data) {
         </td>
         <td><strong>${formatInteger(row.play_count)}</strong><small>${escapeHtml(formatDateTime(row.observed_at))} · ${formatInteger(row.snapshot_count)} 次快照</small></td>
         <td><strong>${escapeHtml(formatMoney(row.accounted_cost_cny))}</strong><small>播放价值 ${escapeHtml(formatMoney(row.playback_value_cny))}${row.unpriced_event_count ? ` · ${formatInteger(row.unpriced_event_count)} 笔待对账` : ''}</small></td>
-        <td><strong>${escapeHtml(formatMultiple(row.roi_multiple))}</strong><small><span class="performance-status ${status.className}">${status.label}</span></small></td>
-        <td>
-          <strong>${formatInteger(row.play_count)} / ${formatInteger(row.target_views)}</strong>
+        <td class="performance-roi-cell">
+          <strong>${escapeHtml(formatMultiple(row.roi_multiple))}</strong>
+          <small><span class="performance-status ${status.className}">${status.label}</span></small>
           <div class="performance-row-progress" aria-hidden="true"><span style="width:${rowProgress}%"></span></div>
-          <small>${targetCopy}</small>
+          <small>${rowHasCostBasis ? `10 倍目标 ${formatInteger(row.target_views)} · ` : ''}${targetCopy}</small>
         </td>
       </tr>`;
     }).join('');
@@ -372,9 +390,7 @@ function render(data) {
   renderMethod(data);
   renderNotice(data);
   const status = $('#cost-status');
-  status.classList.add('ready');
-  status.classList.remove('warning');
-  status.querySelector('span:last-child').textContent = `成本与效果计算完成 · ${data.period?.label || ''} · 更新于 ${formatDateTime(data.generated_at)}`;
+  status.hidden = true;
   $('#cost-export-button').disabled = !data.content?.length;
   $('#performance-export-button').disabled = !data.performance?.rows?.length;
 }
@@ -383,6 +399,10 @@ async function loadCosts() {
   if (state.busy) return;
   setBusy(true);
   const days = Number($('#cost-period-select').value || 30);
+  const status = $('#cost-status');
+  status.hidden = false;
+  status.classList.remove('ready', 'warning');
+  status.querySelector('span:last-child').textContent = '正在读取团队成本与抖音效果数据…';
   try {
     const response = await fetch(`${API}?days=${encodeURIComponent(days)}`, {
       credentials: 'same-origin', headers: {'Accept': 'application/json'},
@@ -392,7 +412,6 @@ async function loadCosts() {
     if (!response.ok || payload.code !== 0) throw new Error(apiErrorMessage(payload));
     render(payload.data || {});
   } catch (error) {
-    const status = $('#cost-status');
     status.classList.remove('ready');
     status.classList.add('warning');
     status.querySelector('span:last-child').textContent = `成本读取失败：${error.message}`;

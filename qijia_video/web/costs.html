@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>成本与效果分析 · 齐家 AI 内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.11.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.12.0">
 </head>
 <body>
   <a class="skip-link" href="#cost-workspace">跳到成本与效果分析</a>
@@ -34,7 +34,7 @@
       <div>
         <p class="step">分析范围</p>
         <h2 id="cost-period-title">最近 30 天</h2>
-        <p>查看报表不会调用 TikHub、模型或生成服务，也不会产生新费用。</p>
+        <p>效果按作品首次绑定时间筛选；成本明细按调用发生时间筛选。查看报表不会产生新费用。</p>
       </div>
       <div class="cost-toolbar-actions">
         <label>时间范围
@@ -47,73 +47,23 @@
           </select>
         </label>
         <button id="cost-refresh-button" class="button secondary" type="button">刷新</button>
-        <button id="cost-export-button" class="button secondary" type="button" disabled>导出内容汇总 CSV</button>
       </div>
-    </section>
-
-    <section class="cost-definition" aria-label="计算口径">
-      <strong>人民币已计成本 = 供应商回传金额 + 有计价依据的估算</strong>
-      <span>美元成本固定按 1 USD = ¥6.7 换算；估算不等于最终账单，待对账请求不计入金额但保留在覆盖率中。</span>
-    </section>
-
-    <section class="cost-kpi-grid" aria-label="成本摘要">
-      <article class="cost-kpi-card primary">
-        <span>人民币总成本</span>
-        <strong id="cost-accounted-cny">¥0.00</strong>
-        <small id="cost-cny-breakdown">回传 ¥0.00 · 估算 ¥0.00</small>
-      </article>
-      <article class="cost-kpi-card">
-        <span>计价覆盖率</span>
-        <strong id="cost-coverage">—</strong>
-        <small id="cost-coverage-detail">正在计算</small>
-      </article>
-      <article class="cost-kpi-card">
-        <span>计费相关请求</span>
-        <strong id="cost-request-count">0</strong>
-        <small id="cost-token-count">0 tokens</small>
-      </article>
-      <article class="cost-kpi-card">
-        <span>已打包视频</span>
-        <strong id="cost-completed-videos">0</strong>
-        <small id="cost-work-count">0 个视频任务 · 0 轮选题</small>
-      </article>
-      <article class="cost-kpi-card">
-        <span>视频投入 / 已打包视频</span>
-        <strong id="cost-per-video">—</strong>
-        <small>只作经营观察，包含同期未完工视频投入</small>
-      </article>
     </section>
 
     <section class="panel performance-panel" aria-labelledby="performance-title">
       <div class="panel-heading cost-section-heading performance-heading">
         <div>
-          <p class="step">经营结果</p>
+          <p class="step">核心经营结果</p>
           <h2 id="performance-title">团队抖音内容效果</h2>
-          <p>只读取团队已经手填绑定的抖音视频快照；查看、排序和导出都不会产生 API 费用。</p>
+          <p id="performance-cohort-note">按首次绑定时间纳入，刷新不会改变视频所属时间范围。</p>
         </div>
-        <div class="performance-toolbar">
-          <label>排行方式
-            <select id="performance-sort-select">
-              <option value="roi">ROI 最高</option>
-              <option value="plays">播放量最高</option>
-              <option value="cost">累计成本最高</option>
-              <option value="latest">最近回流</option>
-            </select>
-          </label>
-          <button id="performance-export-button" class="button secondary" type="button" disabled>导出效果 CSV</button>
-        </div>
-      </div>
-
-      <div class="performance-definition">
-        <strong>播放价值 = 播放量 ÷ 1000 × ¥10；整体 ROI = 播放价值合计 ÷ 纳入视频累计成本</strong>
-        <span id="performance-cohort-note">按首次绑定时间纳入，刷新不会改变视频所属时间范围。</span>
       </div>
 
       <div class="performance-kpi-grid" aria-label="团队内容效果摘要">
-        <article class="performance-kpi-card">
-          <span>已绑定视频任务</span>
-          <strong id="performance-tracked-videos">0</strong>
-          <small id="performance-tracking-detail">0 条已打包视频</small>
+        <article class="performance-kpi-card primary">
+          <span>整体 ROI</span>
+          <strong id="performance-roi">—</strong>
+          <small id="performance-roi-detail">目标 10.00×</small>
         </article>
         <article class="performance-kpi-card">
           <span>累计播放量</span>
@@ -126,20 +76,23 @@
           <small id="performance-cost-detail">计价覆盖率 —</small>
         </article>
         <article class="performance-kpi-card">
-          <span>播放价值</span>
-          <strong id="performance-playback-value">¥0.00</strong>
-          <small>按每千次播放 ¥10 估值</small>
+          <span>10 倍目标差距</span>
+          <strong id="performance-target-gap">—</strong>
+          <small id="performance-target-gap-detail">尚无可计算目标</small>
         </article>
-        <article class="performance-kpi-card primary">
-          <span>整体 ROI</span>
-          <strong id="performance-roi">—</strong>
-          <small id="performance-roi-detail">目标 10.00×</small>
-        </article>
-        <article class="performance-kpi-card">
-          <span>逐条达到 10 倍</span>
+      </div>
+
+      <div class="performance-context" aria-label="回流覆盖与单条达标">
+        <div>
+          <span>回流覆盖</span>
+          <strong id="performance-tracked-videos">0 / 0</strong>
+          <small id="performance-tracking-detail">0 条已打包视频</small>
+        </div>
+        <div>
+          <span>单条视频达到 10 倍</span>
           <strong id="performance-target-status">0 / 0</strong>
           <small id="performance-target-detail">尚无回流视频</small>
-        </article>
+        </div>
       </div>
 
       <div class="performance-progress">
@@ -155,80 +108,147 @@
 
       <div class="performance-table-heading">
         <div>
-          <h3>逐条内容表现</h3>
-          <p>每条视频使用最新播放快照和自身全生命周期成本，不分摊选题研究费用。</p>
+          <h3>单条视频 ROI</h3>
+          <p>每条视频使用最新播放量和自身全生命周期成本，默认按 ROI 排序。</p>
         </div>
-        <span id="performance-row-count" class="panel-heading-note"></span>
+        <div class="performance-toolbar">
+          <label>排行方式
+            <select id="performance-sort-select">
+              <option value="roi">ROI 最高</option>
+              <option value="plays">播放量最高</option>
+              <option value="cost">累计成本最高</option>
+              <option value="latest">最近回流</option>
+            </select>
+          </label>
+          <span id="performance-row-count" class="panel-heading-note"></span>
+        </div>
       </div>
       <div class="cost-table-wrap">
         <table class="cost-table performance-table">
-          <thead><tr><th>内容 / 创建人</th><th>最新播放</th><th>累计成本 / 播放价值</th><th>ROI</th><th>10 倍目标</th></tr></thead>
-          <tbody id="performance-table-body"><tr><td colspan="5" class="empty">正在加载…</td></tr></tbody>
+          <thead><tr><th>内容 / 创建人</th><th>最新播放</th><th>累计成本</th><th>单条 ROI / 10 倍目标</th></tr></thead>
+          <tbody id="performance-table-body"><tr><td colspan="4" class="empty">正在加载…</td></tr></tbody>
         </table>
       </div>
       <p id="performance-scope-note" class="performance-scope-note"></p>
+      <details class="performance-method">
+        <summary>查看 ROI 与数据范围口径</summary>
+        <div>
+          <p><strong>播放价值 = 播放量 ÷ 1000 × ¥10；整体 ROI = 播放价值合计 ÷ 纳入视频累计成本</strong></p>
+          <p>当前播放价值：<strong id="performance-playback-value">¥0.00</strong>。选题研究费用不分摊到单条视频。</p>
+        </div>
+      </details>
     </section>
 
-    <section class="panel cost-timeline-panel">
-      <div class="panel-heading cost-section-heading">
-        <div><p class="step">时间变化</p><h2>成本趋势</h2></div>
-        <div class="cost-legend"><span class="cny">人民币</span></div>
-      </div>
-      <div id="cost-timeline" class="cost-timeline"><p class="empty">正在加载…</p></div>
-    </section>
+    <details class="cost-advanced">
+      <summary>
+        <div>
+          <p class="step">按需查看</p>
+          <h2>成本明细与对账</h2>
+          <span>期间投入、供应商与阶段成本、内容明细、调用记录和计价依据</span>
+        </div>
+        <span class="cost-advanced-toggle" aria-hidden="true"></span>
+      </summary>
+      <div class="cost-advanced-body">
+        <section class="cost-definition" aria-label="计算口径">
+          <strong>人民币已计成本 = 供应商回传金额 + 有计价依据的估算</strong>
+          <span>美元成本固定按 1 USD = ¥6.7 换算；估算不等于最终账单，待对账请求不计入金额但保留在覆盖率中。</span>
+        </section>
 
-    <div class="cost-breakdown-grid">
-      <section class="panel">
-        <div class="panel-heading"><div><p class="step">供应商</p><h2>钱花在哪里</h2></div></div>
-        <div id="cost-by-provider" class="cost-breakdown-list"><p class="empty">正在加载…</p></div>
-      </section>
-      <section class="panel">
-        <div class="panel-heading"><div><p class="step">生产阶段</p><h2>流程成本</h2></div></div>
-        <div id="cost-by-stage" class="cost-breakdown-list"><p class="empty">正在加载…</p></div>
-      </section>
-      <section class="panel">
-        <div class="panel-heading"><div><p class="step">团队成员</p><h2>创建人归集</h2></div></div>
-        <div id="cost-by-creator" class="cost-breakdown-list"><p class="empty">正在加载…</p></div>
-      </section>
-    </div>
+        <section class="cost-kpi-grid" aria-label="成本摘要">
+          <article class="cost-kpi-card primary">
+            <span>期间人民币总成本</span>
+            <strong id="cost-accounted-cny">¥0.00</strong>
+            <small id="cost-cny-breakdown">回传 ¥0.00 · 估算 ¥0.00</small>
+          </article>
+          <article class="cost-kpi-card">
+            <span>计价覆盖率</span>
+            <strong id="cost-coverage">—</strong>
+            <small id="cost-coverage-detail">正在计算</small>
+          </article>
+          <article class="cost-kpi-card">
+            <span>计费相关请求</span>
+            <strong id="cost-request-count">0</strong>
+            <small id="cost-token-count">0 tokens</small>
+          </article>
+          <article class="cost-kpi-card">
+            <span>已打包视频</span>
+            <strong id="cost-completed-videos">0</strong>
+            <small id="cost-work-count">0 个视频任务 · 0 轮选题</small>
+          </article>
+          <article class="cost-kpi-card">
+            <span>期间投入 / 已打包视频</span>
+            <strong id="cost-per-video">—</strong>
+            <small>包含同期未完工视频投入，仅作成本观察</small>
+          </article>
+        </section>
 
-    <section class="panel cost-table-panel">
-      <div class="panel-heading cost-section-heading">
-        <div><p class="step">内容维度</p><h2>每项内容的累计投入</h2></div>
-        <span id="cost-content-count" class="panel-heading-note"></span>
-      </div>
-      <div class="cost-table-wrap">
-        <table class="cost-table">
-          <thead><tr><th>内容</th><th>创建人 / 状态</th><th>请求 / tokens</th><th>人民币成本</th><th>计价覆盖</th></tr></thead>
-          <tbody id="cost-content-body"><tr><td colspan="5" class="empty">正在加载…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
+        <div class="cost-audit-actions">
+          <button id="cost-export-button" class="button secondary" type="button" disabled>导出内容汇总 CSV</button>
+          <button id="performance-export-button" class="button secondary" type="button" disabled>导出抖音效果 CSV</button>
+        </div>
 
-    <section class="panel cost-table-panel">
-      <div class="panel-heading cost-section-heading">
-        <div><p class="step">审计明细</p><h2>最近供应商调用</h2></div>
-        <span id="cost-event-count" class="panel-heading-note"></span>
-      </div>
-      <div class="cost-table-wrap">
-        <table class="cost-table cost-event-table">
-          <thead><tr><th>时间 / 阶段</th><th>内容</th><th>供应商 / 模型</th><th>请求用量</th><th>金额口径</th></tr></thead>
-          <tbody id="cost-event-body"><tr><td colspan="5" class="empty">正在加载…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
+        <section class="panel cost-timeline-panel">
+          <div class="panel-heading cost-section-heading">
+            <div><p class="step">时间变化</p><h2>成本趋势</h2></div>
+            <div class="cost-legend"><span class="cny">人民币</span></div>
+          </div>
+          <div id="cost-timeline" class="cost-timeline"><p class="empty">正在加载…</p></div>
+        </section>
 
-    <div class="cost-method-grid">
-      <section class="panel">
-        <div class="panel-heading"><div><p class="step">当前计价</p><h2>单价与数据来源</h2></div></div>
-        <div id="cost-pricing" class="cost-pricing-list"></div>
-      </section>
-      <section class="panel">
-        <div class="panel-heading"><div><p class="step">覆盖边界</p><h2>如何理解这些数字</h2></div></div>
-        <ul id="cost-coverage-notes" class="cost-note-list"></ul>
-      </section>
-    </div>
+        <div class="cost-breakdown-grid">
+          <section class="panel">
+            <div class="panel-heading"><div><p class="step">供应商</p><h2>钱花在哪里</h2></div></div>
+            <div id="cost-by-provider" class="cost-breakdown-list"><p class="empty">正在加载…</p></div>
+          </section>
+          <section class="panel">
+            <div class="panel-heading"><div><p class="step">生产阶段</p><h2>流程成本</h2></div></div>
+            <div id="cost-by-stage" class="cost-breakdown-list"><p class="empty">正在加载…</p></div>
+          </section>
+          <section class="panel">
+            <div class="panel-heading"><div><p class="step">团队成员</p><h2>创建人归集</h2></div></div>
+            <div id="cost-by-creator" class="cost-breakdown-list"><p class="empty">正在加载…</p></div>
+          </section>
+        </div>
+
+        <section class="panel cost-table-panel">
+          <div class="panel-heading cost-section-heading">
+            <div><p class="step">内容维度</p><h2>每项内容的累计投入</h2></div>
+            <span id="cost-content-count" class="panel-heading-note"></span>
+          </div>
+          <div class="cost-table-wrap">
+            <table class="cost-table">
+              <thead><tr><th>内容</th><th>创建人 / 状态</th><th>请求 / tokens</th><th>人民币成本</th><th>计价覆盖</th></tr></thead>
+              <tbody id="cost-content-body"><tr><td colspan="5" class="empty">正在加载…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel cost-table-panel">
+          <div class="panel-heading cost-section-heading">
+            <div><p class="step">审计明细</p><h2>最近供应商调用</h2></div>
+            <span id="cost-event-count" class="panel-heading-note"></span>
+          </div>
+          <div class="cost-table-wrap">
+            <table class="cost-table cost-event-table">
+              <thead><tr><th>时间 / 阶段</th><th>内容</th><th>供应商 / 模型</th><th>请求用量</th><th>金额口径</th></tr></thead>
+              <tbody id="cost-event-body"><tr><td colspan="5" class="empty">正在加载…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="cost-method-grid">
+          <section class="panel">
+            <div class="panel-heading"><div><p class="step">当前计价</p><h2>单价与数据来源</h2></div></div>
+            <div id="cost-pricing" class="cost-pricing-list"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-heading"><div><p class="step">覆盖边界</p><h2>如何理解这些数字</h2></div></div>
+            <ul id="cost-coverage-notes" class="cost-note-list"></ul>
+          </section>
+        </div>
+      </div>
+    </details>
   </main>
-  <script type="module" src="/qijia-video/assets/costs.js?v=1.11.0"></script>
+  <script type="module" src="/qijia-video/assets/costs.js?v=1.12.0"></script>
 </body>
 </html>

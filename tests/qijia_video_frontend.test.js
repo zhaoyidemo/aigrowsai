@@ -58,6 +58,10 @@ test('team cost and Douyin performance dashboard is read-only and auditable', ()
   assert.match(costsPage, /1 USD = ¥6\.7/);
   assert.doesNotMatch(costsPage, />USD</);
   assert.match(costsPage, /团队抖音内容效果/);
+  assert.match(costsPage, />整体 ROI</);
+  assert.match(costsPage, /单条视频 ROI/);
+  assert.match(costsPage, /单条 ROI \/ 10 倍目标/);
+  assert.match(costsPage, /class="cost-advanced"/);
   assert.match(costsPage, /播放价值 = 播放量 ÷ 1000 × ¥10/);
   assert.match(costsPage, /id="performance-tracked-videos"/);
   assert.match(costsPage, /id="performance-target-meter"/);
@@ -72,6 +76,8 @@ test('team cost and Douyin performance dashboard is read-only and auditable', ()
   assert.match(costsApp, /estimated_cny/);
   assert.match(costsApp, /unpriced_event_count/);
   assert.match(costsApp, /function renderPerformance/);
+  assert.match(costsApp, /performance-target-gap/);
+  assert.match(costsApp, /class="performance-roi-cell"/);
   assert.match(costsApp, /performance\.period\?\.cohort_basis/);
   assert.match(costsApp, /target_achievement_rate/);
   assert.match(costsApp, /target_achieved_provisional/);
@@ -354,8 +360,11 @@ test('packaged jobs expose Douyin-only manual playback feedback and ROI', () => 
   assert.match(page, /本版本仅记录抖音，不采集小红书或视频号/);
   assert.match(page, /id="douyin-link-input"/);
   assert.match(page, /id="douyin-change-link-button"/);
+  assert.match(page, /id="douyin-refresh-button"[^>]*>手动刷新播放量/);
+  assert.match(page, /播放量不会自动更新/);
   assert.match(page, /10 倍目标播放/);
   assert.match(app, /douyin-performance\/actions\/refresh/);
+  assert.match(app, /refreshButton\.hidden = !performance/);
   assert.match(app, /confirm_cost: true/);
   assert.match(app, /每千次播放 ¥10、目标 10 倍/);
   assert.match(app, /canEditResource\(job\)/);

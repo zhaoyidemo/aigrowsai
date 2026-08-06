@@ -1621,7 +1621,13 @@ function renderDouyinPerformance(job) {
   $('#douyin-bind-button').textContent = performance
     ? '更新链接并读取（约 ' + costLabel + '）'
     : '绑定并读取（约 ' + costLabel + '）';
-  $('#douyin-refresh-button').textContent = '刷新播放量（约 ' + costLabel + '）';
+  const refreshButton = $('#douyin-refresh-button');
+  refreshButton.hidden = !performance;
+  refreshButton.textContent = '手动刷新播放量（约 ' + costLabel + '）';
+  $('#douyin-refresh-hint').textContent = (
+    '播放量不会自动更新；需要最新数据时请点击按钮。'
+    + '每次刷新会发起 1 次 TikHub 请求，预计成本 ' + costLabel + '。'
+  );
   $('#douyin-cost-note').textContent = [
     '每次读取发起 1 次 TikHub 请求，成功请求规划成本约 ' + costLabel + '，点击按钮即确认本次费用。',
     'ROI 按每千次播放 ¥10、目标 10 倍计算；读取费用计入该视频成本。',
@@ -2466,7 +2472,7 @@ $('#douyin-performance-form').addEventListener('submit', async (event) => {
       },
     );
     updateVisibleJob(updated);
-    notify('抖音作品已绑定，本次播放量和 TikHub 成本已保存。');
+    notify('抖音作品已绑定并完成首次读取；以后可点击“手动刷新播放量”更新数据。');
   } catch (error) {
     await loadAll({selectJobId: job.id}).catch(() => {});
     notify(error.message, true);
