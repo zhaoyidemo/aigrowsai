@@ -54,7 +54,13 @@ class StandaloneAuthenticationTests(unittest.TestCase):
         self.assertIn("HttpOnly", cookie)
         self.assertIn("Secure", cookie)
         self.assertIn("SameSite=lax", cookie)
-        self.assertEqual(self.client.get("/qijia-video").status_code, 200)
+        workbench = self.client.get("/qijia-video")
+        self.assertEqual(workbench.status_code, 200)
+        self.assertIn(
+            'data-admin-only>账号管理</a>',
+            workbench.text,
+        )
+        self.assertEqual(workbench.headers["cache-control"], "no-store")
         self.assertEqual(
             self.client.get("/qijia-video/accounts").status_code,
             200,

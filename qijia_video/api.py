@@ -9,7 +9,7 @@ from functools import wraps
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -186,10 +186,17 @@ async def _store_reference_image(upload: UploadFile) -> AssetRef:
     include_in_schema=False,
     dependencies=[Depends(require_permission("qijia_video"))],
 )
-async def qijia_video_page():
-    return FileResponse(
-        WEB_DIR / "index.html",
-        headers={"Cache-Control": "no-cache"},
+async def qijia_video_page(user: dict = Depends(get_current_user)):
+    page = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    if user.get("role") == "admin":
+        page = page.replace(
+            " data-admin-only hidden",
+            " data-admin-only",
+            1,
+        )
+    return HTMLResponse(
+        page,
+        headers={"Cache-Control": "no-store"},
     )
 
 
