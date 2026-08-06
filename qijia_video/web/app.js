@@ -147,14 +147,97 @@ function isNarrationRevisionFailure(job) {
 
 function generationDefaults() {
   return state.capabilities?.generation_defaults || {
-    script_prompt: '', seedance_prompt: '', shot_count: 5,
+    script_prompt: '', seedance_prompt: '', video_resolution: '1080p',
+    seedance_model: 'doubao-seedance-1-5-pro-251215', shot_count: 5,
   };
+}
+
+const SEEDANCE_EFFICIENT_MODEL = 'doubao-seedance-1-5-pro-251215';
+const SEEDANCE_FLAGSHIP_MODEL = 'doubao-seedance-2-0-260128';
+
+function seedanceModels() {
+  const configured = state.capabilities?.seedance_pricing?.models;
+  if (Array.isArray(configured) && configured.length) return configured;
+  return [
+    {
+      id: SEEDANCE_EFFICIENT_MODEL, label: 'Seedance 1.5 Pro',
+      short_label: '1.5 Pro', yuan_per_million_tokens: 8, default: true,
+    },
+    {
+      id: SEEDANCE_FLAGSHIP_MODEL, label: 'Seedance 2.0',
+      short_label: '2.0', yuan_per_million_tokens: 46, default: false,
+    },
+  ];
+}
+
+function seedanceModelInfo(modelId) {
+  const models = seedanceModels();
+  return models.find((item) => item.id === modelId)
+    || models.find((item) => item.default)
+    || models[0];
+}
+
+function defaultSeedanceModel() {
+  return generationDefaults().seedance_model
+    || state.capabilities?.seedance_pricing?.default_model
+    || SEEDANCE_EFFICIENT_MODEL;
+}
+
+function seedanceModelForRequest(job, request, task = null) {
+  return request?.model_id
+    || task?.model_id
+    || currentTaskForShot(job, request || {})?.model_id
+    || job?.generation_settings?.seedance_model
+    || defaultSeedanceModel();
+}
+
+function estimatedSeedanceCost(request, modelId) {
+  const dimensions = {
+    '480p': [480, 854], '720p': [720, 1280], '1080p': [1080, 1920],
+  }[String(request?.resolution || '').toLowerCase()];
+  const duration = Math.max(0, Number(request?.duration_seconds) || 0);
+  const rate = Math.max(
+    0,
+    Number(seedanceModelInfo(modelId)?.yuan_per_million_tokens) || 0,
+  );
+  if (!dimensions || !duration || !rate) return null;
+  const tokens = dimensions[0] * dimensions[1] * 24 * duration / 1024;
+  return tokens * rate / 1000000;
+}
+
+function taskSeedanceCost(task) {
+  const snapshot = task?.estimated_cost_cny;
+  if (snapshot !== null && snapshot !== undefined && Number.isFinite(Number(snapshot))) {
+    return Math.max(0, Number(snapshot));
+  }
+  const tokens = Math.max(0, Number(task?.usage_total_tokens) || 0);
+  const snapshotRate = task?.pricing_rate_cny_per_million;
+  const rate = snapshotRate !== null && snapshotRate !== undefined
+    ? Math.max(0, Number(snapshotRate) || 0)
+    : Math.max(0, Number(seedanceModelInfo(task?.model_id)?.yuan_per_million_tokens) || 0);
+  return tokens && rate ? tokens * rate / 1000000 : 0;
 }
 
 function setPromptFields(settings) {
   const defaults = generationDefaults();
   $('#script-generation-prompt').value = settings?.script_prompt || defaults.script_prompt || '';
   $('#seedance-generation-prompt').value = settings?.seedance_prompt || defaults.seedance_prompt || '';
+}
+
+function setResolutionField(settings) {
+  const defaults = generationDefaults();
+  const resolution = String(
+    settings?.video_resolution || defaults.video_resolution || '1080p',
+  ).toLowerCase();
+  $('#video-resolution').value = ['480p', '720p', '1080p'].includes(resolution)
+    ? resolution
+    : '1080p';
+}
+
+function jobResolution(job) {
+  return job?.visual_requests?.[0]?.resolution
+    || job?.generation_settings?.video_resolution
+    || '480p';
 }
 
 function persistPromptFields() {
@@ -194,6 +277,7 @@ function initializePromptFields() {
     saved.seedance_prompt = generationDefaults().seedance_prompt;
   }
   setPromptFields(saved);
+  setResolutionField(saved);
   if (
     legacyFixedStructure
     || legacyLongScript
@@ -208,9 +292,19 @@ function initializePromptFields() {
 function generationSettingsPayload() {
   const scriptPrompt = $('#script-generation-prompt').value.trim();
   const seedancePrompt = $('#seedance-generation-prompt').value.trim();
+  const videoResolution = $('#video-resolution').value;
   if (!scriptPrompt) throw new Error('脚本生成提示词不能为空');
   if (!seedancePrompt) throw new Error('全片画面导演设定不能为空');
-  return {script_prompt: scriptPrompt, seedance_prompt: seedancePrompt, shot_count: 5};
+  if (!['480p', '720p', '1080p'].includes(videoResolution)) {
+    throw new Error('请选择有效的视频画质');
+  }
+  return {
+    script_prompt: scriptPrompt,
+    seedance_prompt: seedancePrompt,
+    video_resolution: videoResolution,
+    seedance_model: defaultSeedanceModel(),
+    shot_count: 5,
+  };
 }
 
 async function api(method, path, body) {
@@ -810,6 +904,7 @@ function requestSignature(request) {
     request.request_id,
     request.prompt,
     request.resolution,
+    request.model_id || '',
     request.ratio,
     request.duration_seconds,
     request.generate_audio,
@@ -940,7 +1035,10 @@ function storyboardRequests(job) {
       ...(request || {}),
       request_id: shot.shot_id,
       prompt: request?.prompt || shot.first_frame_prompt || shot.motion_prompt,
-      resolution: request?.resolution || '480p',
+      model_id: request
+        ? (request.model_id || '')
+        : (job?.generation_settings?.seedance_model || defaultSeedanceModel()),
+      resolution: request?.resolution || jobResolution(job),
       ratio: request?.ratio || '9:16',
       duration_seconds: request?.duration_seconds
         || (block ? Math.max(1, Math.round(block.duration_in_frames / 30)) : 6),
@@ -1004,15 +1102,14 @@ function renderSeedanceUsage(job) {
     0,
   );
   const recordedCount = tasks.filter((task) => Number(task.usage_total_tokens) > 0).length;
-  const rate = Math.max(
-    0,
-    Number(state.capabilities?.seedance_pricing?.yuan_per_million_tokens) || 0,
-  );
   const imageRate = Math.max(
     0,
     Number(state.capabilities?.seedream_pricing?.yuan_per_image) || 0,
   );
-  const seedanceCost = totalTokens && rate ? (totalTokens * rate) / 1000000 : 0;
+  const seedanceCost = tasks.reduce(
+    (total, task) => total + taskSeedanceCost(task),
+    0,
+  );
   const seedreamCost = firstFrames.length * imageRate;
   const firstRequest = requests[0];
   const durations = requests.map((request) => Number(request.duration_seconds) || 0).filter(Boolean);
@@ -1028,7 +1125,7 @@ function renderSeedanceUsage(job) {
     ? `约 ¥${(seedanceCost + seedreamCost).toFixed(2)}`
     : '—';
   $('#seedance-spec').textContent = firstRequest
-    ? `${firstFrames.length} 张首帧 · ${requests.length} 段视频 · ${durationLabel} · ${firstRequest.resolution}`
+    ? `${firstFrames.length} 张首帧 · ${requests.length} 段视频 · ${durationLabel} · ${firstRequest.resolution} · ${seedanceModelInfo(seedanceModelForRequest(job, firstRequest))?.short_label || 'Seedance'}`
     : `${firstFrames.length} 张首帧 · ${tasks.length} 个镜头`;
   $('#seedance-usage-status').textContent = `首帧 ${firstFrames.length} 张 · Seedance 累计 ${tasks.length} 次 · tokens 已记录 ${recordedCount}/${tasks.length}`;
   const frameUsage = firstFrames.length
@@ -1043,11 +1140,20 @@ function renderSeedanceUsage(job) {
       .filter((version) => version.shot_id === request.request_id)
       .sort((left, right) => left.version - right.version);
     const rows = versions.length
-      ? versions.map((version) => ({label: `v${version.version}`, task: version.task}))
-      : [{label: 'v1', task: currentTaskForShot(job, request)}];
-    const status = rows.map(({label, task}) => {
+      ? versions.map((version) => ({
+        label: `v${version.version}`, task: version.task, request: version.request,
+      }))
+      : [{label: 'v1', task: currentTaskForShot(job, request), request}];
+    const status = rows.map(({label, task, request: versionRequest}) => {
       const tokens = Number(task?.usage_total_tokens) || 0;
-      return `${label} ${tokens ? `${formatTokens(tokens)} tokens` : (task?.raw_status || task?.state || '未提交')}`;
+      const model = seedanceModelInfo(
+        seedanceModelForRequest(job, versionRequest || request, task),
+      );
+      const cost = taskSeedanceCost(task);
+      const usage = tokens
+        ? `${formatTokens(tokens)} tokens${cost ? ` / ¥${cost.toFixed(2)}` : ''}`
+        : (task?.raw_status || task?.state || '未提交');
+      return `${label} · ${model?.short_label || 'Seedance'} · ${usage}`;
     }).join(' · ');
     return `<div class="usage-row"><span>${escapeHtml(chapterLabel)} · Seedance 视频 · ${escapeHtml(request.resolution)} · ${request.duration_seconds} 秒</span><span>${escapeHtml(status)}</span></div>`;
   }).join('');
@@ -1136,6 +1242,19 @@ function renderShotInspector(job) {
   state.inspectorKey = key;
 
   const mediaUrl = isImage ? '' : shotMediaUrl(job, request, previewVersion);
+  const selectedModelId = seedanceModelForRequest(
+    job,
+    previewRequest,
+    previewVersion?.task,
+  );
+  const selectedModel = seedanceModelInfo(selectedModelId);
+  const modelOptions = seedanceModels().map((model) => {
+    const suffix = model.id === SEEDANCE_EFFICIENT_MODEL
+      ? ' · 默认省成本'
+      : ' · 复杂镜头升级';
+    return `<option value="${escapeHtml(model.id)}" ${model.id === selectedModelId ? 'selected' : ''}>${escapeHtml(model.label + suffix)}</option>`;
+  }).join('');
+  const selectedModelCost = estimatedSeedanceCost(previewRequest, selectedModelId);
   const previewLabel = isImage
     ? '动态图片'
     : previewVersion ? `v${previewVersion.version}` : '当前版本';
@@ -1145,7 +1264,10 @@ function renderShotInspector(job) {
     const selected = versionKey === previewKey;
     const isCurrent = requestSignature(version.request) === requestSignature(request);
     const suffix = isCurrent ? ' · 成片' : usable ? '' : ` · ${version.task?.state || '处理中'}`;
-    return `<button class="version-pill ${selected ? 'previewing' : ''}" type="button" data-preview-version="${escapeHtml(versionKey)}" ${usable ? '' : 'disabled'}>v${version.version}${escapeHtml(suffix)}</button>`;
+    const versionModel = seedanceModelInfo(
+      seedanceModelForRequest(job, version.request, version.task),
+    );
+    return `<button class="version-pill ${selected ? 'previewing' : ''}" type="button" data-preview-version="${escapeHtml(versionKey)}" ${usable ? '' : 'disabled'}>v${version.version} · ${escapeHtml(versionModel?.short_label || 'Seedance')}${escapeHtml(suffix)}</button>`;
   }).join('');
   const applyButton = !previewIsCurrent && previewVersion?.asset
     ? `<button class="button secondary" type="button" data-select-version="${escapeHtml(previewVersion.version_id)}" ${canEdit ? '' : 'disabled'}>将 ${escapeHtml(previewLabel)} 用于成片</button>`
@@ -1175,7 +1297,7 @@ function renderShotInspector(job) {
   const mediaKind = isImage ? '动态图片' : 'Seedance 视频';
   inspector.innerHTML = `
     <div class="shot-inspector-header">
-      <div><h4>镜头 ${requestIndex + 1} · ${mediaKind}</h4><p>${isImage ? `${escapeHtml(previewLabel)} · 成片约 ${request.duration_seconds} 秒 · Remotion 动态取景` : `${escapeHtml(previewLabel)} · ${request.duration_seconds} 秒 · ${escapeHtml(request.resolution)}`}</p></div>
+      <div><h4>镜头 ${requestIndex + 1} · ${mediaKind}</h4><p>${isImage ? `${escapeHtml(previewLabel)} · 成片约 ${request.duration_seconds} 秒 · Remotion 动态取景` : `${escapeHtml(previewLabel)} · ${request.duration_seconds} 秒 · ${escapeHtml(request.resolution)} · ${escapeHtml(selectedModel?.short_label || 'Seedance')}`}</p></div>
       <button class="icon-button" type="button" data-close-inspector aria-label="关闭镜头设置">×</button>
     </div>
     ${mediaUrl
@@ -1188,11 +1310,15 @@ function renderShotInspector(job) {
     ${isImage ? '' : `<label class="shot-prompt-field">这个镜头想呈现什么
       <textarea id="shot-prompt-editor" rows="7" maxlength="4000" spellcheck="false" ${canEdit ? '' : 'readonly'}>${escapeHtml(previewVersion?.request?.prompt || request.prompt)}</textarea>
     </label>
+    <label class="shot-model-field">生成模型
+      <select id="shot-seedance-model" ${canEdit ? '' : 'disabled'}>${modelOptions}</select>
+      <span class="field-hint">默认 1.5 Pro 保持原生 1080P；仅在复杂动作、人物一致性不理想时升级 2.0。</span>
+    </label>
     <div class="shot-inspector-actions">
       ${applyButton}
       <button class="button primary" type="button" data-regenerate-shot ${canEdit ? '' : 'disabled'}>${regenerateLabel}</button>
     </div>
-    <p class="cost-note">改提示词或改首帧都只会新增 1 次 ${request.duration_seconds} 秒、${escapeHtml(request.resolution)} Seedance 2.0 调用；不会重做旁白、图片章节或其他视频镜头。</p>`}
+    <p class="cost-note" data-shot-model-cost>本次只会新增 1 次 ${previewRequest.duration_seconds} 秒、${escapeHtml(previewRequest.resolution)} ${escapeHtml(selectedModel?.label || 'Seedance')} 调用${selectedModelCost === null ? '' : `，刊例价预估约 ¥${selectedModelCost.toFixed(2)}`}；不会重做旁白、图片章节或其他视频镜头。</p>`}
     ${isImage ? '<p class="cost-note">这个章节直接使用 Seedream 图片，由 Remotion 添加轻微推进或横移，不产生 Seedance 视频费用。</p>' : ''}`;
 }
 
@@ -1534,6 +1660,7 @@ function renderDetail() {
   scriptSection.hidden = job.state !== 'script_review_required';
   if (!scriptSection.hidden && job.script) {
     renderScriptDocument(job);
+    $('#script-review-spec').textContent = `本任务 ${jobResolution(job).toUpperCase()} · 确认后开始配音与画面生成`;
     $('#job-seedance-prompt').value = job.generation_settings?.seedance_prompt
       || generationDefaults().seedance_prompt
       || '';
@@ -2083,6 +2210,18 @@ $('#shot-grid').addEventListener('mouseout', (event) => {
   }
 });
 
+$('#shot-inspector').addEventListener('change', (event) => {
+  if (event.target.id !== 'shot-seedance-model' || !state.selectedJob) return;
+  const request = storyboardRequests(state.selectedJob).find(
+    (item) => item.request_id === state.selectedShotId,
+  );
+  const note = $('#shot-inspector [data-shot-model-cost]');
+  if (!request || !note) return;
+  const model = seedanceModelInfo(event.target.value);
+  const cost = estimatedSeedanceCost(request, event.target.value);
+  note.textContent = `本次只会新增 1 次 ${request.duration_seconds} 秒、${request.resolution} ${model?.label || 'Seedance'} 调用${cost === null ? '' : `，刊例价预估约 ¥${cost.toFixed(2)}`}；不会重做旁白、图片章节或其他视频镜头。`;
+});
+
 $('#shot-inspector').addEventListener('click', async (event) => {
   const job = state.selectedJob;
   if (!job) return;
@@ -2136,8 +2275,15 @@ $('#shot-inspector').addEventListener('click', async (event) => {
   if (!event.target.closest('[data-regenerate-shot]')) return;
   const prompt = $('#shot-prompt-editor')?.value.trim() || '';
   if (!prompt) { notify('镜头提示词不能为空。', true); return; }
+  const request = storyboardRequests(job).find(
+    (item) => item.request_id === state.selectedShotId,
+  );
+  const seedanceModel = $('#shot-seedance-model')?.value
+    || seedanceModelForRequest(job, request);
+  const model = seedanceModelInfo(seedanceModel);
+  const cost = estimatedSeedanceCost(request, seedanceModel);
   const confirmed = window.confirm(
-    '这会新增 1 次真实的 Seedance 2.0 镜头生成费用。首帧、旁白、图片章节和其他视频镜头不会重做，是否继续？',
+    `这会新增 1 次真实的 ${model?.label || 'Seedance'} 镜头生成费用${cost === null ? '' : `，刊例价预估约 ¥${cost.toFixed(2)}`}。首帧、旁白、图片章节和其他视频镜头不会重做，是否继续？`,
   );
   if (!confirmed) return;
   setBusy(true); notify('');
@@ -2149,6 +2295,7 @@ $('#shot-inspector').addEventListener('click', async (event) => {
         expected_revision: job.revision,
         prompt,
         first_frame_candidate_id: state.previewFrameCandidateId || '',
+        seedance_model: seedanceModel,
       },
     );
     await loadAll({selectJobId: job.id});
@@ -2225,6 +2372,7 @@ $('#refresh-button').addEventListener('click', async () => {
 });
 $('#script-generation-prompt').addEventListener('change', persistPromptFields);
 $('#seedance-generation-prompt').addEventListener('change', persistPromptFields);
+$('#video-resolution').addEventListener('change', persistPromptFields);
 $('#restore-prompt-defaults').addEventListener('click', () => {
   setPromptFields(generationDefaults());
   persistPromptFields();

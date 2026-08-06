@@ -16,6 +16,12 @@ from qijia_video.prompts import DEFAULT_SCRIPT_PROMPT, DEFAULT_SEEDANCE_PROMPT
 
 SCHEMA_VERSION = "1.0"
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-5-pro-251215"
+SEEDANCE_FLAGSHIP_MODEL = "doubao-seedance-2-0-260128"
+SeedanceModelId = Literal[
+    "doubao-seedance-1-5-pro-251215",
+    "doubao-seedance-2-0-260128",
+]
 
 
 class ContractModel(BaseModel):
@@ -483,6 +489,10 @@ class GenerationSettings(ContractModel):
         min_length=1,
         max_length=3200,
     )
+    video_resolution: Literal["480p", "720p", "1080p"] = "1080p"
+    # 1.5 Pro keeps native 1080P while making the default three-shot workflow
+    # materially cheaper.  2.0 remains an explicit per-shot quality upgrade.
+    seedance_model: SeedanceModelId = SEEDANCE_EFFICIENT_MODEL
     shot_count: Literal[5] = 5
 
 
@@ -710,8 +720,8 @@ class VisualGenerationRequest(ContractModel):
 
     request_id: str = Field(min_length=1, max_length=64)
     prompt: str = Field(min_length=1, max_length=4000)
-    # 保留 720p 以反序列化已经付费生成的旧任务；新任务默认使用 480p。
-    resolution: Literal["480p", "720p"] = "480p"
+    model_id: SeedanceModelId | Literal[""] = ""
+    resolution: Literal["480p", "720p", "1080p"] = "480p"
     ratio: Literal["9:16"] = "9:16"
     duration_seconds: int = Field(default=8, ge=4, le=15)
     generate_audio: Literal[False] = False
@@ -720,7 +730,12 @@ class VisualGenerationRequest(ContractModel):
     first_frame_asset_id: str = Field(default="", max_length=128)
 
     def fingerprint(self) -> str:
-        return content_hash(self)
+        payload = self.model_dump(mode="json")
+        # Requests persisted before model selection was introduced must keep
+        # their paid-request fingerprint, so polling can never become a submit.
+        if not payload.get("model_id"):
+            payload.pop("model_id", None)
+        return content_hash(payload)
 
 
 class ProviderTask(ContractModel):
@@ -764,9 +779,9 @@ class RenderManifest(ContractModel):
     renderer: Literal["remotion"] = "remotion"
     composition_id: Literal["KnowledgeVideoV1"] = "KnowledgeVideoV1"
     template_version: str = "neutral_knowledge_v1"
-    # 新任务直接输出竖屏 480p；保留 1080p 仅用于读取和恢复旧任务。
-    width: Literal[480, 1080] = 480
-    height: Literal[854, 1920] = 854
+    # 三档画质都以同一套 1080x1920 设计坐标渲染，保证排版一致。
+    width: Literal[480, 720, 1080] = 480
+    height: Literal[854, 1280, 1920] = 854
     fps: Literal[30] = 30
     duration_in_frames: int = Field(gt=0)
     video_title: str = Field(default="", max_length=200)
@@ -783,8 +798,14 @@ class RenderManifest(ContractModel):
 
     @model_validator(mode="after")
     def validate_timeline(self):
-        if (self.width, self.height) not in {(480, 854), (1080, 1920)}:
-            raise ValueError("成片尺寸必须是 480x854 或兼容旧任务的 1080x1920")
+        if (self.width, self.height) not in {
+            (480, 854),
+            (720, 1280),
+            (1080, 1920),
+        }:
+            raise ValueError(
+                "成片尺寸必须是 480x854、720x1280 或 1080x1920"
+            )
         asset_ids = [item.asset_id for item in self.assets]
         if len(asset_ids) != len(set(asset_ids)):
             raise ValueError("渲染资产 ID 必须唯一")
@@ -885,6 +906,28 @@ class VideoJob(ContractModel):
     created_by: str = ""
     created_at: str = ""
     updated_at: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def preserve_legacy_generation_settings(cls, value: Any) -> Any:
+        """Keep persisted jobs on the output and model they were created with."""
+        if not isinstance(value, dict):
+            return value
+        settings = value.get("generation_settings")
+        if not isinstance(settings, dict):
+            return value
+        additions: dict[str, Any] = {}
+        if "video_resolution" not in settings:
+            additions["video_resolution"] = "480p"
+        if "seedance_model" not in settings:
+            additions["seedance_model"] = SEEDANCE_FLAGSHIP_MODEL
+        if not additions:
+            return value
+        normalized = dict(value)
+        normalized_settings = dict(settings)
+        normalized_settings.update(additions)
+        normalized["generation_settings"] = normalized_settings
+        return normalized
 
     def approval(self, kind: Literal["script", "final"]) -> ApprovalRecord | None:
         return next((item for item in reversed(self.approvals) if item.kind == kind), None)

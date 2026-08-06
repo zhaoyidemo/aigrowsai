@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable
 
-from qijia_video.contracts import BEIJING_TZ, ProviderUsageRecord, VideoJob
+from qijia_video.contracts import (
+    BEIJING_TZ,
+    ProviderUsageRecord,
+    SEEDANCE_EFFICIENT_MODEL,
+    SEEDANCE_FLAGSHIP_MODEL,
+    VideoJob,
+)
 from qijia_video.topic_contracts import TopicResearchRun
 
 
@@ -210,6 +216,7 @@ def _job_events(
     *,
     seedream_price_per_image: float,
     seedance_price_per_million_tokens: float,
+    seedance_model_prices_per_million_tokens: dict[str, float],
     tts_price_per_10000_characters: float,
 ) -> list[CostEvent]:
     events = [_record_event(job, item) for item in job.usage_records]
@@ -284,18 +291,24 @@ def _job_events(
             continue
         snapshot = task.estimated_cost_cny
         production_provider = not _is_mock_provider(task.provider)
+        current_model_rate = _number(
+            seedance_model_prices_per_million_tokens.get(
+                task.model_id,
+                seedance_price_per_million_tokens,
+            )
+        )
         can_estimate = (
             production_provider
             and task.usage_total_tokens > 0
             and (
                 task.pricing_rate_cny_per_million is not None
-                or seedance_price_per_million_tokens > 0
+                or current_model_rate > 0
             )
         )
         rate = (
             _number(task.pricing_rate_cny_per_million)
             if task.pricing_rate_cny_per_million is not None
-            else _number(seedance_price_per_million_tokens)
+            else current_model_rate
         )
         amount = (
             _number(snapshot)
@@ -548,7 +561,8 @@ def build_cost_analysis(
     *,
     days: int = 30,
     seedream_price_per_image: float = 0.22,
-    seedance_price_per_million_tokens: float = 46.0,
+    seedance_price_per_million_tokens: float = 8.0,
+    seedance_model_prices_per_million_tokens: dict[str, float] | None = None,
     tts_price_per_10000_characters: float = 5.0,
     tikhub_price_per_success_usd: float = 0.001,
     now: datetime | None = None,
@@ -560,6 +574,17 @@ def build_cost_analysis(
     current = current.astimezone(BEIJING_TZ)
     safe_days = max(0, min(3650, int(days or 0)))
     cutoff = current - timedelta(days=safe_days) if safe_days else None
+    model_prices = {
+        SEEDANCE_EFFICIENT_MODEL: 8.0,
+        SEEDANCE_FLAGSHIP_MODEL: 46.0,
+    }
+    model_prices.update({
+        str(model_id): _number(rate)
+        for model_id, rate in (
+            seedance_model_prices_per_million_tokens or {}
+        ).items()
+        if str(model_id).strip()
+    })
     all_events = [
         event
         for job in jobs
@@ -567,6 +592,7 @@ def build_cost_analysis(
             job,
             seedream_price_per_image=seedream_price_per_image,
             seedance_price_per_million_tokens=seedance_price_per_million_tokens,
+            seedance_model_prices_per_million_tokens=model_prices,
             tts_price_per_10000_characters=tts_price_per_10000_characters,
         )
     ] + [
@@ -739,11 +765,24 @@ def build_cost_analysis(
                 "source": "https://www.volcengine.com/product/yunque",
             },
             {
-                "provider": "Seedance",
-                "rate": f"¥{_number(seedance_price_per_million_tokens):g}/百万 tokens",
+                "provider": "Seedance 1.5 Pro",
+                "rate": (
+                    f"¥{model_prices[SEEDANCE_EFFICIENT_MODEL]:g}/百万 tokens"
+                    "（无声视频）"
+                ),
                 "currency": "CNY",
                 "valuation": "estimated",
-                "source": "https://www.volcengine.com/product/yunque",
+                "source": "https://www.volcengine.com/product/doubao/",
+            },
+            {
+                "provider": "Seedance 2.0",
+                "rate": (
+                    f"¥{model_prices[SEEDANCE_FLAGSHIP_MODEL]:g}/百万 tokens"
+                    "（无视频输入）"
+                ),
+                "currency": "CNY",
+                "valuation": "estimated",
+                "source": "https://www.volcengine.com/product/doubao/",
             },
             {
                 "provider": "豆包语音",

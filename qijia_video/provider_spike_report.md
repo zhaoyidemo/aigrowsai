@@ -2,20 +2,21 @@
 
 > 本报告记录拆仓前的真实链路验证证据。独立仓库保留同一 Provider 与渲染实现，但新的 PostgreSQL、鉴权和 Railway 部署仍需按根目录 README 完成一次真实端到端验收。
 
-> 状态：真实端到端链路已跑通；等待验收三段 480p/8-10 秒视频与两段动态图片的混合规格
-> 更新日期：2026-08-02
-> 范围：Seedance 2.0、TTS、Remotion、FFmpeg、存储与恢复
+> 状态：Seedance 2.0 真实端到端链路已跑通；默认 1.5 Pro 与 480P / 720P / 1080P 可选规格仍需分别做生产验收
+> 更新日期：2026-08-06
+> 范围：Seedance 1.5 Pro / 2.0、TTS、Remotion、FFmpeg、存储与恢复
 
 ## 结论
 
-真实 OpenRouter 脚本、豆包 TTS 2.0、Seedance 2.0、TOS 与 Remotion 已在 Railway 跑通同一生产状态机；Web 运行时不注入 Mock。账号鉴权、模型开通、TTS 2.0 权限和完整发布包链路已经得到真实任务验证。新的“三段 480p/8-10 秒视频 + 两段动态图片”默认规格仍需部署后用一条新任务验收，方舟 tokens 与费用展示沿用现有真实回传链路。
+真实 OpenRouter 脚本、豆包 TTS 2.0、Seedance 2.0、TOS 与 Remotion 已在 Railway 跑通同一生产状态机；Web 运行时不注入 Mock。账号鉴权、模型开通、TTS 2.0 权限和完整发布包链路已经得到真实任务验证。新任务现默认使用 Seedance 1.5 Pro 无声模式，单镜头可升级 2.0；该默认模型与“三段所选画质、8-10 秒视频 + 两段动态图片”规格仍需部署后做真实验收，方舟 tokens 与费用展示沿用现有真实回传链路。
 
 ## 已确认
 
-### Seedance 2.0 公共能力
+### Seedance 公共能力
 
-- 火山方舟已公开 Seedance 2.0 API；
-- 当前候选模型 ID：`doubao-seedance-2-0-260128`；
+- 火山方舟已公开 Seedance 1.5 Pro 与 2.0 API；
+- 默认模型 ID：`doubao-seedance-1-5-pro-251215`；按量刊例价为无声 `¥8/百万 tokens`，支持原生 1080P；
+- 单镜头升级模型 ID：`doubao-seedance-2-0-260128`；无视频输入按量刊例价为 `¥46/百万 tokens`；
 - 任务接口采用异步提交、查询、下载语义；
 - 已实现并接线独立 `VideoProvider` 和火山方舟 HTTP 适配器；
 - 提交请求遇到连接超时等“服务端是否接单未知”的情况时不自动重提，避免重复扣费；
@@ -33,7 +34,7 @@
 - Remotion 固定版本：`4.0.503`；
 - Node：要求 `>=22`；
 - Chrome Headless Shell 已通过 `remotion browser ensure` 安装；
-- 能生成 480 × 854、30 fps 的完整竖屏视频；旧任务仍兼容 1080 × 1920；
+- 渲染契约支持 480 × 854、720 × 1280、1080 × 1920 三档 30 fps 竖屏视频；现有本地实测证据仅覆盖 480 × 854；
 - Remotion 在唯一一次编码中直接输出 H.264 / BT.709 limited-range `yuv420p` / AAC 48 kHz；
 - FFmpeg 后处理只用 stream copy 整理 MP4 并写入 `faststart`，不再二次编码；
 - ffprobe 检查视频流、音频流、分辨率、帧率、编码、像素格式、采样率、时长和 `faststart`；
@@ -53,11 +54,11 @@
 
 ## 仍需生产观察
 
-### Seedance 2.0 账号级 Spike
+### Seedance 账号级 Spike
 
-真实 `ARK_API_KEY` 与模型权限已在 Railway 配置。仍需持续验证：
+真实 `ARK_API_KEY` 与 Seedance 2.0 权限已在 Railway 配置。1.5 Pro 是否已对同一账号开放需在部署后确认，仍需持续验证：
 
-- 新默认组合 9:16、480p、8-10 秒的实际画质和 tokens；
+- 9:16、480P / 720P / 1080P、8-10 秒组合各自的实际画质和 tokens；
 - 任务排队、状态枚举、审核拒绝码和取消语义；
 - 临时下载 URL 域名与有效期；
 - 真实生成时长、首帧可用率、重试率和费用；

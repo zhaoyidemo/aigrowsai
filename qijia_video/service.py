@@ -29,6 +29,8 @@ from qijia_video.contracts import (
     ProviderUsageRecord,
     QualityReport,
     RenderManifest,
+    SEEDANCE_EFFICIENT_MODEL,
+    SEEDANCE_FLAGSHIP_MODEL,
     ScriptDraft,
     ScriptBeat,
     ScriptReview,
@@ -94,7 +96,11 @@ RELEASE_ARCHIVE_NAME = "qijia-video-release.zip"
 STORYBOARD_SHOT_COUNT = 5
 SEEDANCE_VIDEO_SHOT_COUNT = 3
 SEEDANCE_SHOT_DURATION_SECONDS = 8
-SEEDANCE_SHOT_RESOLUTION = "480p"
+VIDEO_OUTPUT_DIMENSIONS = {
+    "480p": (480, 854),
+    "720p": (720, 1280),
+    "1080p": (1080, 1920),
+}
 SEEDANCE_MAX_NATURAL_CHAPTER_SECONDS = 10.0
 MIN_VIDEO_DURATION_SECONDS = 45.0
 MAX_VIDEO_DURATION_SECONDS = 75.0
@@ -119,7 +125,8 @@ class QijiaVideoService:
         video_poll_interval_seconds: float = 5.0,
         video_timeout_seconds: float = 900.0,
         seedream_price_per_image: float = 0.22,
-        seedance_price_per_million_tokens: float = 46.0,
+        seedance_price_per_million_tokens: float = 8.0,
+        seedance_model_prices_per_million_tokens: dict[str, float] | None = None,
         tts_price_per_10000_characters: float = 5.0,
     ):
         self.repository = repository
@@ -144,6 +151,13 @@ class QijiaVideoService:
         self.seedance_price_per_million_tokens = max(
             0.0, float(seedance_price_per_million_tokens)
         )
+        self.seedance_model_prices_per_million_tokens = {
+            str(model_id): max(0.0, float(rate))
+            for model_id, rate in (
+                seedance_model_prices_per_million_tokens or {}
+            ).items()
+            if str(model_id).strip()
+        }
         self.tts_price_per_10000_characters = max(
             0.0, float(tts_price_per_10000_characters)
         )
@@ -255,12 +269,25 @@ class QijiaVideoService:
         if task.provider != "volcengine-seedance":
             return task
         rate = task.pricing_rate_cny_per_million
-        if rate is None and self.seedance_price_per_million_tokens > 0:
-            rate = self.seedance_price_per_million_tokens
-            task.pricing_rate_cny_per_million = rate
+        if rate is None:
+            rate = self.seedance_model_prices_per_million_tokens.get(
+                task.model_id,
+                self.seedance_price_per_million_tokens,
+            )
+            if rate > 0:
+                task.pricing_rate_cny_per_million = rate
         if rate is not None and rate > 0:
+            model_label = {
+                SEEDANCE_EFFICIENT_MODEL: "Seedance 1.5 Pro",
+                SEEDANCE_FLAGSHIP_MODEL: "Seedance 2.0",
+            }.get(task.model_id, "Seedance")
+            billing_mode = (
+                "无声视频"
+                if task.model_id == SEEDANCE_EFFICIENT_MODEL
+                else "无视频输入"
+            )
             task.pricing_basis = (
-                "Seedance 无视频输入按量刊例价 "
+                f"{model_label} {billing_mode}按量刊例价 "
                 f"¥{rate:g}/百万 tokens；"
                 "套餐、折扣与火山方舟账单优先"
             )
@@ -780,8 +807,10 @@ class QijiaVideoService:
         return await self._save_job(job, actor)
 
     @staticmethod
-    def _split_subtitle_text(text: str, max_chars: int = 28) -> list[str]:
-        value = str(text or "").strip()
+    def _split_subtitle_text(text: str, max_chars: int = 20) -> list[str]:
+        # A cue is one visual line. Normalize embedded line breaks before
+        # splitting so provider text can never force a second rendered line.
+        value = re.sub(r"\s+", " ", str(text or "")).strip()
         if not value:
             return []
         sentences = [
@@ -800,11 +829,33 @@ class QijiaVideoService:
                 # in the last two-thirds of the window is a useful boundary.
                 if break_at < max_chars // 3:
                     break_at = max_chars - 1
-                chunks.append(remaining[:break_at + 1])
-                remaining = remaining[break_at + 1:]
+                chunk = remaining[:break_at + 1].strip()
+                if chunk:
+                    chunks.append(chunk)
+                remaining = remaining[break_at + 1:].lstrip()
             if remaining:
-                chunks.append(remaining)
+                chunks.append(remaining.strip())
         return chunks
+
+    @staticmethod
+    def _video_resolution(job: VideoJob) -> str:
+        """Resolve new settings while preserving pre-settings paid requests."""
+
+        if job.visual_requests:
+            return job.visual_requests[0].resolution
+        if job.generation_settings:
+            return job.generation_settings.video_resolution
+        return "480p"
+
+    @staticmethod
+    def _video_dimensions(job: VideoJob) -> tuple[int, int]:
+        """Keep an already-rendered legacy size stable across later retries."""
+
+        if job.render_manifest:
+            existing = (job.render_manifest.width, job.render_manifest.height)
+            if existing in VIDEO_OUTPUT_DIMENSIONS.values():
+                return existing
+        return VIDEO_OUTPUT_DIMENSIONS[QijiaVideoService._video_resolution(job)]
 
     @staticmethod
     def _visual_target_indices(
@@ -1423,7 +1474,7 @@ class QijiaVideoService:
             progress,
             message=(
                 f"{total} 张首帧已就绪，开始生成 {SEEDANCE_VIDEO_SHOT_COUNT} 段 "
-                "480P 动态镜头…"
+                f"{self._video_resolution(job).upper()} 动态镜头…"
             ),
             stage="seedance_shot_1",
             percent=54,
@@ -1511,7 +1562,8 @@ class QijiaVideoService:
                 requests.append(VisualGenerationRequest(
                     request_id=shot.shot_id,
                     prompt=prompt,
-                    resolution=SEEDANCE_SHOT_RESOLUTION,
+                    model_id=settings.seedance_model,
+                    resolution=settings.video_resolution,
                     duration_seconds=duration_seconds,
                     generate_audio=False,
                     first_frame_asset_id=candidate.asset.asset_id,
@@ -1536,7 +1588,8 @@ class QijiaVideoService:
             requests.append(VisualGenerationRequest(
                 request_id=f"shot_{shot_number:02d}",
                 prompt=prompt,
-                resolution=SEEDANCE_SHOT_RESOLUTION,
+                model_id=settings.seedance_model,
+                resolution=settings.video_resolution,
                 duration_seconds=SEEDANCE_SHOT_DURATION_SECONDS,
                 generate_audio=False,
             ))
@@ -1550,6 +1603,10 @@ class QijiaVideoService:
     ) -> None:
         if previous:
             task.created_at = previous.created_at or task.created_at
+            if previous.model_id:
+                # Poll responses do not always repeat the model. The submitted
+                # task is authoritative, especially for a 2.0 shot upgrade.
+                task.model_id = previous.model_id
             task.pricing_rate_cny_per_million = (
                 previous.pricing_rate_cny_per_million
             )
@@ -1714,8 +1771,9 @@ class QijiaVideoService:
                         usage_id=f"usage_seedance_attempt_{uuid.uuid4().hex}",
                         operation="seedance_video",
                         provider=self.video_provider.name,
-                        model_id=str(
-                            getattr(self.video_provider, "model", "") or ""
+                        model_id=(
+                            request.model_id
+                            or str(getattr(self.video_provider, "model", "") or "")
                         ),
                         request_id=request.request_id,
                         succeeded=False,
@@ -2000,6 +2058,34 @@ class QijiaVideoService:
             )
             cls._remember_visual_version(job, request, task, asset, actor)
 
+    @staticmethod
+    def _seedance_model_for_request(
+        job: VideoJob,
+        request: VisualGenerationRequest,
+    ) -> str:
+        """Resolve legacy requests without changing their paid fingerprint."""
+
+        if request.model_id:
+            return request.model_id
+        fingerprint = request.fingerprint()
+        for task in [
+            *job.video_tasks,
+            *(item.task for item in job.visual_versions),
+        ]:
+            if (
+                task.request_fingerprint == fingerprint
+                and task.model_id in {
+                    SEEDANCE_EFFICIENT_MODEL,
+                    SEEDANCE_FLAGSHIP_MODEL,
+                }
+            ):
+                return task.model_id
+        if job.generation_settings:
+            return job.generation_settings.seedance_model
+        # Jobs old enough to have no frozen generation settings were produced
+        # before 1.5 Pro became the default.
+        return SEEDANCE_FLAGSHIP_MODEL
+
     @classmethod
     def _selected_visual_assets(cls, job: VideoJob) -> list[AssetRef]:
         assets: list[AssetRef] = []
@@ -2089,6 +2175,7 @@ class QijiaVideoService:
         if not job.script or not job.narration_manifest:
             raise InvalidTransition("缺少脚本或旁白清单")
         fps = 30
+        width, height = QijiaVideoService._video_dimensions(job)
         total_frames = int(math.ceil(
             job.narration_manifest.total_duration_seconds * fps
         ))
@@ -2285,6 +2372,8 @@ class QijiaVideoService:
         )
         return RenderManifest(
             job_id=job.id,
+            width=width,
+            height=height,
             duration_in_frames=total_frames,
             video_title=job.script.video_title,
             cover_text=job.script.cover_text,
@@ -2525,6 +2614,7 @@ class QijiaVideoService:
         actor: Actor,
         progress: ProgressReporter | None = None,
         first_frame_candidate_id: str = "",
+        seedance_model: str = "",
     ) -> VideoJob:
         job = await self.get_job(job_id, actor)
         resuming = job.state == JobState.PRODUCING and bool(job.review_bundle_hash)
@@ -2541,6 +2631,14 @@ class QijiaVideoService:
         cleaned_prompt = str(prompt or "").strip()
         if not cleaned_prompt:
             raise QualityGateFailed("镜头提示词不能为空")
+        requested_model = str(seedance_model or "").strip()
+        if not requested_model:
+            requested_model = self._seedance_model_for_request(job, current)
+        if requested_model not in {
+            SEEDANCE_EFFICIENT_MODEL,
+            SEEDANCE_FLAGSHIP_MODEL,
+        }:
+            raise QualityGateFailed("不支持的 Seedance 生成模型")
         requested_frame = None
         if first_frame_candidate_id:
             requested_frame = next(
@@ -2578,6 +2676,8 @@ class QijiaVideoService:
                         and item.request.prompt == cleaned_prompt
                         and item.request.first_frame_asset_id
                         == requested_frame_asset_id
+                        and self._seedance_model_for_request(job, item.request)
+                        == requested_model
                         and item.request.fingerprint() != current.fingerprint()
                         and item.task.state not in (
                             ProviderTaskState.FAILED,
@@ -2611,6 +2711,7 @@ class QijiaVideoService:
                 while True:
                     request = current.model_copy(update={
                         "prompt": cleaned_prompt,
+                        "model_id": requested_model,
                         "seed": secrets.randbits(32),
                         "first_frame_asset_id": requested_frame_asset_id,
                     })
@@ -2655,8 +2756,11 @@ class QijiaVideoService:
                             ),
                             operation="seedance_video",
                             provider=self.video_provider.name,
-                            model_id=str(
-                                getattr(self.video_provider, "model", "") or ""
+                            model_id=(
+                                request.model_id
+                                or str(
+                                    getattr(self.video_provider, "model", "") or ""
+                                )
                             ),
                             request_id=request.request_id,
                             succeeded=False,

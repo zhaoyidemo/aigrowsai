@@ -7,6 +7,7 @@ import shutil
 import tempfile
 from functools import wraps
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -19,6 +20,7 @@ from qijia_video.contracts import (
     GenerationSettings,
     PersonViewpointInput,
     QuickSourceCardInput,
+    SeedanceModelId,
     ScriptDraft,
     SourceCardInput,
 )
@@ -120,6 +122,7 @@ class FinalApprovalRequest(RevisionRequest):
 class ShotRegenerationRequest(RevisionRequest):
     prompt: str = Field(min_length=1, max_length=4000)
     first_frame_candidate_id: str = Field(default="", max_length=96)
+    seedance_model: SeedanceModelId | Literal[""] = ""
 
 
 class ShotVersionSelectionRequest(RevisionRequest):
@@ -540,6 +543,7 @@ async def regenerate_shot(
             "shot_id": shot_id,
             "prompt": body.prompt,
             "first_frame_candidate_id": body.first_frame_candidate_id,
+            "seedance_model": body.seedance_model,
             "expected_selected_fingerprint": selected_fingerprint,
         },
     )

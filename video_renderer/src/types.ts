@@ -41,8 +41,8 @@ export type KnowledgeVideoProps = {
   renderer: 'remotion';
   composition_id: 'KnowledgeVideoV1';
   template_version: string;
-  width: 480 | 1080;
-  height: 854 | 1920;
+  width: 480 | 720 | 1080;
+  height: 854 | 1280 | 1920;
   fps: 30;
   duration_in_frames: number;
   video_title: string;

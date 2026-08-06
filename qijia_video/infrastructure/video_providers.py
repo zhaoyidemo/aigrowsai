@@ -52,6 +52,7 @@ class MockVideoProvider:
             provider=self.name,
             provider_task_id=task_id,
             request_fingerprint=request.fingerprint(),
+            model_id=request.model_id,
             state=ProviderTaskState.SUCCEEDED,
             output_url=f"mock://{task_id}",
             raw_status="succeeded",
@@ -116,7 +117,7 @@ class MockVideoProvider:
 
 
 class SeedanceVideoProvider:
-    """火山方舟 Seedance 2.0 API 适配器；submit 刻意不自动重试。"""
+    """火山方舟 Seedance API 适配器；submit 刻意不自动重试。"""
 
     name = "volcengine-seedance"
 
@@ -180,7 +181,13 @@ class SeedanceVideoProvider:
             f"Seedance API 返回 HTTP {response.status_code}：{message[:500]}{suffix}"
         )
 
-    def _parse_task(self, payload: dict, fingerprint: str) -> ProviderTask:
+    def _parse_task(
+        self,
+        payload: dict,
+        fingerprint: str,
+        *,
+        fallback_model: str = "",
+    ) -> ProviderTask:
         task_id = str(payload.get("id") or payload.get("task_id") or "")
         if not task_id:
             raise ProviderUnavailable("Seedance 响应缺少任务 ID")
@@ -200,7 +207,7 @@ class SeedanceVideoProvider:
             provider=self.name,
             provider_task_id=task_id,
             request_fingerprint=fingerprint,
-            model_id=str(payload.get("model") or self.model),
+            model_id=str(payload.get("model") or fallback_model or self.model),
             state=_provider_state(raw_status),
             output_url=str(content.get("video_url") or output.get("video_url") or ""),
             error_code=str(error.get("code") or payload.get("error_code") or ""),
@@ -232,8 +239,9 @@ class SeedanceVideoProvider:
                 "image_url": {"url": first_frame_url},
                 "role": "first_frame",
             })
+        requested_model = request.model_id or self.model
         body = {
-            "model": self.model,
+            "model": requested_model,
             "content": content,
             "resolution": request.resolution,
             "ratio": request.ratio,
@@ -252,7 +260,11 @@ class SeedanceVideoProvider:
                 ) from exc
         if response.status_code >= 400:
             raise self._response_error(response)
-        return self._parse_task(response.json(), request.fingerprint())
+        return self._parse_task(
+            response.json(),
+            request.fingerprint(),
+            fallback_model=requested_model,
+        )
 
     async def get_status(
         self, provider_task_id: str, request_fingerprint: str

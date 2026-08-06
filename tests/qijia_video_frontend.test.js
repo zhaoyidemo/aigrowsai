@@ -167,8 +167,20 @@ test('workflow exposes three videos and two image chapters with action context',
   assert.match(page, /id="current-action"/);
   assert.match(page, /id="stage-elapsed"/);
   assert.match(page, /id="next-action"/);
-  assert.match(page, /3 张生成 8-10 秒、480p 的 AI 视频/);
+  assert.match(page, /3 张生成 8-10 秒、所选画质的 AI 视频/);
   assert.match(page, /另外 2 张直接进入成片/);
+});
+
+test('video quality is selectable and frozen into each new task', () => {
+  assert.match(page, /id="video-resolution"/);
+  assert.match(page, /value="480p"[^>]*>480P · 480×854/);
+  assert.match(page, /value="720p"[^>]*>720P · 720×1280/);
+  assert.match(page, /value="1080p"[^>]*selected[^>]*>1080P · 1080×1920（默认）/);
+  assert.match(page, /画质越高，Token、耗时和文件体积通常越大/);
+  assert.match(page, /默认使用 Seedance 1\.5 Pro 无声模式/);
+  assert.match(app, /video_resolution: '1080p'/);
+  assert.match(app, /video_resolution: videoResolution/);
+  assert.match(app, /job\?\.generation_settings\?\.video_resolution/);
 });
 
 test('Seedance usage and estimated cost are visible per job', () => {
@@ -183,6 +195,8 @@ test('Seedance usage and estimated cost are visible per job', () => {
   assert.match(app, /renderSeedanceUsage\(job\)/);
   assert.match(app, /visual_versions/);
   assert.match(app, /Seedance 累计 .* 次/);
+  assert.match(app, /taskSeedanceCost/);
+  assert.match(app, /estimated_cost_cny/);
 });
 
 test('AI shots are visible storyboard cards with isolated version controls', () => {
@@ -196,7 +210,10 @@ test('AI shots are visible storyboard cards with isolated version controls', () 
   assert.match(app, /const showFrameChoices = frameCandidates\.length > 1/);
   assert.match(app, /data-select-version/);
   assert.match(app, /用这张首帧换一版/);
-  assert.match(app, /新增 1 次真实的 Seedance 2\.0 镜头生成费用/);
+  assert.match(app, /id="shot-seedance-model"/);
+  assert.match(app, /默认 1\.5 Pro 保持原生 1080P/);
+  assert.match(app, /seedance_model: seedanceModel/);
+  assert.match(app, /刊例价预估约/);
   assert.match(app, /first_frame_candidate_id/);
   assert.match(app, /\/frames\/\$\{encodeURIComponent\(candidate\.candidate_id\)\}\/media/);
   assert.match(app, /\/shots\/\$\{encodeURIComponent\(state\.selectedShotId\)\}\/actions\/regenerate/);
@@ -218,6 +235,9 @@ test('final video mixes generated videos and motion images without narration tex
   assert.match(renderEntry, /pixelFormat: 'yuv420p'/);
   assert.match(renderEntry, /colorSpace: 'bt709'/);
   assert.match(renderEntry, /sampleRate: 48000/);
+  assert.match(renderer, /whiteSpace: 'nowrap'/);
+  assert.match(renderer, /padding: '0 74px 220px'/);
+  assert.match(renderer, /Array\.from\(cue\.text\)\.length/);
 });
 
 test('person viewpoint flow starts a real job and polling resumes after refresh', () => {
@@ -237,6 +257,7 @@ test('script and Seedance prompts are configurable without exposing transport co
   assert.match(page, /id="job-seedance-prompt"/);
   assert.match(app, /generation_settings: generationSettings/);
   assert.match(app, /seedance_prompt: seedancePrompt/);
+  assert.match(app, /video_resolution: videoResolution/);
   assert.match(app, /restore-prompt-defaults/);
   assert.match(app, /legacyFixedStructure/);
   assert.match(app, /legacySeedanceStyle/);

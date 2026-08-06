@@ -233,18 +233,20 @@ export const KnowledgeVideoV1: React.FC<KnowledgeVideoProps> = (props) => {
 
       {props.subtitle_cues.map((cue) => (
         <Sequence key={cue.id} from={cue.start_frame} durationInFrames={cue.duration_in_frames}>
-          <AbsoluteFill style={{justifyContent: 'flex-end', alignItems: 'center', padding: '0 74px 178px'}}>
+          <AbsoluteFill style={{justifyContent: 'flex-end', alignItems: 'center', padding: '0 74px 220px'}}>
             <div
               style={{
                 maxWidth: 930,
+                boxSizing: 'border-box',
                 background: 'rgba(2, 6, 23, .82)',
                 color: '#fff',
                 borderRadius: 22,
                 padding: '22px 30px',
-                fontSize: 38,
-                lineHeight: 1.45,
+                fontSize: Math.max(10, Math.min(38, Math.floor(820 / Math.max(1, Array.from(cue.text).length)))),
+                lineHeight: 1.2,
                 fontWeight: 650,
                 textAlign: 'center',
+                whiteSpace: 'nowrap',
                 boxShadow: '0 12px 36px rgba(0,0,0,.22)',
               }}
             >

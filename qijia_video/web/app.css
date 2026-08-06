@@ -146,6 +146,11 @@ button:focus-visible { outline: 3px solid rgba(49,95,86,.2); outline-offset: 2px
 .panel h3 { font-size: 16px; }
 .panel-note, .empty { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .intake-intro { margin: -2px 0 20px; max-width: 38em; }
+.video-quality-setting { display: grid; grid-template-columns: minmax(0, 1fr) 148px; align-items: center; gap: 12px; margin: -2px 0 18px; border: 1px solid #d8d3c8; border-radius: 9px; padding: 11px 12px; background: #f8f6ef; }
+.video-quality-copy { display: grid; gap: 3px; min-width: 0; }
+.video-quality-copy strong { color: var(--ink); font-size: 13px; }
+.video-quality-copy small { color: var(--muted); font-size: 9px; font-weight: 450; line-height: 1.5; }
+.video-quality-setting select { min-height: 38px; padding: 8px 9px; font-size: 11px; font-weight: 700; }
 .form-stack { display: grid; gap: 13px; }
 .form-stack label { display: grid; gap: 6px; font-size: 12px; color: #525c67; font-weight: 650; }
 #source-card-form { gap: 18px; }
@@ -310,6 +315,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .frame-candidate > div span { border-radius: 999px; padding: 3px 5px; color: #315f56; background: #e7f1ed; font-size: 8px; font-weight: 750; }
 .shot-prompt-field { display: grid; gap: 6px; color: #4e585f; font-size: 11px; font-weight: 700; }
 .shot-prompt-field textarea { min-height: 148px; background: white; font-family: ui-monospace, SFMono-Regular, Consolas, "Microsoft YaHei", monospace; font-size: 11px; line-height: 1.55; }
+.shot-model-field { display: grid; gap: 6px; margin-top: 11px; color: #4e585f; font-size: 11px; font-weight: 700; }
+.shot-model-field select { min-height: 38px; background: white; font-size: 11px; font-weight: 650; }
+.shot-model-field .field-hint { font-size: 9px; }
 .shot-inspector-actions { display: grid; gap: 8px; margin-top: 11px; }
 .shot-inspector-actions .button { width: 100%; min-height: 38px; padding: 8px 10px; font-size: 11px; }
 .cost-note { margin: 9px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
@@ -419,6 +427,7 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
   .storyboard-layout.inspector-open { grid-template-columns: minmax(0, 1fr) minmax(250px, 300px); }
 }
 @media (max-width: 560px) {
+  .video-quality-setting { grid-template-columns: 1fr; }
   .workspace-tabs { display: flex; width: 100%; }
   .workspace-tab { flex: 1; min-width: 0; }
   .topic-cost-summary { grid-template-columns: 1fr; }

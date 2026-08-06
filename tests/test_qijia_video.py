@@ -31,6 +31,8 @@ from qijia_video.contracts import (
     ProviderTaskState,
     ProviderTask,
     ProviderUsageRecord,
+    SEEDANCE_EFFICIENT_MODEL,
+    SEEDANCE_FLAGSHIP_MODEL,
     VideoJob,
     VisualGenerationRequest,
     content_hash,
@@ -198,8 +200,57 @@ class QijiaVideoContractTests(unittest.TestCase):
             seedance_prompt="测试镜头风格",
         )
         self.assertEqual(settings.shot_count, 5)
+        self.assertEqual(settings.video_resolution, "1080p")
+        self.assertEqual(settings.seedance_model, SEEDANCE_EFFICIENT_MODEL)
+        legacy_job = VideoJob.model_validate({
+            "id": "legacy-resolution-job",
+            "state": "card_verified",
+            "source_card_id": "legacy-card",
+            "source_card_revision": 1,
+            "source_card_snapshot": {},
+            "generation_settings": {
+                "script_prompt": "旧任务脚本写法",
+                "seedance_prompt": "旧任务镜头风格",
+                "shot_count": 5,
+            },
+        })
+        self.assertEqual(
+            legacy_job.generation_settings.video_resolution,
+            "480p",
+        )
+        self.assertEqual(
+            legacy_job.generation_settings.seedance_model,
+            SEEDANCE_FLAGSHIP_MODEL,
+        )
+        self.assertEqual(
+            {
+                GenerationSettings(video_resolution=resolution).video_resolution
+                for resolution in ("480p", "720p", "1080p")
+            },
+            {"480p", "720p", "1080p"},
+        )
         with self.assertRaises(ValidationError):
             GenerationSettings(script_prompt="", seedance_prompt="有效镜头提示词")
+        with self.assertRaises(ValidationError):
+            GenerationSettings(video_resolution="2160p")
+        with self.assertRaises(ValidationError):
+            GenerationSettings(seedance_model="unknown-seedance")
+
+    def test_legacy_visual_request_fingerprint_does_not_change(self):
+        payload = {
+            "request_id": "shot_01",
+            "prompt": "旧任务镜头",
+            "resolution": "480p",
+            "ratio": "9:16",
+            "duration_seconds": 8,
+            "generate_audio": False,
+            "seed": None,
+            "first_frame_asset_id": "",
+        }
+        self.assertEqual(
+            VisualGenerationRequest.model_validate(payload).fingerprint(),
+            content_hash(payload),
+        )
 
     def test_default_seedance_style_is_a_continuous_hybrid_story(self):
         prompt = GenerationSettings().seedance_prompt
@@ -208,6 +259,18 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertIn("始终一致", prompt)
         self.assertIn("图片镜头", prompt)
         self.assertIn("2.5D", prompt)
+
+    def test_subtitle_cues_are_normalized_and_limited_to_one_line(self):
+        chunks = QijiaVideoService._split_subtitle_text(
+            "父母先停一下，\n让孩子把自己的想法完整说出来，再一起讨论下一步。"
+        )
+        self.assertTrue(chunks)
+        self.assertTrue(all(len(chunk) <= 20 for chunk in chunks))
+        self.assertTrue(all("\n" not in chunk for chunk in chunks))
+        self.assertEqual(
+            "".join(chunks),
+            "父母先停一下，让孩子把自己的想法完整说出来，再一起讨论下一步。",
+        )
 
     def test_default_script_prompt_targets_retention_without_clickbait(self):
         prompt = GenerationSettings().script_prompt
@@ -317,7 +380,7 @@ class QijiaVideoContractTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             RenderManifest(**base, brand_overlay={"text": "齐家 AI"})
 
-    def test_render_manifest_defaults_to_480p_and_accepts_only_legacy_pair(self):
+    def test_render_manifest_accepts_three_vertical_resolution_pairs(self):
         audio = {
             "asset_id": "audio",
             "object_key": "audio.wav",
@@ -339,10 +402,12 @@ class QijiaVideoContractTests(unittest.TestCase):
         }
         manifest = RenderManifest(**base)
         self.assertEqual((manifest.width, manifest.height), (480, 854))
-        legacy = RenderManifest(**base, width=1080, height=1920)
-        self.assertEqual((legacy.width, legacy.height), (1080, 1920))
+        hd = RenderManifest(**base, width=720, height=1280)
+        self.assertEqual((hd.width, hd.height), (720, 1280))
+        full_hd = RenderManifest(**base, width=1080, height=1920)
+        self.assertEqual((full_hd.width, full_hd.height), (1080, 1920))
         with self.assertRaises(ValidationError):
-            RenderManifest(**base, width=480, height=1920)
+            RenderManifest(**base, width=720, height=1920)
 
     def test_script_v1_hash_is_stable_while_v2_has_independent_tracks(self):
         old_payload = {
@@ -400,7 +465,7 @@ class SeedanceProviderContractTests(unittest.IsolatedAsyncioTestCase):
             requests.append(request)
             if request.method == "POST":
                 body = json.loads(request.content)
-                self.assertEqual(body["model"], "doubao-seedance-2-0-260128")
+                self.assertEqual(body["model"], SEEDANCE_EFFICIENT_MODEL)
                 self.assertEqual(body["resolution"], "480p")
                 self.assertEqual(body["ratio"], "9:16")
                 self.assertEqual(body["duration"], 8)
@@ -427,7 +492,7 @@ class SeedanceProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 )
             return httpx.Response(200, json={
                 "id": "cgt-1",
-                "model": "doubao-seedance-2-0-260128",
+                "model": SEEDANCE_EFFICIENT_MODEL,
                 "status": "succeeded",
                 "content": {"video_url": "https://media.volces.com/result.mp4"},
                 "usage": {"total_tokens": 40500},
@@ -443,6 +508,7 @@ class SeedanceProviderContractTests(unittest.IsolatedAsyncioTestCase):
         request = VisualGenerationRequest(
             request_id="shot_01",
             prompt="克制的家庭生活场景",
+            model_id=SEEDANCE_EFFICIENT_MODEL,
             first_frame_asset_id="first_frame_frame_shot_01_01",
         )
         fingerprint = request.fingerprint()
@@ -451,10 +517,11 @@ class SeedanceProviderContractTests(unittest.IsolatedAsyncioTestCase):
             first_frame_url="https://media.volces.com/frame.jpg",
         )
         self.assertEqual(submitted.state, ProviderTaskState.QUEUED)
+        self.assertEqual(submitted.model_id, SEEDANCE_EFFICIENT_MODEL)
         self.assertEqual(submitted.request_fingerprint, fingerprint)
         status = await provider.get_status("cgt-1", request.fingerprint())
         self.assertEqual(status.state, ProviderTaskState.SUCCEEDED)
-        self.assertEqual(status.model_id, "doubao-seedance-2-0-260128")
+        self.assertEqual(status.model_id, SEEDANCE_EFFICIENT_MODEL)
         self.assertEqual(status.usage_total_tokens, 40500)
         with tempfile.TemporaryDirectory() as directory:
             output = await provider.download("cgt-1", Path(directory) / "shot.mp4")
@@ -1356,7 +1423,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             state="queued",
         )
         self.service._record_video_task_usage(job, queued)
-        self.assertEqual(queued.pricing_rate_cny_per_million, 46)
+        self.assertEqual(queued.pricing_rate_cny_per_million, 8)
         self.assertIsNone(queued.estimated_cost_cny)
 
         succeeded = queued.model_copy(update={
@@ -1366,14 +1433,14 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.service.seedance_price_per_million_tokens = 99
         self.service._record_video_task_usage(job, succeeded, queued)
 
-        self.assertEqual(succeeded.pricing_rate_cny_per_million, 46)
-        self.assertAlmostEqual(succeeded.estimated_cost_cny, 4.6)
+        self.assertEqual(succeeded.pricing_rate_cny_per_million, 8)
+        self.assertAlmostEqual(succeeded.estimated_cost_cny, 0.8)
         matching = [
             item for item in job.usage_records
             if item.request_id == "seedance-task-cost"
         ]
         self.assertEqual(len(matching), 1)
-        self.assertAlmostEqual(matching[0].estimated_cost, 4.6)
+        self.assertAlmostEqual(matching[0].estimated_cost, 0.8)
 
     async def test_six_script_beats_are_all_grouped_into_five_visual_shots(self):
         card = await self.service.create_source_card(valid_card(), self.actor)
@@ -1745,10 +1812,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             (job.render_manifest.width, job.render_manifest.height),
-            (480, 854),
+            (1080, 1920),
         )
         self.assertTrue(all(
-            len(cue.text) <= 28 for cue in job.render_manifest.subtitle_cues
+            len(cue.text) <= 20 for cue in job.render_manifest.subtitle_cues
         ))
         self.assertTrue(all(
             cue.text == cue.text.strip() for cue in job.render_manifest.subtitle_cues
@@ -1756,7 +1823,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job.generation_settings.shot_count, 5)
         self.assertEqual(len(job.visual_requests), 3)
         self.assertTrue(all(
-            request.resolution == "480p"
+            request.resolution == "1080p"
             and 8 <= request.duration_seconds <= 10
             for request in job.visual_requests
         ))
@@ -1961,6 +2028,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             original.fingerprint(),
             self.actor,
             progress=events.append,
+            seedance_model=SEEDANCE_FLAGSHIP_MODEL,
         )
 
         self.assertEqual(job.state, JobState.FINAL_REVIEW_REQUIRED)
@@ -1976,6 +2044,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "2.5D 编辑插画动画，一扇门缓慢打开，暖色光线进入房间。"
         ))
         self.assertIsNotNone(versions[1].request.seed)
+        self.assertEqual(versions[0].request.model_id, SEEDANCE_EFFICIENT_MODEL)
+        self.assertEqual(versions[1].request.model_id, SEEDANCE_FLAGSHIP_MODEL)
         selected = next(
             item for item in job.visual_requests if item.request_id == shot_id
         )
@@ -2111,6 +2181,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         settings = GenerationSettings(
             script_prompt="用更像真实对话的方式写脚本。",
             seedance_prompt="低饱和纪录片风格，固定机位。",
+            video_resolution="1080p",
         )
         job = await self.service.create_job(
             card.id, self.actor, settings
@@ -2136,10 +2207,15 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         requests = job.visual_requests
         self.assertEqual(len(requests), 3)
         self.assertTrue(all(
-            request.resolution == "480p"
+            request.resolution == "1080p"
+            and request.model_id == SEEDANCE_EFFICIENT_MODEL
             and 8 <= request.duration_seconds <= 10
             for request in requests
         ))
+        self.assertEqual(
+            (job.render_manifest.width, job.render_manifest.height),
+            (1080, 1920),
+        )
         self.assertTrue(all(
             request.prompt.startswith("自然窗光，手持纪录片风格。")
             for request in requests
@@ -2295,8 +2371,23 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             response.json()["data"]["generation_defaults"]["shot_count"], 5
         )
         self.assertEqual(
+            response.json()["data"]["generation_defaults"]["video_resolution"],
+            "1080p",
+        )
+        self.assertEqual(
+            response.json()["data"]["generation_defaults"]["seedance_model"],
+            SEEDANCE_EFFICIENT_MODEL,
+        )
+        self.assertEqual(
             response.json()["data"]["seedance_pricing"]["yuan_per_million_tokens"],
-            46.0,
+            8.0,
+        )
+        self.assertEqual(
+            [
+                item["yuan_per_million_tokens"]
+                for item in response.json()["data"]["seedance_pricing"]["models"]
+            ],
+            [8.0, 46.0],
         )
         self.assertEqual(
             response.json()["data"]["seedream_pricing"]["candidates_per_shot"],

@@ -10,7 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from qijia_video import run_service as task_service
-from qijia_video.contracts import Actor, GenerationSettings
+from qijia_video.contracts import (
+    Actor,
+    GenerationSettings,
+    SEEDANCE_EFFICIENT_MODEL,
+    SEEDANCE_FLAGSHIP_MODEL,
+)
 from qijia_video.infrastructure.media import FfmpegMediaPackager
 from qijia_video.infrastructure.postgres_repository import (
     PostgresAggregateRepository,
@@ -136,6 +141,14 @@ class QijiaVideoRuntime:
             seedance_price_per_million_tokens=(
                 settings.QIJIA_VIDEO_SEEDANCE_PRICE_PER_MILLION
             ),
+            seedance_model_prices_per_million_tokens={
+                SEEDANCE_EFFICIENT_MODEL: (
+                    settings.QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION
+                ),
+                SEEDANCE_FLAGSHIP_MODEL: (
+                    settings.QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION
+                ),
+            },
             tts_price_per_10000_characters=(
                 settings.QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS
             ),
@@ -190,9 +203,43 @@ class QijiaVideoRuntime:
                 "currency": "CNY",
                 "yuan_per_million_tokens": max(
                     0.0,
-                    float(settings.QIJIA_VIDEO_SEEDANCE_PRICE_PER_MILLION),
+                    float(settings.QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION),
                 ),
-                "basis": "按量刊例价估算，实际账单以火山方舟为准",
+                "default_model": SEEDANCE_EFFICIENT_MODEL,
+                "upgrade_model": SEEDANCE_FLAGSHIP_MODEL,
+                "models": [
+                    {
+                        "id": SEEDANCE_EFFICIENT_MODEL,
+                        "label": "Seedance 1.5 Pro",
+                        "short_label": "1.5 Pro",
+                        "yuan_per_million_tokens": max(
+                            0.0,
+                            float(
+                                settings.QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION
+                            ),
+                        ),
+                        "default": True,
+                    },
+                    {
+                        "id": SEEDANCE_FLAGSHIP_MODEL,
+                        "label": "Seedance 2.0",
+                        "short_label": "2.0",
+                        "yuan_per_million_tokens": max(
+                            0.0,
+                            float(
+                                settings.QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION
+                            ),
+                        ),
+                        "default": False,
+                    },
+                ],
+                "basis": (
+                    "1.5 Pro 无声视频 "
+                    f"¥{float(settings.QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION):g}"
+                    "/百万 tokens；2.0 无视频输入 "
+                    f"¥{float(settings.QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION):g}"
+                    "/百万 tokens；均为按量刊例价估算，实际账单以火山方舟为准"
+                ),
             },
             "seedream_pricing": {
                 "currency": "CNY",
@@ -215,9 +262,9 @@ class QijiaVideoRuntime:
             },
             "notes": [
                 "生产链路不使用 Mock；收费生成 Provider 失败时不会伪造结果或自动换模型",
-                "五个章节各生成一张 Seedream 首帧；其中三张驱动 480p、8-10 秒 Seedance 2.0 视频，另外两张由 Remotion 动态呈现",
+                "五个章节各生成一张 Seedream 首帧；其中三张默认驱动 8-10 秒 Seedance 1.5 Pro 无声视频，复杂镜头可单独升级 Seedance 2.0，另外两张由 Remotion 动态呈现",
                 "存在全局参考图时由参考图主导画风；无参考图时使用全片画面导演设定",
-                "最终由 Remotion 直接合成为 480x854 竖屏成片",
+                "最终由 Remotion 按任务所选的 480P、720P 或 1080P 画质合成竖屏成片",
             ],
         }
 
@@ -286,6 +333,7 @@ async def _execute(
                 first_frame_candidate_id=str(
                     parameters.get("first_frame_candidate_id") or ""
                 ),
+                seedance_model=str(parameters.get("seedance_model") or ""),
             )
         elif action == "select_shot_version":
             job = await runtime.service.select_shot_version(

@@ -16,8 +16,8 @@ TikHub 抖音家庭教育数据
   → 豆包 TTS 2.0 完整旁白
   → OpenRouter 五章分镜
   → Seedream 五张首帧
-  → Seedance 三段 480p 视频 + 两张动态图片
-  → Remotion 合成
+  → Seedance 1.5 Pro 三段所选画质视频 + 两张动态图片（复杂镜头可单独升级 2.0）
+  → Remotion 合成 480P / 720P / 1080P 竖屏成片（新任务默认 1080P）
   → 人工确认成片
   → final.mp4 与发布包
 ```
@@ -58,12 +58,12 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 - TikHub：逐次保存成功/失败、端点和请求 ID，按成功请求规划价估算；原始美元金额在报表中固定按 `1 USD = ¥6.7` 换算。
 - OpenRouter：选题编辑、脚本生成和分镜生成逐次保存 Token，并使用非流式响应内的 `usage.cost` 作为供应商回传金额；记录动作先于下游 JSON 和质量门禁，报表按固定汇率换算人民币。
 - Seedream：按成功生成图片数保存当次 CNY 单价快照；失败或结果未知的请求保留为待对账。
-- Seedance：保存每个供应商任务及 `usage.total_tokens`，按无视频输入刊例价保存 CNY 估算快照；未知提交也保留为待对账。
+- Seedance：新任务默认使用 1.5 Pro 无声原生 1080P，复杂镜头可在单镜头换版时升级 2.0；每次请求冻结模型，并按该模型的 `usage.total_tokens` 和 CNY 刊例价保存成本快照。未知提交也保留为待对账。
 - 豆包语音：逐个实际合成请求保存发送字符数，按当次 CNY 单价快照估算；音频返回后即入账，不受后续本地音频处理结果影响。
 
 报表只显示人民币，“已计成本”统一计算为：`供应商回传金额 + 有计价依据的估算`。所有原始 USD 成本固定按 `1 USD = ¥6.7` 换算，底层账本仍保存供应商原始币种和金额，便于对账。供应商未回传金额、Token 缺失或网络结果未知的调用显示为“待对账”，不会按 0 元伪装成完整成本。页面提供时间趋势、供应商、生产阶段、创建人、每项内容、最近调用明细和内容汇总 CSV 导出。
 
-默认估算依据为 TikHub `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、Seedream `¥0.22/张`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。OpenRouter 的供应商响应金额同样按固定汇率换算。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) 和[火山引擎产品计价](https://www.volcengine.com/product/yunque)为准。
+默认估算依据为 TikHub `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、Seedream `¥0.22/张`、Seedance 1.5 Pro 无声视频 `¥8/百万 tokens`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。OpenRouter 的供应商响应金额同样按固定汇率换算。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) 和[火山引擎豆包大模型计价](https://www.volcengine.com/product/doubao/)为准。
 
 范围刻意只包含模型与数据 API，不包含 Railway、TOS、带宽、人工、税费和购买积分手续费。账本上线前的脚本与分镜没有持久化 OpenRouter `usage`，无法可靠反推；历史图片、视频和语音仅在有保存产物或 Token 时按当前配置补算，并明确标记为历史估算。
 

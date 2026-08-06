@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.7.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.9.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -109,6 +109,17 @@
             <div><p class="step">01</p><h2>开始一条视频</h2></div>
             <button id="new-card-button" class="button secondary" type="button">新建</button>
           </div>
+          <label class="video-quality-setting" for="video-resolution">
+            <span class="video-quality-copy">
+              <strong>视频画质</strong>
+              <small>同时用于 3 段 AI 视频和最终竖屏成片；默认使用 Seedance 1.5 Pro 无声模式，复杂镜头可在成片检查时单独升级 2.0。画质越高，Token、耗时和文件体积通常越大。</small>
+            </span>
+            <select id="video-resolution" aria-label="视频画质">
+              <option value="480p">480P · 480×854</option>
+              <option value="720p">720P · 720×1280</option>
+              <option value="1080p" selected>1080P · 1080×1920（默认）</option>
+            </select>
+          </label>
           <section id="topic-handoff" class="topic-handoff" hidden>
             <div class="topic-handoff-heading">
               <div><span>已采用选题</span><strong id="topic-handoff-title"></strong></div>
@@ -172,7 +183,7 @@
           </form>
           <details id="generation-prompt-settings" class="advanced-settings prompt-settings global-prompt-settings">
             <summary>调整 AI 写法和画面风格（实验用）</summary>
-            <p class="field-hint">默认值可以直接使用。修改后会用于下一条新建视频，并保存在当前浏览器中；系统先为 5 个章节各生成 1 张首帧，再用其中 3 张生成 8-10 秒、480p 的 AI 视频，另外 2 张直接进入成片。</p>
+            <p class="field-hint">默认值可以直接使用。修改后会用于下一条新建视频，并保存在当前浏览器中；系统先为 5 个章节各生成 1 张首帧，再用其中 3 张生成 8-10 秒、所选画质的 AI 视频，另外 2 张直接进入成片。</p>
             <label>脚本生成提示词
               <textarea id="script-generation-prompt" rows="11" maxlength="8000" spellcheck="false"></textarea>
               <span class="field-hint">人物、观点和 JSON 输出结构由系统自动附加，你只需调整写作方式。</span>
@@ -248,7 +259,7 @@
           </section>
           <div id="job-error" class="error-box" hidden></div>
           <section id="script-review" class="review-section" hidden>
-            <div class="section-title"><h3>脚本确认</h3><span>确认后开始配音与画面生成</span></div>
+            <div class="section-title"><h3>脚本确认</h3><span id="script-review-spec">确认后开始配音与画面生成</span></div>
             <section class="script-document" aria-label="完整视频脚本">
               <label class="script-title-field">视频标题
                 <input id="script-video-title" maxlength="200" autocomplete="off">
@@ -264,7 +275,7 @@
               <summary>本任务的全片画面导演设定</summary>
               <label>确认前仍可修改
                 <textarea id="job-seedance-prompt" rows="7" maxlength="3200" spellcheck="false"></textarea>
-                <span class="field-hint">没有参考图时，它会指导五章节分镜、首帧和 3 个 480p、8-10 秒视频；有参考图时由参考图接管画风与人物造型。口播原句不会作为画面文字。</span>
+                <span class="field-hint">没有参考图时，它会指导五章节分镜、首帧和 3 个所选画质、8-10 秒视频；有参考图时由参考图接管画风与人物造型。口播原句不会作为画面文字。</span>
               </label>
             </details>
             <div class="actions">
@@ -316,6 +327,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.7.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.9.0"></script>
 </body>
 </html>
