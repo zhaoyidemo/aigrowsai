@@ -32,6 +32,14 @@ from qijia_video.topic_ports import (
 
 ProgressReporter = Callable[[dict], None]
 TOPIC_RESOURCE_KIND = "topic_research"
+LOW_FOLLOWER_EVIDENCE_TIERS = frozenset({
+    TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
+    TopicEvidenceTier.EMERGING_LOW_FOLLOWER_BREAKOUT,
+})
+QUALIFIED_EVIDENCE_TIERS = frozenset({
+    *LOW_FOLLOWER_EVIDENCE_TIERS,
+    TopicEvidenceTier.HIGH_HEAT_BREAKOUT,
+})
 
 
 class TopicResearchService:
@@ -195,18 +203,15 @@ class TopicResearchService:
             item for item in evidence
             if item.evidence_type == TopicEvidenceType.TREND_TERM
         ][:20]
-        quality_tiers = {
-            TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
-            TopicEvidenceTier.HIGH_HEAT_BREAKOUT,
-        }
         videos = [
             item for item in evidence
             if item.evidence_type == TopicEvidenceType.VIDEO
-            and item.quality_tier in quality_tiers
+            and item.quality_tier in QUALIFIED_EVIDENCE_TIERS
         ]
         tier_order = {
             TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT: 0,
-            TopicEvidenceTier.HIGH_HEAT_BREAKOUT: 1,
+            TopicEvidenceTier.EMERGING_LOW_FOLLOWER_BREAKOUT: 1,
+            TopicEvidenceTier.HIGH_HEAT_BREAKOUT: 2,
         }
 
         def evidence_rank(item: TopicEvidence) -> tuple:
@@ -231,7 +236,11 @@ class TopicResearchService:
                     else 0
                 ),
                 age_hours,
-                -(metrics.play_follower_ratio if metrics and metrics.play_follower_ratio else 0),
+                -(
+                    metrics.play_follower_ratio
+                    if metrics and metrics.play_follower_ratio
+                    else 0
+                ),
                 -(metrics.play_count if metrics else 0),
                 item.source_rank or 999,
             )
@@ -264,16 +273,16 @@ class TopicResearchService:
                 ref
                 for ref in refs
                 if evidence_by_id[ref].evidence_type == TopicEvidenceType.VIDEO
-                and evidence_by_id[ref].quality_tier in {
-                    TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
-                    TopicEvidenceTier.HIGH_HEAT_BREAKOUT,
-                }
+                and (
+                    evidence_by_id[ref].quality_tier
+                    in QUALIFIED_EVIDENCE_TIERS
+                )
             ]
             if len(qualified_refs) < 2:
                 raise QualityGateFailed("每个候选至少需要两条独立的爆款视频共同验证")
             if not any(
                 evidence_by_id[ref].quality_tier
-                == TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT
+                in LOW_FOLLOWER_EVIDENCE_TIERS
                 for ref in qualified_refs
             ):
                 raise QualityGateFailed("每个候选至少需要一条低粉爆款视频")
@@ -308,10 +317,10 @@ class TopicResearchService:
             for candidate in candidates
             for ref in candidate.evidence_refs
             if evidence_by_id[ref].evidence_type == TopicEvidenceType.VIDEO
-            and evidence_by_id[ref].quality_tier in {
-                TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
-                TopicEvidenceTier.HIGH_HEAT_BREAKOUT,
-            }
+            and (
+                evidence_by_id[ref].quality_tier
+                in QUALIFIED_EVIDENCE_TIERS
+            )
         }
         if len(referenced_videos) < 8:
             raise QualityGateFailed("五个候选不能反复依赖同一批证据，至少需引用八条不同爆款视频")
@@ -319,7 +328,7 @@ class TopicResearchService:
             ref
             for ref in referenced_videos
             if evidence_by_id[ref].quality_tier
-            == TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT
+            in LOW_FOLLOWER_EVIDENCE_TIERS
         }
         if len(low_follower_videos) < 5:
             raise QualityGateFailed("五个候选合计至少需要引用五条不同的低粉爆款视频")
@@ -328,7 +337,7 @@ class TopicResearchService:
                 ref
                 for ref in candidate.evidence_refs
                 if evidence_by_id[ref].quality_tier
-                == TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT
+                in LOW_FOLLOWER_EVIDENCE_TIERS
             }
             for candidate in candidates[:3]
         ]
@@ -388,12 +397,19 @@ class TopicResearchService:
                 else exc.calls
             )
             run.cost = self._cost_summary(calls)
+            run.low_follower_diagnostics = (
+                exc.low_follower_diagnostics.model_copy(deep=True)
+            )
+            run.warnings = exc.warnings[:20]
             await self._save(run, actor)
             raise
         run = await self.get_run(run_id, actor)
         run.valid_through = collection.valid_through
         run.evidence = collection.evidence
         run.warnings = collection.warnings[:20]
+        run.low_follower_diagnostics = (
+            collection.low_follower_diagnostics.model_copy(deep=True)
+        )
         run.cost = self._cost_summary(collection.calls)
         run = await self._save(run, actor)
 

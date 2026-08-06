@@ -28,6 +28,7 @@ from qijia_video.topic_contracts import (
     TopicEvidence,
     TopicEvidenceTier,
     TopicEvidenceType,
+    TopicLowFollowerDiagnostics,
     TopicMetrics,
     TopicModelUsage,
     TopicSignalType,
@@ -235,16 +236,47 @@ class TopicNormalizationTests(unittest.TestCase):
             TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
         )
 
-    def test_video_normalization_rejects_weak_or_off_topic_platform_labels(self):
+    def test_video_normalization_accepts_age_adjusted_emerging_low_follower_hit(self):
         as_of = datetime(2026, 8, 6, 12, tzinfo=BEIJING_TZ)
+        item = _video_evidence(
+            {
+                "itemId": "73000000000000007",
+                "itemTitle": "别再这样和他说话",
+                "itemCreateTime": int((as_of - timedelta(hours=12)).timestamp()),
+                "authorFollowerCnt": 10_000,
+                "itemPlayCnt": 120_000,
+                "itemLikeCnt": 3_600,
+                "itemCommentCnt": 200,
+                "itemShareCnt": 100,
+                "itemCollectCnt": 60,
+            },
+            query="亲子沟通",
+            signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
+            label="TikHub 近 3 天低粉爆款标签",
+            rank=1,
+            as_of=as_of,
+        )
+
+        self.assertIsNotNone(item)
+        self.assertEqual(
+            item.quality_tier,
+            TopicEvidenceTier.EMERGING_LOW_FOLLOWER_BREAKOUT,
+        )
+        self.assertEqual(item.metrics.play_follower_ratio, 12)
+        self.assertEqual(item.metrics.like_rate, 0.03)
+        self.assertEqual(item.metrics.deep_engagement_rate, 0.003)
+
+    def test_video_normalization_rejects_weak_or_excluded_platform_labels(self):
+        as_of = datetime(2026, 8, 6, 12, tzinfo=BEIJING_TZ)
+        diagnostics = TopicLowFollowerDiagnostics()
         base = {
             "aweme_id": "73000000000000002",
             "desc": "孩子发脾气时家长如何回应",
             "create_time": int((as_of - timedelta(hours=24)).timestamp()),
             "author": {"follower_count": 20_000},
             "statistics": {
-                "play_count": 499_999,
-                "digg_count": 30_000,
+                "play_count": 99_999,
+                "digg_count": 3_000,
                 "comment_count": 2_500,
                 "share_count": 1_500,
                 "collect_count": 1_000,
@@ -257,12 +289,13 @@ class TopicNormalizationTests(unittest.TestCase):
             label="TikHub 近 3 天低粉爆款标签",
             rank=1,
             as_of=as_of,
+            low_follower_diagnostics=diagnostics,
         )
-        off_topic = _video_evidence(
+        excluded = _video_evidence(
             {
                 **base,
                 "aweme_id": "73000000000000003",
-                "desc": "今天的城市晚霞真好看",
+                "desc": "宝宝辅食好物推荐",
                 "statistics": {
                     "play_count": 1_000_000,
                     "digg_count": 80_000,
@@ -276,6 +309,7 @@ class TopicNormalizationTests(unittest.TestCase):
             label="TikHub 近 3 天低粉爆款标签",
             rank=1,
             as_of=as_of,
+            low_follower_diagnostics=diagnostics,
         )
         stale = _video_evidence(
             {
@@ -295,6 +329,7 @@ class TopicNormalizationTests(unittest.TestCase):
             label="TikHub 近 3 天低粉爆款标签",
             rank=1,
             as_of=as_of,
+            low_follower_diagnostics=diagnostics,
         )
         missing_time_payload = {
             **base,
@@ -315,6 +350,7 @@ class TopicNormalizationTests(unittest.TestCase):
             label="TikHub 近 3 天低粉爆款标签",
             rank=1,
             as_of=as_of,
+            low_follower_diagnostics=diagnostics,
         )
         future = _video_evidence(
             {
@@ -334,13 +370,19 @@ class TopicNormalizationTests(unittest.TestCase):
             label="TikHub 近 3 天低粉爆款标签",
             rank=1,
             as_of=as_of,
+            low_follower_diagnostics=diagnostics,
         )
 
         self.assertIsNone(weak)
-        self.assertIsNone(off_topic)
+        self.assertIsNone(excluded)
         self.assertIsNone(stale)
         self.assertIsNone(missing_time)
         self.assertIsNone(future)
+        self.assertEqual(diagnostics.rejected_insufficient_plays_count, 1)
+        self.assertEqual(diagnostics.rejected_play_follower_ratio_count, 1)
+        self.assertEqual(diagnostics.rejected_off_topic_count, 1)
+        self.assertEqual(diagnostics.rejected_too_old_count, 1)
+        self.assertEqual(diagnostics.rejected_invalid_publish_time_count, 2)
 
     def test_term_filter_keeps_family_education_and_excludes_maternal_goods(self):
         terms = _extract_terms({
@@ -413,7 +455,7 @@ class TikHubProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 ]})
             if path.endswith("/fetch_item_query"):
                 self.assertEqual(request.url.params["category_id"], "617")
-                self.assertEqual(request.url.params["duration_type"], "6")
+                self.assertEqual(request.url.params["duration_type"], "0")
                 item_labels.add(request.url.params["label_type"])
                 label = request.url.params["label_type"]
                 self.assertEqual(
@@ -456,6 +498,15 @@ class TikHubProviderContractTests(unittest.IsolatedAsyncioTestCase):
             item.quality_tier == TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT
             for item in collection.evidence
         ), 5)
+        self.assertEqual(collection.low_follower_diagnostics.received_count, 6)
+        self.assertEqual(
+            collection.low_follower_diagnostics.unique_qualified_count,
+            6,
+        )
+        self.assertEqual(
+            collection.low_follower_diagnostics.strong_qualified_count,
+            6,
+        )
         self.assertTrue(all(
             item.video_url.startswith("https://www.douyin.com/video/")
             for item in collection.evidence
@@ -511,6 +562,11 @@ class TopicResearchServiceTests(unittest.IsolatedAsyncioTestCase):
                 succeeded=False,
             ),
         ]
+        diagnostics = TopicLowFollowerDiagnostics(
+            received_count=8,
+            rejected_insufficient_plays_count=6,
+            rejected_missing_followers_count=2,
+        )
 
         class FailingProvider:
             name = "failing-tikhub"
@@ -521,7 +577,12 @@ class TopicResearchServiceTests(unittest.IsolatedAsyncioTestCase):
                 del progress
                 if on_calls:
                     await on_calls(calls)
-                raise TopicCollectionFailed("样本不足", calls)
+                raise TopicCollectionFailed(
+                    "样本不足",
+                    calls,
+                    diagnostics,
+                    ["一个低粉查询返回结构异常"],
+                )
 
         editor = StaticTopicEditor(self.proposals)
         service = TopicResearchService(
@@ -538,6 +599,12 @@ class TopicResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored.cost.tikhub_request_count, 2)
         self.assertEqual(stored.cost.tikhub_success_count, 1)
         self.assertIsNone(stored.cost.model_usage)
+        self.assertEqual(stored.low_follower_diagnostics.received_count, 8)
+        self.assertEqual(
+            stored.low_follower_diagnostics.rejected_insufficient_plays_count,
+            6,
+        )
+        self.assertEqual(stored.warnings, ["一个低粉查询返回结构异常"])
         failed = await service.mark_failed(run.id, "样本不足", self.actor)
         self.assertEqual(failed.cost.estimated_total_cost_usd, 0.001)
         self.assertFalse(hasattr(editor, "last_evidence"))

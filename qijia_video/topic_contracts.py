@@ -44,6 +44,7 @@ class TopicEvidenceTier(StrEnum):
     UNASSESSED = "unassessed"
     TREND_SIGNAL = "trend_signal"
     LOW_FOLLOWER_BREAKOUT = "low_follower_breakout"
+    EMERGING_LOW_FOLLOWER_BREAKOUT = "emerging_low_follower_breakout"
     HIGH_HEAT_BREAKOUT = "high_heat_breakout"
 
 
@@ -195,6 +196,28 @@ class TopicCostSummary(ContractModel):
         return self
 
 
+class TopicLowFollowerDiagnostics(ContractModel):
+    """低粉样本的本地复核漏斗；未通过项允许同一视频重复计数。"""
+
+    received_count: int = Field(default=0, ge=0)
+    unique_qualified_count: int = Field(default=0, ge=0)
+    strong_qualified_count: int = Field(default=0, ge=0)
+    emerging_qualified_count: int = Field(default=0, ge=0)
+    duplicate_qualified_count: int = Field(default=0, ge=0)
+    empty_or_unrecognized_query_count: int = Field(default=0, ge=0)
+    rejected_missing_identity_count: int = Field(default=0, ge=0)
+    rejected_invalid_video_id_count: int = Field(default=0, ge=0)
+    rejected_off_topic_count: int = Field(default=0, ge=0)
+    rejected_invalid_publish_time_count: int = Field(default=0, ge=0)
+    rejected_too_old_count: int = Field(default=0, ge=0)
+    rejected_missing_followers_count: int = Field(default=0, ge=0)
+    rejected_follower_ceiling_count: int = Field(default=0, ge=0)
+    rejected_insufficient_plays_count: int = Field(default=0, ge=0)
+    rejected_play_follower_ratio_count: int = Field(default=0, ge=0)
+    rejected_like_rate_count: int = Field(default=0, ge=0)
+    rejected_deep_engagement_rate_count: int = Field(default=0, ge=0)
+
+
 class TopicResearchRun(ContractModel):
     schema_version: Literal["1.0"] = TOPIC_SCHEMA_VERSION
     id: str
@@ -208,6 +231,9 @@ class TopicResearchRun(ContractModel):
     evidence: list[TopicEvidence] = Field(default_factory=list, max_length=80)
     candidates: list[TopicCandidate] = Field(default_factory=list, max_length=5)
     cost: TopicCostSummary = Field(default_factory=TopicCostSummary)
+    low_follower_diagnostics: TopicLowFollowerDiagnostics = Field(
+        default_factory=TopicLowFollowerDiagnostics
+    )
     warnings: list[str] = Field(default_factory=list, max_length=20)
     selected_candidate_id: str = Field(default="", max_length=64)
     selected_by: str = Field(default="", max_length=128)

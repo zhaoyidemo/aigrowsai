@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from qijia_video.errors import ProviderUnavailable
@@ -10,6 +10,7 @@ from qijia_video.topic_contracts import (
     TikHubCallRecord,
     TopicCandidateProposal,
     TopicEvidence,
+    TopicLowFollowerDiagnostics,
     TopicModelUsage,
 )
 
@@ -25,6 +26,9 @@ class TopicResearchCollection:
     evidence: list[TopicEvidence]
     calls: list[TikHubCallRecord]
     warnings: list[str]
+    low_follower_diagnostics: TopicLowFollowerDiagnostics = field(
+        default_factory=TopicLowFollowerDiagnostics
+    )
 
 
 @dataclass(frozen=True)
@@ -36,9 +40,21 @@ class TopicEditorialResult:
 class TopicCollectionFailed(ProviderUnavailable):
     """A failed collection that still exposes already-spent API calls."""
 
-    def __init__(self, message: str, calls: list[TikHubCallRecord]):
+    def __init__(
+        self,
+        message: str,
+        calls: list[TikHubCallRecord],
+        low_follower_diagnostics: TopicLowFollowerDiagnostics | None = None,
+        warnings: list[str] | None = None,
+    ):
         super().__init__(message)
         self.calls = list(calls)
+        self.low_follower_diagnostics = (
+            low_follower_diagnostics.model_copy(deep=True)
+            if low_follower_diagnostics is not None
+            else TopicLowFollowerDiagnostics()
+        )
+        self.warnings = list(warnings or [])
 
 
 class TopicEditorialFailed(ProviderUnavailable):
