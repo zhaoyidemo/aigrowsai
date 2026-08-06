@@ -21,10 +21,6 @@ const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 if (manifest.composition_id !== 'KnowledgeVideoV1' || manifest.brand_overlay !== null) {
   throw new Error('Unsupported or unsafe render manifest');
 }
-if (!manifest.ai_content_label?.enabled) {
-  throw new Error('AI content label cannot be disabled');
-}
-
 const sourceByPath = new Map();
 const resolvedAssets = {};
 for (const [assetId, filePath] of Object.entries(manifest.resolved_assets || {})) {

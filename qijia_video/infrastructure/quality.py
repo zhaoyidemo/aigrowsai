@@ -128,7 +128,6 @@ class FfprobeQualityChecker:
             {"id": "duration_range", "passed": 45.0 <= duration <= 75.0,
              "detail": round(duration, 3)},
             {"id": "faststart", "passed": is_faststart(path), "detail": "moov before mdat"},
-            {"id": "ai_label_manifest", "passed": manifest.ai_content_label.enabled, "detail": "manifest"},
             {"id": "brand_overlay_disabled", "passed": manifest.brand_overlay is None, "detail": "null"},
         ]
         decode_code, decode_output = await self._run(

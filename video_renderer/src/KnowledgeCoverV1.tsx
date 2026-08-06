@@ -45,11 +45,8 @@ export const KnowledgeCoverV1: React.FC<KnowledgeVideoProps> = (props) => {
       ) : (
         <AbsoluteFill style={{background: 'linear-gradient(150deg, #0f172a 0%, #1e293b 100%)'}} />
       )}
-      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 1}}>
+      <div style={{display: 'flex', alignItems: 'center', position: 'relative', zIndex: 1}}>
         <div style={{fontSize: 28, color: '#cbd5e1', letterSpacing: 4}}>家庭教育与心理学</div>
-        <div style={{background: 'rgba(2,6,23,.78)', color: '#e2e8f0', borderRadius: 999, padding: '12px 20px', fontSize: 24}}>
-          AI 生成内容
-        </div>
       </div>
       <div style={{position: 'relative', zIndex: 1}}>
         <div style={{width: 76, height: 8, borderRadius: 999, background: '#38bdf8', marginBottom: 42}} />

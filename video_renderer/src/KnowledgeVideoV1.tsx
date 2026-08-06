@@ -256,18 +256,6 @@ export const KnowledgeVideoV1: React.FC<KnowledgeVideoProps> = (props) => {
         </Sequence>
       ))}
 
-      {props.ai_content_label.enabled ? (
-        <Sequence
-          from={props.ai_content_label.start_frame}
-          durationInFrames={props.ai_content_label.duration_in_frames}
-        >
-          <AbsoluteFill style={{alignItems: 'flex-start', justifyContent: 'flex-start', padding: '76px 64px'}}>
-            <div style={{background: 'rgba(2,6,23,.78)', color: '#e2e8f0', borderRadius: 999, padding: '12px 20px', fontSize: 24}}>
-              AI 生成内容
-            </div>
-          </AbsoluteFill>
-        </Sequence>
-      ) : null}
       </AbsoluteFill>
       </div>
     </AbsoluteFill>

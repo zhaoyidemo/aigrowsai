@@ -12,7 +12,7 @@ const defaultProps: KnowledgeVideoProps = {
   job_id: 'preview',
   renderer: 'remotion',
   composition_id: 'KnowledgeVideoV1',
-  template_version: 'neutral_knowledge_v1',
+  template_version: 'neutral_knowledge_v2',
   width: DEFAULT_WIDTH,
   height: DEFAULT_HEIGHT,
   fps: 30,
@@ -26,7 +26,6 @@ const defaultProps: KnowledgeVideoProps = {
   visual_blocks: [],
   subtitle_cues: [],
   screen_text_cues: [],
-  ai_content_label: {enabled: true, start_frame: 0, duration_in_frames: 90},
   brand_overlay: null,
 };
 

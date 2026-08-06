@@ -710,7 +710,9 @@ class RenderOutput(ContractModel):
 
 
 class AiContentLabel(ContractModel):
-    enabled: Literal[True] = True
+    """Legacy manifest field retained so older jobs remain readable."""
+
+    enabled: bool = False
     start_frame: int = Field(default=0, ge=0)
     duration_in_frames: int = Field(default=90, gt=0)
 
@@ -778,7 +780,7 @@ class RenderManifest(ContractModel):
     job_id: str
     renderer: Literal["remotion"] = "remotion"
     composition_id: Literal["KnowledgeVideoV1"] = "KnowledgeVideoV1"
-    template_version: str = "neutral_knowledge_v1"
+    template_version: str = "neutral_knowledge_v2"
     # 三档画质都以同一套 1080x1920 设计坐标渲染，保证排版一致。
     width: Literal[480, 720, 1080] = 480
     height: Literal[854, 1280, 1920] = 854
@@ -845,12 +847,6 @@ class RenderManifest(ContractModel):
         for cue in self.screen_text_cues:
             if cue.start_frame + cue.duration_in_frames > self.duration_in_frames:
                 raise ValueError(f"屏幕文字 {cue.id} 超出成片时间轴")
-        if (
-            self.ai_content_label.start_frame
-            + self.ai_content_label.duration_in_frames
-            > self.duration_in_frames
-        ):
-            raise ValueError("AI 生成内容标识超出成片时间轴")
         return self
 
 

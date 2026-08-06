@@ -355,7 +355,7 @@ class QijiaVideoContractTests(unittest.TestCase):
                 "rights_confirmed": False,
             })
 
-    def test_render_manifest_cannot_disable_ai_label_or_add_brand(self):
+    def test_render_manifest_defaults_to_no_embedded_ai_label_or_brand(self):
         audio = {
             "asset_id": "audio",
             "object_key": "audio.wav",
@@ -375,8 +375,11 @@ class QijiaVideoContractTests(unittest.TestCase):
                 "duration_in_frames": 1350,
             }],
         }
-        with self.assertRaises(ValidationError):
-            RenderManifest(**base, ai_content_label={"enabled": False})
+        manifest = RenderManifest(**base)
+        self.assertFalse(manifest.ai_content_label.enabled)
+        # Read compatibility for manifests saved before embedded labels were removed.
+        legacy = RenderManifest(**base, ai_content_label={"enabled": True})
+        self.assertTrue(legacy.ai_content_label.enabled)
         with self.assertRaises(ValidationError):
             RenderManifest(**base, brand_overlay={"text": "齐家 AI"})
 

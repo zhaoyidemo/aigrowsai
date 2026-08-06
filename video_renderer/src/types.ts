@@ -54,10 +54,5 @@ export type KnowledgeVideoProps = {
   visual_blocks: VisualBlock[];
   subtitle_cues: SubtitleCue[];
   screen_text_cues: ScreenTextCue[];
-  ai_content_label: {
-    enabled: boolean;
-    start_frame: number;
-    duration_in_frames: number;
-  };
   brand_overlay: null;
 };
