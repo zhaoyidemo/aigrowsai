@@ -12,6 +12,7 @@ from qijia_video.contracts import (
     ProviderUsageRecord,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
+    SEEDANCE_RETIRED_MODEL,
     VideoJob,
 )
 from qijia_video.cost_analysis import (
@@ -221,7 +222,7 @@ class CostAnalysisTests(unittest.TestCase):
             video_tasks=[
                 ProviderTask(
                     provider="volcengine-seedance",
-                    provider_task_id="task_15",
+                    provider_task_id="task_10_fast",
                     request_fingerprint="d" * 64,
                     model_id=SEEDANCE_EFFICIENT_MODEL,
                     state=ProviderTaskState.SUCCEEDED,
@@ -230,8 +231,17 @@ class CostAnalysisTests(unittest.TestCase):
                 ),
                 ProviderTask(
                     provider="volcengine-seedance",
-                    provider_task_id="task_20",
+                    provider_task_id="task_15",
                     request_fingerprint="e" * 64,
+                    model_id=SEEDANCE_RETIRED_MODEL,
+                    state=ProviderTaskState.SUCCEEDED,
+                    usage_total_tokens=100000,
+                    created_at=NOW_TEXT,
+                ),
+                ProviderTask(
+                    provider="volcengine-seedance",
+                    provider_task_id="task_20",
+                    request_fingerprint="f" * 64,
                     model_id=SEEDANCE_FLAGSHIP_MODEL,
                     state=ProviderTaskState.SUCCEEDED,
                     usage_total_tokens=100000,
@@ -246,15 +256,20 @@ class CostAnalysisTests(unittest.TestCase):
             days=0,
             now=NOW,
             seedance_model_prices_per_million_tokens={
-                SEEDANCE_EFFICIENT_MODEL: 8,
+                SEEDANCE_EFFICIENT_MODEL: 4.2,
+                SEEDANCE_RETIRED_MODEL: 8,
                 SEEDANCE_FLAGSHIP_MODEL: 46,
             },
         )
 
-        self.assertAlmostEqual(result["summary"]["estimated_cny"], 5.4)
+        self.assertAlmostEqual(result["summary"]["estimated_cny"], 5.82)
         self.assertEqual(
             {row["model_id"] for row in result["events"]},
-            {SEEDANCE_EFFICIENT_MODEL, SEEDANCE_FLAGSHIP_MODEL},
+            {
+                SEEDANCE_EFFICIENT_MODEL,
+                SEEDANCE_RETIRED_MODEL,
+                SEEDANCE_FLAGSHIP_MODEL,
+            },
         )
 
     def test_mock_artifacts_are_visible_but_never_charged_as_production(self):

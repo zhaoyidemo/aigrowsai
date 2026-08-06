@@ -16,9 +16,11 @@ from qijia_video.prompts import DEFAULT_SCRIPT_PROMPT, DEFAULT_SEEDANCE_PROMPT
 
 SCHEMA_VERSION = "1.0"
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
-SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-5-pro-251215"
+SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-0-pro-fast-251015"
+SEEDANCE_RETIRED_MODEL = "doubao-seedance-1-5-pro-251215"
 SEEDANCE_FLAGSHIP_MODEL = "doubao-seedance-2-0-260128"
 SeedanceModelId = Literal[
+    "doubao-seedance-1-0-pro-fast-251015",
     "doubao-seedance-1-5-pro-251215",
     "doubao-seedance-2-0-260128",
 ]
@@ -490,8 +492,8 @@ class GenerationSettings(ContractModel):
         max_length=3200,
     )
     video_resolution: Literal["480p", "720p", "1080p"] = "1080p"
-    # 1.5 Pro keeps native 1080P while making the default three-shot workflow
-    # materially cheaper.  2.0 remains an explicit per-shot quality upgrade.
+    # 1.0 Pro Fast keeps native 1080P while making the default three-shot
+    # workflow materially cheaper. 2.0 remains an explicit per-shot upgrade.
     seedance_model: SeedanceModelId = SEEDANCE_EFFICIENT_MODEL
     shot_count: Literal[5] = 5
 
@@ -905,23 +907,64 @@ class VideoJob(ContractModel):
 
     @model_validator(mode="before")
     @classmethod
-    def preserve_legacy_generation_settings(cls, value: Any) -> Any:
-        """Keep persisted jobs on the output and model they were created with."""
+    def normalize_legacy_generation_settings(cls, value: Any) -> Any:
+        """Preserve paid history while migrating requests never submitted."""
         if not isinstance(value, dict):
             return value
-        settings = value.get("generation_settings")
-        if not isinstance(settings, dict):
+        raw_settings = value.get("generation_settings")
+        if isinstance(raw_settings, BaseModel):
+            settings = raw_settings.model_dump(mode="python")
+        elif isinstance(raw_settings, dict):
+            settings = raw_settings
+        else:
             return value
         additions: dict[str, Any] = {}
         if "video_resolution" not in settings:
             additions["video_resolution"] = "480p"
         if "seedance_model" not in settings:
             additions["seedance_model"] = SEEDANCE_FLAGSHIP_MODEL
-        if not additions:
+
+        def provider_task_id(item: Any) -> str:
+            if isinstance(item, dict):
+                return str(item.get("provider_task_id") or "").strip()
+            return str(getattr(item, "provider_task_id", "") or "").strip()
+
+        submitted_tasks = list(value.get("video_tasks") or [])
+        for version in value.get("visual_versions") or []:
+            task = (
+                version.get("task")
+                if isinstance(version, dict)
+                else getattr(version, "task", None)
+            )
+            if task is not None:
+                submitted_tasks.append(task)
+        migrate_unsubmitted_retired_model = (
+            settings.get("seedance_model") == SEEDANCE_RETIRED_MODEL
+            and not any(provider_task_id(item) for item in submitted_tasks)
+        )
+        if not additions and not migrate_unsubmitted_retired_model:
             return value
         normalized = dict(value)
         normalized_settings = dict(settings)
         normalized_settings.update(additions)
+        if migrate_unsubmitted_retired_model:
+            # 1.5 Pro remains valid so paid historical tasks stay pollable. Only
+            # requests without a provider task ID are safe to move and resubmit.
+            normalized_settings["seedance_model"] = SEEDANCE_EFFICIENT_MODEL
+            normalized_requests: list[Any] = []
+            for request in value.get("visual_requests") or []:
+                request_data = (
+                    request.model_dump(mode="python")
+                    if isinstance(request, BaseModel)
+                    else dict(request) if isinstance(request, dict) else request
+                )
+                if (
+                    isinstance(request_data, dict)
+                    and request_data.get("model_id") == SEEDANCE_RETIRED_MODEL
+                ):
+                    request_data["model_id"] = SEEDANCE_EFFICIENT_MODEL
+                normalized_requests.append(request_data)
+            normalized["visual_requests"] = normalized_requests
         normalized["generation_settings"] = normalized_settings
         return normalized
 

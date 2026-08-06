@@ -33,6 +33,7 @@ from qijia_video.contracts import (
     ProviderUsageRecord,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
+    SEEDANCE_RETIRED_MODEL,
     VideoJob,
     VisualGenerationRequest,
     content_hash,
@@ -250,6 +251,69 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(
             VisualGenerationRequest.model_validate(payload).fingerprint(),
             content_hash(payload),
+        )
+
+    def test_unsubmitted_retired_seedance_requests_migrate_without_touching_paid_tasks(self):
+        retired_request = VisualGenerationRequest(
+            request_id="shot_01",
+            prompt="旧模型未提交成功的镜头",
+            model_id=SEEDANCE_RETIRED_MODEL,
+            resolution="1080p",
+        )
+        base_payload = {
+            "id": "retired-seedance-job",
+            "state": "failed",
+            "source_card_id": "card_01",
+            "source_card_revision": 1,
+            "source_card_snapshot": {},
+            "generation_settings": {
+                "seedance_model": SEEDANCE_RETIRED_MODEL,
+            },
+            "visual_requests": [retired_request.model_dump(mode="json")],
+        }
+
+        unsubmitted = VideoJob.model_validate(base_payload)
+        self.assertEqual(
+            unsubmitted.generation_settings.seedance_model,
+            SEEDANCE_EFFICIENT_MODEL,
+        )
+        self.assertEqual(
+            unsubmitted.visual_requests[0].model_id,
+            SEEDANCE_EFFICIENT_MODEL,
+        )
+
+        new_draft = VideoJob(
+            **{
+                key: value
+                for key, value in base_payload.items()
+                if key not in {"generation_settings", "visual_requests"}
+            },
+            generation_settings=GenerationSettings(
+                seedance_model=SEEDANCE_RETIRED_MODEL,
+            ),
+        )
+        self.assertEqual(
+            new_draft.generation_settings.seedance_model,
+            SEEDANCE_EFFICIENT_MODEL,
+        )
+
+        submitted_payload = dict(base_payload)
+        submitted_payload["video_tasks"] = [{
+            "provider": "volcengine-seedance",
+            "provider_task_id": "paid_task_01",
+            "request_fingerprint": retired_request.fingerprint(),
+            "request_id": retired_request.request_id,
+            "model_id": SEEDANCE_RETIRED_MODEL,
+            "state": "running",
+        }]
+        submitted = VideoJob.model_validate(submitted_payload)
+        self.assertEqual(
+            submitted.generation_settings.seedance_model,
+            SEEDANCE_RETIRED_MODEL,
+        )
+        self.assertEqual(
+            submitted.visual_requests[0].model_id,
+            SEEDANCE_RETIRED_MODEL,
         )
 
     def test_default_seedance_style_is_a_continuous_hybrid_story(self):
@@ -2383,14 +2447,14 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         )
         self.assertEqual(
             response.json()["data"]["seedance_pricing"]["yuan_per_million_tokens"],
-            8.0,
+            4.2,
         )
         self.assertEqual(
             [
                 item["yuan_per_million_tokens"]
                 for item in response.json()["data"]["seedance_pricing"]["models"]
             ],
-            [8.0, 46.0],
+            [4.2, 46.0],
         )
         self.assertEqual(
             response.json()["data"]["seedream_pricing"]["candidates_per_shot"],

@@ -177,7 +177,7 @@ test('video quality is selectable and frozen into each new task', () => {
   assert.match(page, /value="720p"[^>]*>720P · 720×1280/);
   assert.match(page, /value="1080p"[^>]*selected[^>]*>1080P · 1080×1920（默认）/);
   assert.match(page, /画质越高，Token、耗时和文件体积通常越大/);
-  assert.match(page, /默认使用 Seedance 1\.5 Pro 无声模式/);
+  assert.match(page, /默认使用 Seedance 1\.0 Pro Fast 无声模式/);
   assert.match(app, /video_resolution: '1080p'/);
   assert.match(app, /video_resolution: videoResolution/);
   assert.match(app, /job\?\.generation_settings\?\.video_resolution/);

@@ -41,10 +41,12 @@ class QijiaVideoSettings(BaseSettings):
     )
     # Provider fallback for legacy requests without a frozen model. New tasks
     # always send the model stored in GenerationSettings/VisualGenerationRequest.
-    QIJIA_VIDEO_SEEDANCE_MODEL: str = "doubao-seedance-1-5-pro-251215"
+    QIJIA_VIDEO_SEEDANCE_MODEL: str = "doubao-seedance-1-0-pro-fast-251015"
     # Legacy fallback price. Model-specific prices below are authoritative for
-    # all new requests and allow mixed 1.5 Pro / 2.0 cost accounting.
-    QIJIA_VIDEO_SEEDANCE_PRICE_PER_MILLION: float = 8.0
+    # all new requests and allow mixed current / historical cost accounting.
+    QIJIA_VIDEO_SEEDANCE_PRICE_PER_MILLION: float = 4.2
+    QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION: float = 4.2
+    # Retained only for historical 1.5 Pro tasks and their missing snapshots.
     QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION: float = 8.0
     QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION: float = 46.0
     QIJIA_VIDEO_SEEDANCE_DOWNLOAD_HOSTS: str = (

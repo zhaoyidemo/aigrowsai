@@ -148,11 +148,11 @@ function isNarrationRevisionFailure(job) {
 function generationDefaults() {
   return state.capabilities?.generation_defaults || {
     script_prompt: '', seedance_prompt: '', video_resolution: '1080p',
-    seedance_model: 'doubao-seedance-1-5-pro-251215', shot_count: 5,
+    seedance_model: 'doubao-seedance-1-0-pro-fast-251015', shot_count: 5,
   };
 }
 
-const SEEDANCE_EFFICIENT_MODEL = 'doubao-seedance-1-5-pro-251215';
+const SEEDANCE_EFFICIENT_MODEL = 'doubao-seedance-1-0-pro-fast-251015';
 const SEEDANCE_FLAGSHIP_MODEL = 'doubao-seedance-2-0-260128';
 
 function seedanceModels() {
@@ -160,8 +160,8 @@ function seedanceModels() {
   if (Array.isArray(configured) && configured.length) return configured;
   return [
     {
-      id: SEEDANCE_EFFICIENT_MODEL, label: 'Seedance 1.5 Pro',
-      short_label: '1.5 Pro', yuan_per_million_tokens: 8, default: true,
+      id: SEEDANCE_EFFICIENT_MODEL, label: 'Seedance 1.0 Pro Fast',
+      short_label: '1.0 Fast', yuan_per_million_tokens: 4.2, default: true,
     },
     {
       id: SEEDANCE_FLAGSHIP_MODEL, label: 'Seedance 2.0',
@@ -1312,7 +1312,7 @@ function renderShotInspector(job) {
     </label>
     <label class="shot-model-field">生成模型
       <select id="shot-seedance-model" ${canEdit ? '' : 'disabled'}>${modelOptions}</select>
-      <span class="field-hint">默认 1.5 Pro 保持原生 1080P；仅在复杂动作、人物一致性不理想时升级 2.0。</span>
+      <span class="field-hint">默认 1.0 Pro Fast 保持原生 1080P；仅在复杂动作、人物一致性不理想时升级 2.0。</span>
     </label>
     <div class="shot-inspector-actions">
       ${applyButton}

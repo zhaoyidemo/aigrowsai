@@ -31,6 +31,7 @@ from qijia_video.contracts import (
     RenderManifest,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
+    SEEDANCE_RETIRED_MODEL,
     ScriptDraft,
     ScriptBeat,
     ScriptReview,
@@ -278,12 +279,16 @@ class QijiaVideoService:
                 task.pricing_rate_cny_per_million = rate
         if rate is not None and rate > 0:
             model_label = {
-                SEEDANCE_EFFICIENT_MODEL: "Seedance 1.5 Pro",
+                SEEDANCE_EFFICIENT_MODEL: "Seedance 1.0 Pro Fast",
+                SEEDANCE_RETIRED_MODEL: "Seedance 1.5 Pro",
                 SEEDANCE_FLAGSHIP_MODEL: "Seedance 2.0",
             }.get(task.model_id, "Seedance")
             billing_mode = (
                 "无声视频"
-                if task.model_id == SEEDANCE_EFFICIENT_MODEL
+                if task.model_id in {
+                    SEEDANCE_EFFICIENT_MODEL,
+                    SEEDANCE_RETIRED_MODEL,
+                }
                 else "无视频输入"
             )
             task.pricing_basis = (
@@ -2077,13 +2082,14 @@ class QijiaVideoService:
                 and task.model_id in {
                     SEEDANCE_EFFICIENT_MODEL,
                     SEEDANCE_FLAGSHIP_MODEL,
+                    SEEDANCE_RETIRED_MODEL,
                 }
             ):
                 return task.model_id
         if job.generation_settings:
             return job.generation_settings.seedance_model
         # Jobs old enough to have no frozen generation settings were produced
-        # before 1.5 Pro became the default.
+        # before model selection was frozen on each request.
         return SEEDANCE_FLAGSHIP_MODEL
 
     @classmethod

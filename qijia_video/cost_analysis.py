@@ -11,6 +11,7 @@ from qijia_video.contracts import (
     ProviderUsageRecord,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
+    SEEDANCE_RETIRED_MODEL,
     VideoJob,
 )
 from qijia_video.topic_contracts import TopicResearchRun
@@ -561,7 +562,7 @@ def build_cost_analysis(
     *,
     days: int = 30,
     seedream_price_per_image: float = 0.22,
-    seedance_price_per_million_tokens: float = 8.0,
+    seedance_price_per_million_tokens: float = 4.2,
     seedance_model_prices_per_million_tokens: dict[str, float] | None = None,
     tts_price_per_10000_characters: float = 5.0,
     tikhub_price_per_success_usd: float = 0.001,
@@ -575,7 +576,8 @@ def build_cost_analysis(
     safe_days = max(0, min(3650, int(days or 0)))
     cutoff = current - timedelta(days=safe_days) if safe_days else None
     model_prices = {
-        SEEDANCE_EFFICIENT_MODEL: 8.0,
+        SEEDANCE_EFFICIENT_MODEL: 4.2,
+        SEEDANCE_RETIRED_MODEL: 8.0,
         SEEDANCE_FLAGSHIP_MODEL: 46.0,
     }
     model_prices.update({
@@ -765,9 +767,19 @@ def build_cost_analysis(
                 "source": "https://www.volcengine.com/product/yunque",
             },
             {
-                "provider": "Seedance 1.5 Pro",
+                "provider": "Seedance 1.0 Pro Fast",
                 "rate": (
                     f"¥{model_prices[SEEDANCE_EFFICIENT_MODEL]:g}/百万 tokens"
+                    "（无声视频）"
+                ),
+                "currency": "CNY",
+                "valuation": "estimated",
+                "source": "https://www.volcengine.com/product/doubao/",
+            },
+            {
+                "provider": "Seedance 1.5 Pro（历史）",
+                "rate": (
+                    f"¥{model_prices[SEEDANCE_RETIRED_MODEL]:g}/百万 tokens"
                     "（无声视频）"
                 ),
                 "currency": "CNY",
