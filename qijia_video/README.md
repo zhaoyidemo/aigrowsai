@@ -2,9 +2,9 @@
 
 `qijia_video` 是独立的家庭教育选题研究与短视频生产领域模块，核心分层如下：
 
-- `contracts.py`：来源卡、脚本、分镜、生成请求、资产和发布包协议；
-- `service.py`：状态机与完整生产链路；
-- `ports.py`：Provider、存储、渲染和仓储端口；
+- `contracts.py`：来源卡、脚本、分镜、生成请求、资产、发布包和抖音播放快照协议；
+- `service.py`：状态机、完整生产链路、抖音回流与单视频 ROI；
+- `ports.py`：生成 Provider、抖音播放读取、存储、渲染和仓储端口；
 - `infrastructure/`：OpenRouter、火山引擎、TOS、PostgreSQL、FFmpeg 与 Remotion 适配器；
 - `run_service.py`：后台任务进度、互斥和部署重启恢复；
 - `auth.py`：管理员与同事的签名 Cookie 会话；
@@ -13,7 +13,7 @@
 - `topic_contracts.py`、`topic_service.py`：选题证据、候选、成本和确定性流程；
 - `topic_ports.py`：TikHub 采集、编辑模型与逐步成本账本的端口；
 - `topic_runtime.py`、`topic_api.py`：轻量任务骨架与选题 API；
-- `infrastructure/tikhub.py`：TikHub 抖音数据适配器；
+- `infrastructure/tikhub.py`：TikHub 抖音选题与作品播放量数据适配器；
 - `infrastructure/topic_providers.py`：只基于证据归纳角度的选题编辑模型；
 - `web/`：不依赖前端框架的工作台与账号管理页面。
 

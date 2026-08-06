@@ -21,6 +21,8 @@ from qijia_video.contracts import (
     ApprovalRecord,
     Artifact,
     AssetRef,
+    DouyinPerformance,
+    DouyinPlaybackSnapshot,
     FirstFrameCandidate,
     GenerationSettings,
     JobState,
@@ -49,6 +51,10 @@ from qijia_video.contracts import (
     content_hash,
     timestamp,
 )
+from qijia_video.cost_analysis import (
+    USD_TO_CNY_RATE,
+    build_douyin_performance_analysis,
+)
 from qijia_video.errors import (
     InvalidTransition,
     ProviderUnavailable,
@@ -58,6 +64,7 @@ from qijia_video.errors import (
 from qijia_video.ports import (
     AggregateRepository,
     ArtifactStorage,
+    DouyinPerformanceProvider,
     ImageProvider,
     QualityChecker,
     Renderer,
@@ -105,6 +112,7 @@ VIDEO_OUTPUT_DIMENSIONS = {
 SEEDANCE_MAX_NATURAL_CHAPTER_SECONDS = 10.0
 MIN_VIDEO_DURATION_SECONDS = 45.0
 MAX_VIDEO_DURATION_SECONDS = 75.0
+DOUYIN_SNAPSHOT_RETENTION = 200
 ProgressReporter = Callable[[dict], None]
 
 
@@ -123,12 +131,14 @@ class QijiaVideoService:
         quality_checker: QualityChecker,
         media_packager: MediaPackager,
         work_root: Path,
+        douyin_performance_provider: DouyinPerformanceProvider | None = None,
         video_poll_interval_seconds: float = 5.0,
         video_timeout_seconds: float = 900.0,
         seedream_price_per_image: float = 0.22,
         seedance_price_per_million_tokens: float = 8.0,
         seedance_model_prices_per_million_tokens: dict[str, float] | None = None,
         tts_price_per_10000_characters: float = 5.0,
+        tikhub_price_per_success_usd: float = 0.001,
     ):
         self.repository = repository
         self.script_provider = script_provider
@@ -140,6 +150,7 @@ class QijiaVideoService:
         self.storage = storage
         self.quality_checker = quality_checker
         self.media_packager = media_packager
+        self.douyin_performance_provider = douyin_performance_provider
         self.work_root = work_root.resolve()
         self.work_root.mkdir(parents=True, exist_ok=True)
         self.video_poll_interval_seconds = max(
@@ -162,6 +173,10 @@ class QijiaVideoService:
         self.tts_price_per_10000_characters = max(
             0.0, float(tts_price_per_10000_characters)
         )
+        self.tikhub_price_per_success_usd = max(
+            0.0, float(tikhub_price_per_success_usd)
+        )
+        self._douyin_performance_lock = asyncio.Lock()
 
     @staticmethod
     def _report(
@@ -215,6 +230,46 @@ class QijiaVideoService:
     ) -> VideoJob:
         record = usage.model_copy(deep=True)
         if (
+            record.operation == "douyin_performance"
+            and record.provider == "tikhub"
+            and record.estimated_cost is None
+            and (
+                (
+                    record.succeeded
+                    and self.tikhub_price_per_success_usd > 0
+                )
+                or "失败响应" in record.note
+            )
+        ):
+            record.estimated_currency = "CNY"
+            record.estimated_cost = round(
+                (
+                    self.tikhub_price_per_success_usd * USD_TO_CNY_RATE
+                    if record.succeeded
+                    else 0
+                ),
+                8,
+            )
+            record.pricing_basis = (
+                "TikHub 按 "
+                f"¥{self.tikhub_price_per_success_usd * USD_TO_CNY_RATE:g}"
+                "/成功请求估算；失败响应按 ¥0 估算；供应商账单优先"
+            )
+        elif (
+            record.operation == "douyin_performance"
+            and record.provider == "tikhub"
+            and record.succeeded
+            and record.estimated_cost is None
+        ):
+            record.note = "；".join(
+                item
+                for item in (
+                    record.note,
+                    "TikHub 成功请求规划价未配置，金额待供应商账单核对",
+                )
+                if item
+            )
+        elif (
             record.operation == "tts_synthesis"
             and record.provider == "volcengine-seed-tts-2.0"
             and record.succeeded
@@ -595,6 +650,129 @@ class QijiaVideoService:
             expected_revision=current,
         )
         return VideoJob.model_validate(saved)
+
+    def douyin_performance_analysis(self, job: VideoJob) -> dict:
+        return build_douyin_performance_analysis(
+            job,
+            seedream_price_per_image=self.seedream_price_per_image,
+            seedance_price_per_million_tokens=(
+                self.seedance_price_per_million_tokens
+            ),
+            seedance_model_prices_per_million_tokens=(
+                self.seedance_model_prices_per_million_tokens
+            ),
+            tts_price_per_10000_characters=(
+                self.tts_price_per_10000_characters
+            ),
+        )
+
+    def _require_douyin_performance_provider(
+        self,
+    ) -> DouyinPerformanceProvider:
+        provider = self.douyin_performance_provider
+        if provider is None:
+            raise ProviderUnavailable("抖音播放回流 Provider 未装配")
+        if not provider.configured:
+            raise ProviderUnavailable(
+                "抖音播放回流未配置："
+                + "、".join(provider.configuration_errors)
+            )
+        return provider
+
+    async def _collect_douyin_performance(
+        self,
+        job_id: str,
+        expected_revision: int,
+        actor: Actor,
+        *,
+        share_text: str | None,
+    ) -> VideoJob:
+        job = await self.get_job(job_id, actor)
+        self._assert_revision(job.revision, expected_revision)
+        if job.state != JobState.PACKAGED:
+            raise InvalidTransition("只有已完成发布包的视频才能回流抖音播放量")
+        provider = self._require_douyin_performance_provider()
+        current_performance = job.douyin_performance
+        if share_text is None and current_performance is None:
+            raise InvalidTransition("请先绑定这条视频发布后的抖音作品链接")
+
+        async def persist_usage(usage: ProviderUsageRecord) -> None:
+            nonlocal job
+            job = await self._persist_usage_record(job, usage, actor)
+
+        if share_text is None:
+            metrics = await provider.fetch_by_video_id(
+                current_performance.video_id,
+                on_usage=persist_usage,
+            )
+        else:
+            metrics = await provider.fetch_by_share_url(
+                share_text,
+                on_usage=persist_usage,
+            )
+
+        now = timestamp()
+        previous = (
+            job.douyin_performance
+            if (
+                job.douyin_performance
+                and job.douyin_performance.video_id == metrics.video_id
+            )
+            else None
+        )
+        snapshots = [
+            *(previous.snapshots if previous else []),
+            DouyinPlaybackSnapshot(
+                play_count=metrics.play_count,
+                observed_at=now,
+                request_id=metrics.request_id,
+            ),
+        ][-DOUYIN_SNAPSHOT_RETENTION:]
+        job.douyin_performance = DouyinPerformance(
+            video_id=metrics.video_id,
+            video_url=metrics.video_url,
+            video_title=(
+                metrics.video_title
+                or (previous.video_title if previous else "")
+            ),
+            author_name=(
+                metrics.author_name
+                or (previous.author_name if previous else "")
+            ),
+            bound_at=previous.bound_at if previous else now,
+            updated_at=now,
+            snapshots=snapshots,
+        )
+        return await self._save_job(job, actor)
+
+    async def bind_douyin_performance(
+        self,
+        job_id: str,
+        douyin_url: str,
+        expected_revision: int,
+        actor: Actor,
+    ) -> VideoJob:
+        async with self._douyin_performance_lock:
+            return await self._collect_douyin_performance(
+                job_id,
+                expected_revision,
+                actor,
+                share_text=douyin_url,
+            )
+
+    async def refresh_douyin_performance(
+        self,
+        job_id: str,
+        expected_revision: int,
+        actor: Actor,
+    ) -> VideoJob:
+        async with self._douyin_performance_lock:
+            return await self._collect_douyin_performance(
+                job_id,
+                expected_revision,
+                actor,
+                share_text=None,
+            )
 
     async def set_last_run_task(
         self, job_id: str, run_task_id: str, actor: Actor

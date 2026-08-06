@@ -601,6 +601,34 @@ class ProviderUsageRecord(ContractModel):
         return self
 
 
+class DouyinPlaybackSnapshot(ContractModel):
+    """One paid, point-in-time reading of a Douyin video's play count."""
+
+    play_count: int = Field(ge=0)
+    observed_at: str = Field(min_length=1, max_length=64)
+    request_id: str = Field(default="", max_length=256)
+
+
+class DouyinPerformance(ContractModel):
+    """Douyin-only publishing feedback bound to one packaged video job."""
+
+    platform: Literal["douyin"] = "douyin"
+    video_id: str = Field(pattern=r"^\d{5,32}$")
+    video_url: str = Field(max_length=2000)
+    video_title: str = Field(default="", max_length=500)
+    author_name: str = Field(default="", max_length=200)
+    bound_at: str = Field(min_length=1, max_length=64)
+    updated_at: str = Field(min_length=1, max_length=64)
+    snapshots: list[DouyinPlaybackSnapshot] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_canonical_video_url(self):
+        expected = f"https://www.douyin.com/video/{self.video_id}"
+        if self.video_url != expected:
+            raise ValueError("抖音作品链接必须是由作品 ID 构造的标准链接")
+        return self
+
+
 class FirstFrameCandidate(ContractModel):
     candidate_id: str = Field(
         min_length=1,
@@ -884,6 +912,7 @@ class VideoJob(ContractModel):
     # revisions, so retention is intentionally controlled by the aggregate
     # repository rather than by schema validation.
     usage_records: list[ProviderUsageRecord] = Field(default_factory=list)
+    douyin_performance: DouyinPerformance | None = None
     approvals: list[ApprovalRecord] = Field(default_factory=list)
     narration_manifest: NarrationManifest | None = None
     storyboard_plan: StoryboardPlan | None = None

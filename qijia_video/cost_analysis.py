@@ -25,6 +25,7 @@ STAGE_LABELS = {
     "tts_synthesis": "旁白合成",
     "seedream_image": "首帧与图片",
     "seedance_video": "视频生成",
+    "douyin_performance": "抖音播放回流",
 }
 PROVIDER_LABELS = {
     "tikhub": "TikHub",
@@ -35,6 +36,8 @@ PROVIDER_LABELS = {
 }
 EVENT_DETAIL_LIMIT = 500
 USD_TO_CNY_RATE = 6.7
+PLAYBACK_VALUE_CNY_PER_1000 = 10.0
+TARGET_ROI_MULTIPLE = 10.0
 
 
 def _number(value, default: float = 0.0) -> float:
@@ -525,6 +528,105 @@ def _totals(events: list[CostEvent]) -> dict:
         "priced_event_count": priced,
         "unpriced_event_count": len(events) - priced,
         "coverage_ratio": round(priced / len(events), 4) if events else 1.0,
+    }
+
+
+def build_video_job_cost_summary(
+    job: VideoJob,
+    *,
+    seedream_price_per_image: float = 0.22,
+    seedance_price_per_million_tokens: float = 4.2,
+    seedance_model_prices_per_million_tokens: dict[str, float] | None = None,
+    tts_price_per_10000_characters: float = 5.0,
+) -> dict:
+    """Calculate one job with exactly the same rules as the team cost ledger."""
+
+    model_prices = {
+        SEEDANCE_EFFICIENT_MODEL: 4.2,
+        SEEDANCE_RETIRED_MODEL: 8.0,
+        SEEDANCE_FLAGSHIP_MODEL: 46.0,
+    }
+    model_prices.update({
+        str(model_id): _number(rate)
+        for model_id, rate in (
+            seedance_model_prices_per_million_tokens or {}
+        ).items()
+        if str(model_id).strip()
+    })
+    return _totals(_job_events(
+        job,
+        seedream_price_per_image=seedream_price_per_image,
+        seedance_price_per_million_tokens=seedance_price_per_million_tokens,
+        seedance_model_prices_per_million_tokens=model_prices,
+        tts_price_per_10000_characters=tts_price_per_10000_characters,
+    ))
+
+
+def build_douyin_performance_analysis(
+    job: VideoJob,
+    *,
+    seedream_price_per_image: float = 0.22,
+    seedance_price_per_million_tokens: float = 4.2,
+    seedance_model_prices_per_million_tokens: dict[str, float] | None = None,
+    tts_price_per_10000_characters: float = 5.0,
+) -> dict:
+    totals = build_video_job_cost_summary(
+        job,
+        seedream_price_per_image=seedream_price_per_image,
+        seedance_price_per_million_tokens=seedance_price_per_million_tokens,
+        seedance_model_prices_per_million_tokens=(
+            seedance_model_prices_per_million_tokens
+        ),
+        tts_price_per_10000_characters=tts_price_per_10000_characters,
+    )
+    snapshots = (
+        job.douyin_performance.snapshots
+        if job.douyin_performance
+        else []
+    )
+    latest = snapshots[-1] if snapshots else None
+    play_count = latest.play_count if latest else None
+    accounted_cost = _number(totals["accounted_cny"])
+    playback_value = (
+        _round_money(play_count * PLAYBACK_VALUE_CNY_PER_1000 / 1000)
+        if play_count is not None
+        else None
+    )
+    target_views = math.ceil(
+        accounted_cost
+        * TARGET_ROI_MULTIPLE
+        * 1000
+        / PLAYBACK_VALUE_CNY_PER_1000
+    )
+    roi_multiple = (
+        round(playback_value / accounted_cost, 4)
+        if playback_value is not None and accounted_cost > 0
+        else None
+    )
+    return {
+        "platform": "douyin",
+        "play_count": play_count,
+        "observed_at": latest.observed_at if latest else "",
+        "snapshot_count": len(snapshots),
+        "accounted_cost_cny": _round_money(accounted_cost),
+        "cost_coverage_ratio": totals["coverage_ratio"],
+        "unpriced_event_count": totals["unpriced_event_count"],
+        "cost_complete": totals["unpriced_event_count"] == 0,
+        "playback_value_cny": playback_value,
+        "roi_multiple": roi_multiple,
+        "target_roi_multiple": TARGET_ROI_MULTIPLE,
+        "target_views": target_views,
+        "remaining_views": (
+            max(0, target_views - play_count)
+            if play_count is not None
+            else target_views
+        ),
+        "target_achieved": bool(
+            play_count is not None
+            and accounted_cost > 0
+            and play_count >= target_views
+        ),
+        "basis": "每千次播放按 ¥10 估值；目标 ROI 为 10 倍",
     }
 
 

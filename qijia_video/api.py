@@ -66,6 +66,9 @@ def public_job_payload(job, user: dict) -> dict:
     payload = public_resource_payload(job, user)
     for candidate in payload.get("first_frame_candidates") or []:
         candidate.pop("source_url", None)
+    payload["douyin_performance_analysis"] = (
+        runtime.service.douyin_performance_analysis(job)
+    )
     return payload
 
 
@@ -127,6 +130,15 @@ class ShotRegenerationRequest(RevisionRequest):
 
 class ShotVersionSelectionRequest(RevisionRequest):
     pass
+
+
+class DouyinPerformanceBindRequest(RevisionRequest):
+    douyin_url: str = Field(min_length=1, max_length=4000)
+    confirm_cost: Literal[True]
+
+
+class DouyinPerformanceRefreshRequest(RevisionRequest):
+    confirm_cost: Literal[True]
 
 
 async def asset_response(
@@ -380,6 +392,43 @@ async def list_jobs(
 async def get_job(job_id: str, user: dict = Depends(get_current_user)):
     job = await runtime.service.view_job(job_id, actor_from_user(user))
     return ok(public_job_payload(job, user))
+
+
+@api_router.put("/jobs/{job_id}/douyin-performance")
+@boundary
+async def bind_douyin_performance(
+    job_id: str,
+    body: DouyinPerformanceBindRequest,
+    user: dict = Depends(get_current_user),
+):
+    job = await runtime.service.bind_douyin_performance(
+        job_id,
+        body.douyin_url,
+        body.expected_revision,
+        actor_from_user(user),
+    )
+    return ok(
+        public_job_payload(job, user),
+        "抖音作品已绑定，并保存了本次播放量",
+    )
+
+
+@api_router.post("/jobs/{job_id}/douyin-performance/actions/refresh")
+@boundary
+async def refresh_douyin_performance(
+    job_id: str,
+    body: DouyinPerformanceRefreshRequest,
+    user: dict = Depends(get_current_user),
+):
+    job = await runtime.service.refresh_douyin_performance(
+        job_id,
+        body.expected_revision,
+        actor_from_user(user),
+    )
+    return ok(
+        public_job_payload(job, user),
+        "抖音播放量已刷新",
+    )
 
 
 @api_router.get("/jobs/{job_id}/reference-image")

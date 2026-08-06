@@ -63,6 +63,23 @@ function formatCnyFromUsd(value, fallback = '金额待账单') {
   }).format(amount * usdToCnyRate());
 }
 
+function formatCny(value, fallback = '—') {
+  if (value === null || value === undefined || value === '') return fallback;
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0) return fallback;
+  return new Intl.NumberFormat('zh-CN', {
+    style: 'currency', currency: 'CNY',
+    minimumFractionDigits: 2, maximumFractionDigits: 4,
+  }).format(amount);
+}
+
+function formatInteger(value, fallback = '—') {
+  if (value === null || value === undefined || value === '') return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return fallback;
+  return new Intl.NumberFormat('zh-CN', {maximumFractionDigits: 0}).format(number);
+}
+
 function formatPercent(value) {
   const ratio = Number(value);
   if (!Number.isFinite(ratio) || ratio < 0) return '';
@@ -1581,6 +1598,77 @@ function focusFirstNarration() {
   document.querySelector('[data-script-field="narration"]')?.focus();
 }
 
+function renderDouyinPerformance(job) {
+  const section = $('#douyin-performance-section');
+  const packaged = job.state === 'packaged';
+  section.hidden = !packaged;
+  if (!packaged) return;
+
+  const performance = job.douyin_performance;
+  const analysis = job.douyin_performance_analysis || {};
+  const capability = state.capabilities?.douyin_performance || {};
+  const unitCost = Number(capability.estimated_cny_per_success);
+  const costLabel = Number.isFinite(unitCost) && unitCost > 0
+    ? formatCny(unitCost)
+    : '金额待账单';
+  const form = $('#douyin-performance-form');
+  const input = $('#douyin-link-input');
+  form.hidden = !!performance;
+  $('#douyin-change-link-button').hidden = !performance;
+  if (document.activeElement !== input) {
+    input.value = performance?.video_url || '';
+  }
+  $('#douyin-bind-button').textContent = performance
+    ? '更新链接并读取（约 ' + costLabel + '）'
+    : '绑定并读取（约 ' + costLabel + '）';
+  $('#douyin-refresh-button').textContent = '刷新播放量（约 ' + costLabel + '）';
+  $('#douyin-cost-note').textContent = [
+    '每次读取发起 1 次 TikHub 请求，成功请求规划成本约 ' + costLabel + '，点击按钮即确认本次费用。',
+    'ROI 按每千次播放 ¥10、目标 10 倍计算；读取费用计入该视频成本。',
+    '不含未绑定到本视频的选题研究公摊。',
+  ].join(' ');
+
+  const result = $('#douyin-performance-result');
+  result.hidden = !performance;
+  if (performance) {
+    $('#douyin-video-title').textContent = performance.video_title || '已绑定抖音作品';
+    $('#douyin-video-author').textContent = performance.author_name
+      ? '作者：' + performance.author_name
+      : '作品 ID：' + performance.video_id;
+    $('#douyin-video-link').href = performance.video_url;
+    $('#douyin-play-count').textContent = formatInteger(analysis.play_count);
+    $('#douyin-accounted-cost').textContent = formatCny(analysis.accounted_cost_cny);
+    $('#douyin-playback-value').textContent = formatCny(analysis.playback_value_cny);
+    $('#douyin-roi').textContent = (
+      analysis.roi_multiple !== null
+      && analysis.roi_multiple !== undefined
+      && Number.isFinite(Number(analysis.roi_multiple))
+    )
+      ? Number(analysis.roi_multiple).toFixed(2) + '×'
+      : '—';
+    $('#douyin-target-views').textContent = formatInteger(analysis.target_views);
+    const remaining = $('#douyin-remaining-views');
+    remaining.textContent = analysis.target_achieved
+      ? '已达到 10 倍'
+      : formatInteger(analysis.remaining_views);
+    remaining.classList.toggle('target-met', !!analysis.target_achieved);
+    $('#douyin-observed-at').textContent = analysis.observed_at
+      ? '更新于 ' + formatDateTime(analysis.observed_at) + ' · 已记录 ' + formatInteger(analysis.snapshot_count, '0') + ' 次'
+      : '尚未读取播放量';
+  }
+
+  const warnings = [];
+  if (capability.ready === false) {
+    warnings.push('播放回流待配置：' + ((capability.missing_configuration || []).join('、') || 'TikHub 配置不完整'));
+  }
+  if (analysis.cost_complete === false) {
+    warnings.push('当前有 ' + formatInteger(analysis.unpriced_event_count, '0') + ' 笔费用待对账，成本与 10 倍目标为暂估值');
+  }
+  const warning = $('#douyin-cost-warning');
+  warning.hidden = warnings.length === 0;
+  warning.textContent = warnings.join('；');
+}
+
 function applyJobReadOnly(job) {
   if (!job) return;
   const readOnly = !canEditResource(job);
@@ -1589,6 +1677,7 @@ function applyJobReadOnly(job) {
     '#script-review textarea',
     '#shot-inspector input',
     '#shot-inspector textarea',
+    '#douyin-link-input',
   ].join(',')).forEach((node) => { node.readOnly = readOnly; });
   document.querySelectorAll('#shot-inspector select').forEach((node) => {
     node.disabled = readOnly || state.busy;
@@ -1601,6 +1690,12 @@ function applyJobReadOnly(job) {
   ].join(',')).forEach((node) => {
     node.disabled = readOnly || state.busy;
   });
+  const performanceDisabled = readOnly
+    || state.busy
+    || state.capabilities?.douyin_performance?.ready !== true;
+  $('#douyin-bind-button').disabled = performanceDisabled;
+  $('#douyin-change-link-button').disabled = performanceDisabled;
+  $('#douyin-refresh-button').disabled = performanceDisabled;
   if (!readOnly) return;
   document.querySelectorAll([
     '[data-regenerate-shot]',
@@ -1707,6 +1802,7 @@ function renderDetail() {
   } else {
     $('#artifact-list').innerHTML = '';
   }
+  renderDouyinPerformance(job);
   applyJobReadOnly(job);
 }
 
@@ -2326,6 +2422,72 @@ $('#approve-final-button').addEventListener('click', async () => {
   }
   catch (error) { notify(error.message, true); }
   finally { setBusy(false); }
+});
+
+$('#douyin-change-link-button').addEventListener('click', () => {
+  const job = state.selectedJob;
+  if (!job?.douyin_performance || state.busy || !canEditResource(job)) return;
+  $('#douyin-performance-form').hidden = false;
+  $('#douyin-link-input').value = '';
+  $('#douyin-link-input').focus();
+});
+
+$('#douyin-performance-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const job = state.selectedJob;
+  if (!job || job.state !== 'packaged' || state.busy) return;
+  if (!canEditResource(job)) {
+    notify('只有创建者或管理员可以发起付费的播放量读取。', true);
+    return;
+  }
+  const douyinUrl = $('#douyin-link-input').value.trim();
+  if (!douyinUrl) {
+    notify('请先粘贴这条视频发布后的抖音作品链接。', true);
+    return;
+  }
+  setBusy(true); notify('');
+  try {
+    const updated = await api(
+      'PUT',
+      '/jobs/' + encodeURIComponent(job.id) + '/douyin-performance',
+      {
+        expected_revision: job.revision,
+        douyin_url: douyinUrl,
+        confirm_cost: true,
+      },
+    );
+    updateVisibleJob(updated);
+    notify('抖音作品已绑定，本次播放量和 TikHub 成本已保存。');
+  } catch (error) {
+    await loadAll({selectJobId: job.id}).catch(() => {});
+    notify(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+});
+
+$('#douyin-refresh-button').addEventListener('click', async () => {
+  const job = state.selectedJob;
+  if (!job?.douyin_performance || state.busy) return;
+  if (!canEditResource(job)) {
+    notify('只有创建者或管理员可以发起付费的播放量刷新。', true);
+    return;
+  }
+  setBusy(true); notify('');
+  try {
+    const updated = await api(
+      'POST',
+      '/jobs/' + encodeURIComponent(job.id) + '/douyin-performance/actions/refresh',
+      {expected_revision: job.revision, confirm_cost: true},
+    );
+    updateVisibleJob(updated);
+    notify('抖音播放量已刷新，本次 TikHub 成本已保存。');
+  } catch (error) {
+    await loadAll({selectJobId: job.id}).catch(() => {});
+    notify(error.message, true);
+  } finally {
+    setBusy(false);
+  }
 });
 
 $('#retry-button').addEventListener('click', async () => {

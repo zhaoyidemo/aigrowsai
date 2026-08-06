@@ -332,3 +332,15 @@ test('packaged jobs expose two primary downloads and collapse technical artifact
   assert.match(app, /job\.state === 'packaged'/);
   assert.match(app, /release-package\.zip/);
 });
+
+test('packaged jobs expose Douyin-only manual playback feedback and ROI', () => {
+  assert.match(page, /id="douyin-performance-section"/);
+  assert.match(page, /本版本仅记录抖音，不采集小红书或视频号/);
+  assert.match(page, /id="douyin-link-input"/);
+  assert.match(page, /id="douyin-change-link-button"/);
+  assert.match(page, /10 倍目标播放/);
+  assert.match(app, /douyin-performance\/actions\/refresh/);
+  assert.match(app, /confirm_cost: true/);
+  assert.match(app, /每千次播放 ¥10、目标 10 倍/);
+  assert.match(app, /canEditResource\(job\)/);
+});

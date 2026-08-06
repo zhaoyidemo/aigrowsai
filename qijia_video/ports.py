@@ -1,6 +1,7 @@
 """应用层端口；迁移时只需替换这些端口的实现。"""
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -9,6 +10,7 @@ from qijia_video.contracts import (
     Actor,
     AssetRef,
     NarrationManifest,
+    ProviderUsageRecord,
     QualityReport,
     RenderManifest,
     ScriptDraft,
@@ -129,6 +131,43 @@ class VideoProvider(Protocol):
     async def cancel(
         self, provider_task_id: str, request_fingerprint: str
     ) -> ProviderTask: ...
+
+
+@dataclass(frozen=True)
+class DouyinVideoPerformance:
+    video_id: str
+    video_url: str
+    play_count: int
+    video_title: str = ""
+    author_name: str = ""
+    request_id: str = ""
+
+
+UsageRecordRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
+
+
+class DouyinPerformanceProvider(Protocol):
+    name: str
+
+    @property
+    def configured(self) -> bool: ...
+
+    @property
+    def configuration_errors(self) -> list[str]: ...
+
+    async def fetch_by_share_url(
+        self,
+        share_text: str,
+        *,
+        on_usage: UsageRecordRecorder | None = None,
+    ) -> DouyinVideoPerformance: ...
+
+    async def fetch_by_video_id(
+        self,
+        video_id: str,
+        *,
+        on_usage: UsageRecordRecorder | None = None,
+    ) -> DouyinVideoPerformance: ...
 
 
 class ArtifactStorage(Protocol):

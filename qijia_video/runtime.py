@@ -17,6 +17,7 @@ from qijia_video.contracts import (
     SEEDANCE_FLAGSHIP_MODEL,
     SEEDANCE_RETIRED_MODEL,
 )
+from qijia_video.cost_analysis import USD_TO_CNY_RATE
 from qijia_video.infrastructure.media import FfmpegMediaPackager
 from qijia_video.infrastructure.postgres_repository import (
     PostgresAggregateRepository,
@@ -24,6 +25,7 @@ from qijia_video.infrastructure.postgres_repository import (
 from qijia_video.infrastructure.quality import FfprobeQualityChecker
 from qijia_video.infrastructure.remotion_renderer import RemotionRenderer
 from qijia_video.infrastructure.image_providers import SeedreamImageProvider
+from qijia_video.infrastructure.tikhub import TikHubDouyinPerformanceProvider
 from qijia_video.infrastructure.script_providers import (
     OpenRouterScriptProvider,
     OpenRouterStoryboardProvider,
@@ -116,12 +118,17 @@ class QijiaVideoRuntime:
                 if item.strip()
             ),
         )
+        douyin_performance_provider = TikHubDouyinPerformanceProvider(
+            api_key=settings.TIKHUB_API_KEY,
+            base_url=settings.TIKHUB_BASE_URL,
+        )
         self.renderer = renderer
         self.script_provider = script_provider
         self.storyboard_provider = storyboard_provider
         self.tts_provider = tts_provider
         self.image_provider = image_provider
         self.video_provider = video_provider
+        self.douyin_performance_provider = douyin_performance_provider
         self.storage = storage_from_settings(PROJECT_ROOT, settings)
         self.repository = PostgresAggregateRepository()
         self.service = QijiaVideoService(
@@ -136,6 +143,7 @@ class QijiaVideoRuntime:
             quality_checker=FfprobeQualityChecker(),
             media_packager=FfmpegMediaPackager(),
             work_root=settings.work_root_path(PROJECT_ROOT),
+            douyin_performance_provider=douyin_performance_provider,
             seedream_price_per_image=(
                 settings.QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE
             ),
@@ -155,6 +163,9 @@ class QijiaVideoRuntime:
             },
             tts_price_per_10000_characters=(
                 settings.QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS
+            ),
+            tikhub_price_per_success_usd=(
+                settings.QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS
             ),
         )
 
@@ -203,6 +214,26 @@ class QijiaVideoRuntime:
             "production_ready": generation_ready and self.storage.name == "tos",
             "missing_configuration": missing,
             "generation_defaults": GenerationSettings().model_dump(mode="json"),
+            "douyin_performance": {
+                "ready": self.douyin_performance_provider.configured,
+                "platform": "douyin",
+                "provider": self.douyin_performance_provider.name,
+                "estimated_cny_per_success": round(
+                    max(
+                        0.0,
+                        float(
+                            settings.QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS
+                        ),
+                    )
+                    * USD_TO_CNY_RATE,
+                    8,
+                ),
+                "missing_configuration": (
+                    self.douyin_performance_provider.configuration_errors
+                ),
+                "cost_confirmation_required": True,
+                "basis": "TikHub 成功请求规划价；失败响应按 ¥0 估算，账单优先",
+            },
             "seedance_pricing": {
                 "currency": "CNY",
                 "yuan_per_million_tokens": max(

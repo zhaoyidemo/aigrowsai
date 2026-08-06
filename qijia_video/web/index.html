@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.9.1">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.10.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -320,6 +320,44 @@
               <div id="artifact-list" class="artifact-list"></div>
             </details>
           </section>
+          <section id="douyin-performance-section" class="review-section" hidden>
+            <div class="section-title">
+              <h3>抖音播放回流</h3>
+              <span>本版本仅记录抖音，不采集小红书或视频号</span>
+            </div>
+            <form id="douyin-performance-form" class="douyin-performance-form">
+              <label for="douyin-link-input">发布后粘贴抖音视频链接
+                <textarea id="douyin-link-input" rows="2" maxlength="4000" placeholder="支持抖音分享文本、v.douyin.com 短链或 www.douyin.com/video/... 标准链接" spellcheck="false"></textarea>
+              </label>
+              <button id="douyin-bind-button" class="button primary" type="submit">绑定并读取播放量</button>
+            </form>
+            <div id="douyin-performance-result" hidden>
+              <div class="douyin-performance-heading">
+                <div>
+                  <strong id="douyin-video-title">已绑定抖音作品</strong>
+                  <span id="douyin-video-author"></span>
+                </div>
+                <a id="douyin-video-link" href="#" target="_blank" rel="noreferrer">打开抖音作品</a>
+              </div>
+              <div class="douyin-performance-grid">
+                <div><span>当前播放</span><strong id="douyin-play-count">—</strong></div>
+                <div><span>已核算成本</span><strong id="douyin-accounted-cost">—</strong></div>
+                <div><span>播放价值</span><strong id="douyin-playback-value">—</strong></div>
+                <div><span>当前 ROI</span><strong id="douyin-roi">—</strong></div>
+                <div><span>10 倍目标播放</span><strong id="douyin-target-views">—</strong></div>
+                <div><span>距离目标</span><strong id="douyin-remaining-views">—</strong></div>
+              </div>
+              <div class="douyin-performance-actions">
+                <span id="douyin-observed-at">—</span>
+                <div>
+                  <button id="douyin-change-link-button" class="button secondary" type="button">更换作品链接</button>
+                  <button id="douyin-refresh-button" class="button secondary" type="button">刷新播放量</button>
+                </div>
+              </div>
+            </div>
+            <p id="douyin-cost-note" class="cost-note"></p>
+            <p id="douyin-cost-warning" class="performance-warning" hidden></p>
+          </section>
           <button id="revise-script-button" class="button primary" type="button" hidden>返回修改脚本</button>
           <button id="retry-button" class="button danger" type="button" hidden>从失败阶段重试</button>
         </section>
@@ -327,6 +365,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.9.1"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.10.0"></script>
 </body>
 </html>

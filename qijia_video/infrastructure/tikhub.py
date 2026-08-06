@@ -1,18 +1,22 @@
-"""TikHub 抖音数据适配器，只实现家庭教育选题所需的最小读链路。"""
+"""TikHub 抖音数据适配器，只实现选题与发布回流所需的最小读链路。"""
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
 import httpx
 
-from qijia_video.errors import ProviderUnavailable
+from qijia_video.contracts import ProviderUsageRecord, timestamp
+from qijia_video.errors import ProviderUnavailable, QualityGateFailed
+from qijia_video.ports import DouyinVideoPerformance, UsageRecordRecorder
 from qijia_video.topic_ports import (
     TikHubCallRecorder,
     TopicCollectionFailed,
@@ -67,6 +71,7 @@ DEFAULT_FAMILY_EDUCATION_QUERIES = (
 _VALID_ENDPOINTS = {
     "/api/v1/douyin/billboard/fetch_hot_total_low_fan_list",
     "/api/v1/douyin/billboard/fetch_hot_total_high_like_list",
+    "/api/v1/douyin/web/fetch_one_video_by_share_url",
     "/api/v1/douyin/web/fetch_multi_video",
 }
 
@@ -288,7 +293,7 @@ class TikHubRequestSession:
                     raise
                 except Exception as exc:
                     raise TopicCollectionFailed(
-                        "TikHub 调用已经发生，但成本账本无法持久化；研究已停止",
+                        "TikHub 调用已经发生，但成本账本无法持久化；后续操作已停止",
                         self.calls,
                     ) from exc
 
@@ -1112,6 +1117,275 @@ def _video_evidence_list(
         if len(evidence) >= limit:
             break
     return evidence
+
+
+_DOUYIN_URL_PATTERN = re.compile(r"https://[^\s<>]+", re.IGNORECASE)
+_DOUYIN_PLAY_COUNT_KEYS = (
+    "play_count",
+    "playCount",
+    "itemPlayCnt",
+    "play_cnt",
+    "itemPlayCount",
+    "videoPlayCount",
+)
+_DOUYIN_AUTHOR_KEYS = (
+    "nickname",
+    "nickName",
+    "authorNickName",
+    "author_name",
+    "authorName",
+)
+
+
+def normalize_douyin_share_url(value: str) -> tuple[str, str]:
+    """Return one safe Douyin URL and a locally extractable video ID, if any."""
+
+    text = str(value or "").strip()
+    match = _DOUYIN_URL_PATTERN.search(text)
+    if not match:
+        raise QualityGateFailed("请粘贴包含 https:// 的抖音视频分享链接")
+    share_url = match.group(0).rstrip("。，,;；!?！？)）]】}>")
+    share_url = share_url.rstrip(chr(34) + chr(39))
+    try:
+        parsed = urlparse(share_url)
+        port = parsed.port
+    except ValueError as exc:
+        raise QualityGateFailed("抖音视频链接格式不正确") from exc
+    hostname = str(parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.username
+        or parsed.password
+        or port not in (None, 443)
+        or not (
+            hostname == "douyin.com"
+            or hostname.endswith(".douyin.com")
+        )
+    ):
+        raise QualityGateFailed("本版本只接受 HTTPS 抖音视频链接")
+    return _classify_douyin_video_url(share_url, parsed, hostname)
+
+
+def _classify_douyin_video_url(
+    share_url: str,
+    parsed: Any,
+    hostname: str,
+) -> tuple[str, str]:
+    path_match = re.fullmatch(
+        r"/(?:share/)?video/(\d{5,32})/?",
+        parsed.path or "",
+    )
+    if path_match:
+        return share_url, path_match.group(1)
+    query = parse_qs(parsed.query, keep_blank_values=False)
+    query_video_id = str(
+        (query.get("modal_id") or query.get("aweme_id") or [""])[0]
+    ).strip()
+    if re.fullmatch(r"\d{5,32}", query_video_id):
+        return share_url, query_video_id
+    if (
+        hostname == "v.douyin.com"
+        and re.fullmatch(r"/[A-Za-z0-9_-]{3,80}/?", parsed.path or "")
+    ):
+        return share_url, ""
+    raise QualityGateFailed(
+        "链接不是可识别的抖音视频页；请从抖音作品页重新复制分享链接"
+    )
+
+
+def _required_play_count(node: dict[str, Any]) -> int:
+    raw = _deep_value(node, _DOUYIN_PLAY_COUNT_KEYS)
+    if raw is None or isinstance(raw, bool):
+        raise ProviderUnavailable("TikHub 已返回作品，但响应中缺少可识别的播放量")
+    if isinstance(raw, (int, float)):
+        if raw < 0 or (isinstance(raw, float) and not math.isfinite(raw)):
+            raise ProviderUnavailable("TikHub 返回了异常的播放量")
+        return max(0, round(raw))
+    text = str(raw).strip().replace(",", "")
+    if not re.fullmatch(r"\d+(?:\.\d+)?(?:万|亿|[wWkK])?", text):
+        raise ProviderUnavailable("TikHub 返回了无法解析的播放量")
+    return _number(text)
+
+
+def _douyin_performance_from_data(
+    data: Any,
+    *,
+    request_id: str,
+    expected_video_id: str = "",
+) -> DouyinVideoPerformance:
+    nodes = _video_nodes(data)
+    if not nodes:
+        raise ProviderUnavailable("TikHub 响应中没有可识别的抖音作品")
+    node = next(
+        (
+            item
+            for item in nodes
+            if str(_deep_value(item, _VIDEO_ID_KEYS) or "").strip()
+            == expected_video_id
+        ),
+        None,
+    ) if expected_video_id else nodes[0]
+    if node is None:
+        raise ProviderUnavailable("TikHub 响应未包含指定的抖音作品")
+    video_id = str(_deep_value(node, _VIDEO_ID_KEYS) or "").strip()
+    if not re.fullmatch(r"\d{5,32}", video_id):
+        raise ProviderUnavailable("TikHub 返回了无法识别的抖音作品 ID")
+    return DouyinVideoPerformance(
+        video_id=video_id,
+        video_url=f"https://www.douyin.com/video/{video_id}",
+        play_count=_required_play_count(node),
+        video_title=_clean_term(_deep_value(node, _VIDEO_TITLE_KEYS)),
+        author_name=str(_deep_value(node, _DOUYIN_AUTHOR_KEYS) or "").strip()[:200],
+        request_id=request_id,
+    )
+
+
+class TikHubDouyinPerformanceProvider:
+    """Resolve one pasted Douyin link and read one current play-count snapshot."""
+
+    name = "tikhub"
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        transport: httpx.AsyncBaseTransport | None = None,
+        timeout_seconds: float = 45.0,
+    ):
+        self.api_key = str(api_key or "").strip()
+        self.base_url = str(
+            base_url or "https://api.tikhub.dev"
+        ).strip().rstrip("/")
+        self.transport = transport
+        self.timeout_seconds = max(10.0, float(timeout_seconds))
+
+    @property
+    def configured(self) -> bool:
+        return not self.configuration_errors
+
+    @property
+    def configuration_errors(self) -> list[str]:
+        parsed = urlparse(self.base_url)
+        errors: list[str] = []
+        if not self.api_key:
+            errors.append("TIKHUB_API_KEY")
+        if not (
+            parsed.scheme == "https"
+            and parsed.netloc
+            and not parsed.username
+            and not parsed.password
+            and not parsed.query
+            and not parsed.fragment
+        ):
+            errors.append("TIKHUB_BASE_URL（必须是无凭据、无查询参数的 HTTPS 地址）")
+        return errors
+
+    @staticmethod
+    def _usage_record(call: TikHubCallRecord) -> ProviderUsageRecord:
+        return ProviderUsageRecord(
+            usage_id=f"usage_douyin_{uuid.uuid4().hex}",
+            operation="douyin_performance",
+            provider="tikhub",
+            model_id=call.endpoint,
+            request_id=call.request_id,
+            request_count=1,
+            succeeded=call.succeeded,
+            quantity=1,
+            unit="request",
+            note=(
+                ""
+                if call.succeeded
+                else (
+                    "TikHub 失败响应，按 ¥0 估算"
+                    if call.response_code is not None or call.request_id
+                    else "TikHub 网络结果未知，金额待供应商账单核对"
+                )
+            ),
+            occurred_at=timestamp(),
+        )
+
+    async def _request(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: Any | None = None,
+        request_label: str,
+        expected_video_id: str = "",
+        on_usage: UsageRecordRecorder | None = None,
+    ) -> DouyinVideoPerformance:
+        if not self.configured:
+            raise ProviderUnavailable(
+                "抖音播放回流未配置：" + "、".join(self.configuration_errors)
+            )
+
+        async def record_calls(calls: list[TikHubCallRecord]) -> None:
+            if on_usage and calls:
+                await on_usage(self._usage_record(calls[-1]))
+
+        timeout = httpx.Timeout(self.timeout_seconds, connect=15.0)
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            transport=self.transport,
+            follow_redirects=False,
+        ) as client:
+            session = TikHubRequestSession(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                request_budget=1,
+                client=client,
+                on_calls=record_calls if on_usage else None,
+            )
+            data = await session.request(
+                method,
+                endpoint,
+                params=params,
+                json_body=json_body,
+                request_label=request_label,
+            )
+            request_id = session.calls[-1].request_id if session.calls else ""
+        return _douyin_performance_from_data(
+            data,
+            request_id=request_id,
+            expected_video_id=expected_video_id,
+        )
+
+    async def fetch_by_share_url(
+        self,
+        share_text: str,
+        *,
+        on_usage: UsageRecordRecorder | None = None,
+    ) -> DouyinVideoPerformance:
+        share_url, video_id = normalize_douyin_share_url(share_text)
+        if video_id:
+            return await self.fetch_by_video_id(video_id, on_usage=on_usage)
+        return await self._request(
+            "GET",
+            "/api/v1/douyin/web/fetch_one_video_by_share_url",
+            params={"share_url": share_url},
+            request_label="读取 1 条抖音分享链接的播放量",
+            on_usage=on_usage,
+        )
+
+    async def fetch_by_video_id(
+        self,
+        video_id: str,
+        *,
+        on_usage: UsageRecordRecorder | None = None,
+    ) -> DouyinVideoPerformance:
+        normalized_id = str(video_id or "").strip()
+        if not re.fullmatch(r"\d{5,32}", normalized_id):
+            raise QualityGateFailed("已绑定的抖音作品 ID 无效，请重新绑定链接")
+        return await self._request(
+            "POST",
+            "/api/v1/douyin/web/fetch_multi_video",
+            json_body=[normalized_id],
+            request_label="刷新 1 条抖音作品的播放量",
+            expected_video_id=normalized_id,
+            on_usage=on_usage,
+        )
 
 
 class TikHubDouyinResearchProvider:
