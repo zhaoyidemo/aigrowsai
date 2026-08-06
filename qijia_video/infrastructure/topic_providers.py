@@ -1,6 +1,7 @@
 """选题编辑 Provider；模型只归纳抖音证据，不负责抓取或虚构分数。"""
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 from urllib.parse import urlparse
@@ -23,7 +24,7 @@ from qijia_video.topic_ports import (
 )
 
 
-TOPIC_EDITOR_PROMPT_VERSION = "family_topic_editor_v5_billboard_ranking"
+TOPIC_EDITOR_PROMPT_VERSION = "family_topic_editor_v6_evidence_whitelist"
 
 _TOPIC_RESPONSE_SCHEMA = {
     "type": "object",
@@ -69,6 +70,22 @@ _TOPIC_RESPONSE_SCHEMA = {
     "required": ["candidates"],
     "additionalProperties": False,
 }
+
+
+def _allowed_evidence_ids(evidence: list[TopicEvidence]) -> list[str]:
+    """Return the exact evidence IDs available to this model invocation."""
+    return list(dict.fromkeys(item.id for item in evidence))
+
+
+def _topic_response_schema(evidence: list[TopicEvidence]) -> dict[str, Any]:
+    """Bind evidence references to this invocation's server-owned whitelist."""
+    schema = copy.deepcopy(_TOPIC_RESPONSE_SCHEMA)
+    reference_items = schema["properties"]["candidates"]["items"]["properties"][
+        "evidence_refs"
+    ]["items"]
+    reference_items["enum"] = _allowed_evidence_ids(evidence)
+    reference_items["description"] = "必须逐字选择本轮输入中的 evidence id"
+    return schema
 
 
 def _chat_url(base_url: str) -> str:
@@ -245,6 +262,7 @@ class OpenRouterTopicEditor:
     @staticmethod
     def _prompt(evidence: list[TopicEvidence], valid_through: str) -> str:
         serialized = [_compact_evidence(item) for item in evidence]
+        allowed_evidence_ids = _allowed_evidence_ids(evidence)
         return (
             "为齐家 AI 家庭教练的抖音账号，从给定证据中提出恰好 5 个家庭教育短视频选题。\n"
             "目标受众只有家长，范围仅限：亲子沟通、情绪与行为、学习习惯、规则与边界、"
@@ -270,6 +288,8 @@ class OpenRouterTopicEditor:
             "11. 同等新鲜度下，再比较榜单排名、播粉比、播放、赞播比和深度互动；"
             "average_daily_plays 只是采集时快照，不得表述为未来预测。\n\n"
             f"TikHub 榜单采集日期：{valid_through or '未知'}\n"
+            "evidence_refs 只能从以下白名单逐字复制，不得改写或自行生成："
+            f"{json.dumps(allowed_evidence_ids, ensure_ascii=False, separators=(',', ':'))}\n"
             f"研究证据：{json.dumps(serialized, ensure_ascii=False, separators=(',', ':'))}"
         )
 
@@ -311,7 +331,7 @@ class OpenRouterTopicEditor:
                 "json_schema": {
                     "name": "qijia_family_topic_candidates",
                     "strict": True,
-                    "schema": _TOPIC_RESPONSE_SCHEMA,
+                    "schema": _topic_response_schema(evidence),
                 },
             },
             "provider": {"require_parameters": True},
@@ -413,6 +433,21 @@ class OpenRouterTopicEditor:
         if len(proposals) != 5:
             raise TopicEditorialFailed(
                 "选题模型未返回完整的 5 个候选",
+                failed_usage,
+            )
+        allowed_evidence_ids = set(_allowed_evidence_ids(evidence))
+        unknown_evidence_ids = sorted(
+            {
+                reference
+                for proposal in proposals
+                for reference in proposal.evidence_refs
+                if reference not in allowed_evidence_ids
+            }
+        )
+        if unknown_evidence_ids:
+            raise TopicEditorialFailed(
+                "选题模型没有遵守本轮证据 ID 白名单，结果已拒绝"
+                + (f"；request_id={request_id}" if request_id else ""),
                 failed_usage,
             )
         succeeded_usage = _usage_snapshot(

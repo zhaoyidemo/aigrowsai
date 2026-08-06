@@ -731,11 +731,19 @@ class OpenRouterTopicEditorContractTests(unittest.IsolatedAsyncioTestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             payload = json.loads(request.content)
             self.assertEqual(payload["response_format"]["type"], "json_schema")
+            reference_schema = payload["response_format"]["json_schema"]["schema"][
+                "properties"
+            ]["candidates"]["items"]["properties"]["evidence_refs"]["items"]
+            self.assertEqual(
+                reference_schema["enum"],
+                [item.id for item in self._minimal_evidence()],
+            )
             self.assertEqual(payload["reasoning"]["effort"], "medium")
             self.assertEqual(payload["max_completion_tokens"], 6000)
             self.assertTrue(payload["provider"]["require_parameters"])
             self.assertNotIn("plugins", payload)
             self.assertIn("不可信数据", payload["messages"][1]["content"])
+            self.assertIn("白名单逐字复制", payload["messages"][1]["content"])
             return httpx.Response(
                 200,
                 headers={"x-request-id": "request-header-id"},
@@ -778,6 +786,75 @@ class OpenRouterTopicEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(usage.reported_cost_usd, 0.0008)
         self.assertEqual(len(recorded_usage), 1)
         self.assertEqual(recorded_usage[0], usage)
+
+    async def test_rejects_evidence_reference_outside_request_whitelist(self):
+        evidence, proposals = topic_fixture()
+        generated = {
+            "candidates": [
+                proposal.model_dump(mode="json") for proposal in proposals
+            ]
+        }
+        generated["candidates"][0]["evidence_refs"][0] = "ev_283775de82f"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content)
+            reference_schema = payload["response_format"]["json_schema"]["schema"][
+                "properties"
+            ]["candidates"]["items"]["properties"]["evidence_refs"]["items"]
+            self.assertEqual(
+                reference_schema["enum"],
+                [item.id for item in evidence],
+            )
+            return httpx.Response(
+                200,
+                headers={"x-request-id": "request-unknown-evidence"},
+                json={
+                    "id": "generation-unknown-evidence",
+                    "model": "test/editor",
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    generated, ensure_ascii=False
+                                )
+                            }
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 800,
+                        "completion_tokens": 500,
+                        "total_tokens": 1300,
+                        "cost": 0.002,
+                    },
+                },
+            )
+
+        editor = OpenRouterTopicEditor(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="test/editor",
+            transport=httpx.MockTransport(handler),
+        )
+        recorded_usage: list[TopicModelUsage] = []
+
+        async def record_usage(usage):
+            recorded_usage.append(usage)
+
+        with self.assertRaisesRegex(
+            TopicEditorialFailed, "没有遵守本轮证据 ID 白名单"
+        ) as raised:
+            await editor.propose(
+                evidence,
+                valid_through="2026-08-04",
+                on_usage=record_usage,
+            )
+
+        self.assertEqual(
+            raised.exception.usage.request_id, "request-unknown-evidence"
+        )
+        self.assertFalse(raised.exception.usage.succeeded)
+        self.assertEqual(len(recorded_usage), 1)
+        self.assertEqual(recorded_usage[0], raised.exception.usage)
 
     @staticmethod
     def _minimal_evidence() -> list[TopicEvidence]:
