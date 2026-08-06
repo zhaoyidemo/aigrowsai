@@ -365,7 +365,7 @@ function renderTopicControls() {
     button.textContent = '开始研究今日选题';
     $('#topic-start-hint').textContent = '点击即确认本轮可能产生 API 费用；不会自动发布或自动生成视频。';
   }
-  const plannedCalls = Number(capability?.planned_max_calls || 15);
+  const plannedCalls = Number(capability?.planned_max_calls || 13);
   const requestBudget = Number(capability?.request_budget || 0);
   const unitPrice = Number(capability?.estimated_usd_per_success);
   const plannedEstimate = Number.isFinite(unitPrice) && unitPrice > 0
@@ -382,13 +382,13 @@ function renderTopicControls() {
   const low = policy.low_follower_breakout || {};
   const emerging = policy.emerging_low_follower_breakout || {};
   const high = policy.high_heat_breakout || {};
+  const ranking = policy.ranking || {};
   const gate = policy.research_gate || {};
   const lowFollowers = Number(low.max_followers || 50000);
   const lowPlays = Number(low.min_plays || 500000);
   const lowRatio = Number(low.min_play_follower_ratio || 20);
   const lowLike = Number(low.min_like_rate || 0.05);
   const deepRate = Number(low.min_deep_engagement_rate || 0.008);
-  const lowAgeHours = Number(low.max_age_hours || 72);
   const emergingFollowers = Number(emerging.max_followers || 100000);
   const emergingFreshHours = Number(emerging.freshest_age_hours || 24);
   const emergingFreshPlays = Number(emerging.min_plays_fresh || 100000);
@@ -398,14 +398,13 @@ function renderTopicControls() {
   const emergingDeepRate = Number(emerging.min_deep_engagement_rate || 0.003);
   const highPlays = Number(high.min_plays || 1000000);
   const highLike = Number(high.min_like_rate || 0.08);
-  const highAgeHours = Number(high.max_age_hours || 168);
-  const lowAgeLabel = lowAgeHours % 24 === 0 ? `${lowAgeHours / 24} 天` : `${lowAgeHours} 小时`;
-  const highAgeLabel = highAgeHours % 24 === 0 ? `${highAgeHours / 24} 天` : `${highAgeHours} 小时`;
+  const freshHours = Number(ranking.fresh_priority_hours || 72);
+  const recentHours = Number(ranking.recent_priority_hours || 168);
   $('#topic-quality-policy').innerHTML = `
-    <p><strong>强低粉爆款（最优先）</strong><span>发布 ≤ ${lowAgeLabel} + TikHub 低粉爆款榜 + 粉丝 ≤ ${formatCount(lowFollowers)} + 播放 ≥ ${formatCount(lowPlays)} + 播粉比 ≥ ${lowRatio} + 赞播比 ≥ ${formatPercent(lowLike)} + 深度互动率 ≥ ${formatPercent(deepRate)}</span></p>
-    <p><strong>潜力低粉爆款（补足）</strong><span>发布 ≤ ${lowAgeLabel} + 粉丝 ≤ ${formatCount(emergingFollowers)} + ${emergingFreshHours} 小时内播放 ≥ ${formatCount(emergingFreshPlays)}，之后播放 ≥ ${formatCount(emergingPlays)} + 播粉比 ≥ ${emergingRatio} + 赞播比 ≥ ${formatPercent(emergingLike)} + 深度互动率 ≥ ${formatPercent(emergingDeepRate)}</span></p>
-    <p><strong>高热爆款（补充）</strong><span>发布 ≤ ${highAgeLabel} + TikHub 高点赞率榜 + 播放 ≥ ${formatCount(highPlays)} + 赞播比 ≥ ${formatPercent(highLike)} + 深度互动率 ≥ ${formatPercent(Number(high.min_deep_engagement_rate || deepRate))}</span></p>
-    <p><strong>不足不凑数</strong><span>至少 ${Number(gate.min_qualified_videos || 10)} 条合格视频，其中至少 ${Number(gate.min_low_follower_videos || 5)} 条来自两个低粉层级；查询不限时长且不增加调用，每个选题仍需两条独立爆款共同验证。</span></p>`;
+    <p><strong>榜单决定入池</strong><span>TikHub 低粉爆款榜或高点赞率榜 + 有效作品 ID/标题 + 家庭教育相关；继续排除泛母婴和带货内容。</span></p>
+    <p><strong>指标只加复核标签</strong><span>强复核参考：粉丝 ≤ ${formatCount(lowFollowers)}、播放 ≥ ${formatCount(lowPlays)}、播粉比 ≥ ${lowRatio}、赞播比 ≥ ${formatPercent(lowLike)}、深互动 ≥ ${formatPercent(deepRate)}；潜力复核参考：粉丝 ≤ ${formatCount(emergingFollowers)}、${emergingFreshHours} 小时内播放 ≥ ${formatCount(emergingFreshPlays)}，之后 ≥ ${formatCount(emergingPlays)}、播粉比 ≥ ${emergingRatio}、赞播比 ≥ ${formatPercent(emergingLike)}、深互动 ≥ ${formatPercent(emergingDeepRate)}。未达到或字段缺失仍可作为平台榜单样本。</span></p>
+    <p><strong>新近优先，不按时间淘汰</strong><span>发布 ${freshHours} 小时内最优先，其次 ${Math.round(recentHours / 24)} 天内；更早作品按当前榜单的回潮线索排序。高点赞强复核参考播放 ≥ ${formatCount(highPlays)}、赞播比 ≥ ${formatPercent(highLike)}。</span></p>
+    <p><strong>交叉验证，不用普通搜索凑数</strong><span>至少 ${Number(gate.min_usable_videos || 8)} 条不同榜单视频，其中至少 ${Number(gate.min_low_follower_videos || 5)} 条来自低粉榜；最多批量补齐 ${Number(gate.batch_detail_limit || 50)} 条详情，每个选题仍需两条独立视频共同验证。</span></p>`;
 }
 
 function renderTopicRuns() {
@@ -430,6 +429,7 @@ function topicMetricPills(evidence) {
   const metrics = evidence?.metrics;
   if (!metrics) return '';
   const values = [];
+  values.push(evidence.metrics_enriched ? '批量详情已补齐' : '榜单快照');
   const hasPublishedAge = (
     metrics.published_age_hours !== null
     && metrics.published_age_hours !== undefined
@@ -472,15 +472,17 @@ function topicEvidenceRow(evidence) {
     ? `<a href="${escapeHtml(evidence.video_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(evidence.title)} ↗</a>`
     : `<strong>${escapeHtml(evidence.title)}</strong>`;
   const tier = {
-    low_follower_breakout: ['强低粉爆款', ''],
-    emerging_low_follower_breakout: ['潜力低粉爆款', 'emerging'],
-    high_heat_breakout: ['高热爆款', 'high-heat'],
+    low_follower_billboard: ['平台低粉榜样本', 'emerging'],
+    low_follower_breakout: ['已复核强低粉爆款', ''],
+    emerging_low_follower_breakout: ['已复核潜力低粉爆款', 'emerging'],
+    high_like_billboard: ['平台高点赞榜样本', 'high-heat'],
+    high_heat_breakout: ['已复核高热爆款', 'high-heat'],
     trend_signal: ['趋势信号', 'trend'],
     unassessed: ['未按新标准复核', 'trend'],
   }[evidence.quality_tier || 'unassessed'] || ['研究证据', 'trend'];
   const qualification = (evidence.qualification_reasons || []).join('；');
   return `<div class="topic-evidence-row">
-    <div class="topic-evidence-copy"><span class="topic-evidence-tier ${tier[1]}">${tier[0]}</span>${title}<span>${escapeHtml(subline)}</span>${qualification ? `<span>复核：${escapeHtml(qualification)}</span>` : ''}</div>
+    <div class="topic-evidence-copy"><span class="topic-evidence-tier ${tier[1]}">${tier[0]}</span>${title}<span>${escapeHtml(subline)}</span>${qualification ? `<span>依据：${escapeHtml(qualification)}</span>` : ''}</div>
     <div class="topic-metrics">${topicMetricPills(evidence)}</div>
   </div>`;
 }
@@ -514,7 +516,7 @@ function renderTopicDiagnostics(run) {
       - missingVideoIds
       - missingTitles,
   );
-  const rejectionLabels = [
+  const historicalRejectionLabels = [
     ['空结果查询', emptyQueries],
     ['响应结构未识别', unrecognizedQueries],
     ['未分类的空/结构异常查询', legacyUnclassifiedQueries],
@@ -523,16 +525,24 @@ function renderTopicDiagnostics(run) {
     ['其他身份字段缺失', legacyMissingIdentity],
     ['作品 ID 异常', Number(diagnostics.rejected_invalid_video_id_count || 0)],
     ['偏离家庭教育', Number(diagnostics.rejected_off_topic_count || 0)],
-    ['发布时间异常', Number(diagnostics.rejected_invalid_publish_time_count || 0)],
-    ['超过 72 小时', Number(diagnostics.rejected_too_old_count || 0)],
-    ['粉丝数缺失', Number(diagnostics.rejected_missing_followers_count || 0)],
-    ['粉丝超过 10 万', Number(diagnostics.rejected_follower_ceiling_count || 0)],
-    ['播放不足', Number(diagnostics.rejected_insufficient_plays_count || 0)],
-    ['播粉比不足', Number(diagnostics.rejected_play_follower_ratio_count || 0)],
-    ['赞播比不足', Number(diagnostics.rejected_like_rate_count || 0)],
-    ['深度互动不足', Number(diagnostics.rejected_deep_engagement_rate_count || 0)],
+    ['历史淘汰：发布时间异常', Number(diagnostics.rejected_invalid_publish_time_count || 0)],
+    ['历史淘汰：超过 72 小时', Number(diagnostics.rejected_too_old_count || 0)],
+    ['历史淘汰：粉丝数缺失', Number(diagnostics.rejected_missing_followers_count || 0)],
+    ['历史淘汰：粉丝超过 10 万', Number(diagnostics.rejected_follower_ceiling_count || 0)],
+    ['历史淘汰：播放不足', Number(diagnostics.rejected_insufficient_plays_count || 0)],
+    ['历史淘汰：播粉比不足', Number(diagnostics.rejected_play_follower_ratio_count || 0)],
+    ['历史淘汰：赞播比不足', Number(diagnostics.rejected_like_rate_count || 0)],
+    ['历史淘汰：深度互动不足', Number(diagnostics.rejected_deep_engagement_rate_count || 0)],
   ];
-  const rejectionPills = rejectionLabels
+  const observationLabels = [
+    ['批量详情已补齐', Number(diagnostics.detail_enriched_count || 0)],
+    ['粉丝数未补齐（不淘汰）', Number(diagnostics.missing_follower_metrics_count || 0)],
+    ['发布时间未补齐（不淘汰）', Number(diagnostics.missing_publish_time_count || 0)],
+    ['发布超过 72 小时（仅降序）', Number(diagnostics.older_than_72h_count || 0)],
+    ['指标强复核', Number(diagnostics.strong_qualified_count || 0)],
+    ['指标潜力复核', Number(diagnostics.emerging_qualified_count || 0)],
+  ];
+  const rejectionPills = [...observationLabels, ...historicalRejectionLabels]
     .filter(([, count]) => count > 0)
     .map(([label, count]) => `<span>${escapeHtml(label)} ${formatCount(count)}</span>`)
     .join('');
@@ -542,12 +552,12 @@ function renderTopicDiagnostics(run) {
     : '';
   node.hidden = false;
   node.innerHTML = `
-    <div class="topic-diagnostics-heading"><strong>低粉样本复核漏斗</strong><span>未通过项可能重复计数</span></div>
+    <div class="topic-diagnostics-heading"><strong>低粉榜样本整理</strong><span>指标缺失与发布时间只影响标签和排序</span></div>
     <div class="topic-diagnostics-counts">
       <p><span>已检查</span><strong>${formatCount(received)}</strong></p>
-      <p><span>唯一合格</span><strong>${formatCount(qualified)}</strong></p>
-      <p><span>强爆款</span><strong>${formatCount(diagnostics.strong_qualified_count)}</strong></p>
-      <p><span>潜力爆款</span><strong>${formatCount(diagnostics.emerging_qualified_count)}</strong></p>
+      <p><span>唯一可用</span><strong>${formatCount(qualified)}</strong></p>
+      <p><span>指标已复核</span><strong>${formatCount(Number(diagnostics.strong_qualified_count || 0) + Number(diagnostics.emerging_qualified_count || 0))}</strong></p>
+      <p><span>平台榜单待补</span><strong>${formatCount(Number(diagnostics.billboard_only_count || 0))}</strong></p>
     </div>
     ${(duplicatePill || rejectionPills) ? `<div class="topic-diagnostics-rejections">${duplicatePill}${rejectionPills}</div>` : ''}`;
 }
@@ -627,7 +637,7 @@ function renderTopicDetail() {
     '仅抖音',
     `创建者 ${run.created_by || '未知'}`,
     canEditResource(run) ? '' : '团队内容 · 只读',
-    run.valid_through ? `数据截至 ${run.valid_through}` : '数据日期读取中',
+    run.valid_through ? `榜单采集 ${run.valid_through}` : '榜单采集日期待写入',
     run.data_window_note || '',
   ].filter(Boolean);
   $('#topic-run-meta').innerHTML = meta.map((item) => `<span>${escapeHtml(item)}</span>`).join('');
@@ -670,6 +680,7 @@ function renderTopicDetail() {
       : (editable ? '采用并补充来源' : '创建者尚未采用');
     const evidence = candidate.evidence_refs.map((id) => evidenceById.get(id)).filter(Boolean);
     const lowFollowerCount = evidence.filter((item) => [
+      'low_follower_billboard',
       'low_follower_breakout',
       'emerging_low_follower_breakout',
     ].includes(item.quality_tier)).length;
@@ -684,7 +695,7 @@ function renderTopicDetail() {
         <div class="topic-copy-block"><span>开场钩子</span><p class="topic-hook">${escapeHtml(candidate.opening_hook)}</p></div>
         <div class="topic-copy-block full"><span>为什么现在值得讲</span><p>${escapeHtml(candidate.why_now)}</p></div>
         <div class="topic-copy-block full"><span>内容边界</span><p class="topic-risk">${escapeHtml(candidate.risk_note)}</p></div>
-        <details class="topic-evidence"><summary>查看 ${evidence.length} 条抖音研究依据${lowFollowerCount ? ` · ${lowFollowerCount} 条低粉爆款` : ''}</summary><div class="topic-evidence-list">${evidence.map(topicEvidenceRow).join('')}</div></details>
+        <details class="topic-evidence"><summary>查看 ${evidence.length} 条抖音研究依据${lowFollowerCount ? ` · ${lowFollowerCount} 条低粉榜视频` : ''}</summary><div class="topic-evidence-list">${evidence.map(topicEvidenceRow).join('')}</div></details>
         <div class="topic-candidate-actions">
           <span>采用后仍需补充独立可靠资料，趋势数据不会进入脚本来源。</span>
           <button class="button ${selected ? 'secondary' : 'primary'}" type="button" data-adopt-topic="${escapeHtml(candidate.id)}" ${actionDisabled ? 'disabled' : ''}>${actionLabel}</button>

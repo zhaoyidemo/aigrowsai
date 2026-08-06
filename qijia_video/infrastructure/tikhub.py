@@ -30,22 +30,21 @@ from qijia_video.topic_contracts import (
 
 
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
-# TikHub 抖音指数筛选表将 617 定义为“母婴”。它只用于读取创作趋势；
-# 爆款证据改走支持关键词和滚动时间窗口的抖音榜单接口，再做本地相关性复核。
-TIKHUB_PARENTING_TAG_ID = "617"
-PLANNED_MAX_TIKHUB_CALLS = 15
+PLANNED_MAX_TIKHUB_CALLS = 13
 MAX_TIKHUB_REQUEST_BUDGET = 100
 BILLBOARD_PAGE_SIZE = 20
+BATCH_DETAIL_LIMIT = 50
 
-# TikHub 没有公开“低粉爆款”的内部阈值。下面是齐家自己的二次复核门槛，
-# 只把同时进入平台榜单并通过可见指标校验的视频交给选题编辑模型。
+# TikHub 没有公开“低粉爆款”的内部阈值。下面的齐家阈值只用于给已经
+# 进入平台榜单的视频增加“指标已复核”标签，不再作为样本入池的一票否决项。
 LOW_FOLLOWER_MAX_FOLLOWERS = 50_000
 LOW_FOLLOWER_MIN_PLAYS = 500_000
 LOW_FOLLOWER_MIN_PLAY_FOLLOWER_RATIO = 20.0
 LOW_FOLLOWER_MIN_LIKE_RATE = 0.05
 BREAKOUT_MIN_DEEP_ENGAGEMENT_RATE = 0.008
 FRESHEST_BREAKOUT_MAX_AGE_HOURS = 24
-LOW_FOLLOWER_MAX_AGE_HOURS = 72
+FRESH_PRIORITY_MAX_AGE_HOURS = 72
+RECENT_PRIORITY_MAX_AGE_HOURS = 168
 EMERGING_LOW_FOLLOWER_MAX_FOLLOWERS = 100_000
 EMERGING_LOW_FOLLOWER_MIN_PLAYS_FRESH = 100_000
 EMERGING_LOW_FOLLOWER_MIN_PLAYS = 200_000
@@ -54,8 +53,7 @@ EMERGING_LOW_FOLLOWER_MIN_LIKE_RATE = 0.03
 EMERGING_LOW_FOLLOWER_MIN_DEEP_ENGAGEMENT_RATE = 0.003
 HIGH_HEAT_MIN_PLAYS = 1_000_000
 HIGH_HEAT_MIN_LIKE_RATE = 0.08
-HIGH_HEAT_MAX_AGE_HOURS = 168
-MIN_QUALIFIED_VIDEO_COUNT = 10
+MIN_USABLE_VIDEO_COUNT = 8
 MIN_LOW_FOLLOWER_VIDEO_COUNT = 5
 DEFAULT_FAMILY_EDUCATION_QUERIES = (
     "家庭教育",
@@ -67,11 +65,9 @@ DEFAULT_FAMILY_EDUCATION_QUERIES = (
 )
 
 _VALID_ENDPOINTS = {
-    "/api/v1/douyin/index/fetch_content_valid_date",
-    "/api/v1/douyin/index/fetch_content_creative_keywords",
-    "/api/v1/douyin/index/fetch_content_creative_topic",
     "/api/v1/douyin/billboard/fetch_hot_total_low_fan_list",
     "/api/v1/douyin/billboard/fetch_hot_total_high_like_list",
+    "/api/v1/douyin/web/fetch_multi_video",
 }
 
 _VIDEO_ID_KEYS = (
@@ -100,16 +96,6 @@ _VIDEO_TITLE_KEYS = (
     "video_title",
     "contentTitle",
     "content_title",
-)
-_TERM_KEYS = (
-    "keyword",
-    "word",
-    "topic_name",
-    "tag_name",
-    "name",
-    "title",
-    "content",
-    "text",
 )
 _DIRECT_FAMILY_TERMS = (
     "家庭教育",
@@ -155,8 +141,8 @@ _EXCLUDED_MATERNAL_TERMS = (
 ProgressReporter = Callable[[dict], None]
 
 
-def evidence_quality_policy() -> dict[str, dict[str, float | int]]:
-    """返回给前端展示的同一份确定性门槛，避免文案和后端规则漂移。"""
+def evidence_quality_policy() -> dict[str, dict[str, float | int | bool]]:
+    """返回给前端展示的同一份入池与排序口径，避免文案漂移。"""
 
     return {
         "low_follower_breakout": {
@@ -165,8 +151,7 @@ def evidence_quality_policy() -> dict[str, dict[str, float | int]]:
             "min_play_follower_ratio": LOW_FOLLOWER_MIN_PLAY_FOLLOWER_RATIO,
             "min_like_rate": LOW_FOLLOWER_MIN_LIKE_RATE,
             "min_deep_engagement_rate": BREAKOUT_MIN_DEEP_ENGAGEMENT_RATE,
-            "max_age_hours": LOW_FOLLOWER_MAX_AGE_HOURS,
-            "freshest_age_hours": FRESHEST_BREAKOUT_MAX_AGE_HOURS,
+            "hard_gate": False,
         },
         "emerging_low_follower_breakout": {
             "max_followers": EMERGING_LOW_FOLLOWER_MAX_FOLLOWERS,
@@ -179,19 +164,24 @@ def evidence_quality_policy() -> dict[str, dict[str, float | int]]:
             "min_deep_engagement_rate": (
                 EMERGING_LOW_FOLLOWER_MIN_DEEP_ENGAGEMENT_RATE
             ),
-            "max_age_hours": LOW_FOLLOWER_MAX_AGE_HOURS,
             "freshest_age_hours": FRESHEST_BREAKOUT_MAX_AGE_HOURS,
+            "hard_gate": False,
         },
         "high_heat_breakout": {
             "min_plays": HIGH_HEAT_MIN_PLAYS,
             "min_like_rate": HIGH_HEAT_MIN_LIKE_RATE,
             "min_deep_engagement_rate": BREAKOUT_MIN_DEEP_ENGAGEMENT_RATE,
-            "max_age_hours": HIGH_HEAT_MAX_AGE_HOURS,
-            "freshest_age_hours": FRESHEST_BREAKOUT_MAX_AGE_HOURS,
+            "hard_gate": False,
+        },
+        "ranking": {
+            "fresh_priority_hours": FRESH_PRIORITY_MAX_AGE_HOURS,
+            "recent_priority_hours": RECENT_PRIORITY_MAX_AGE_HOURS,
+            "missing_metrics_rejected": False,
         },
         "research_gate": {
-            "min_qualified_videos": MIN_QUALIFIED_VIDEO_COUNT,
+            "min_usable_videos": MIN_USABLE_VIDEO_COUNT,
             "min_low_follower_videos": MIN_LOW_FOLLOWER_VIDEO_COUNT,
+            "batch_detail_limit": BATCH_DETAIL_LIMIT,
         },
     }
 
@@ -227,7 +217,7 @@ class TikHubRequestSession:
         endpoint: str,
         *,
         params: dict[str, Any] | None = None,
-        json_body: dict[str, Any] | None = None,
+        json_body: Any | None = None,
         request_label: str = "",
     ) -> Any:
         if endpoint not in _VALID_ENDPOINTS:
@@ -331,74 +321,6 @@ def _family_relevant(value: str) -> bool:
     return sum(term in text for term in _SUPPORTING_FAMILY_TERMS) >= 2
 
 
-def _extract_terms(value: Any, *, limit: int = 16) -> list[str]:
-    found: list[str] = []
-
-    def add(candidate: Any) -> None:
-        text = _clean_term(candidate)
-        if 2 <= len(text) <= 80 and text not in found and _family_relevant(text):
-            found.append(text)
-
-    def walk(node: Any) -> None:
-        if len(found) >= limit:
-            return
-        if isinstance(node, list):
-            for item in node:
-                walk(item)
-            return
-        if isinstance(node, dict):
-            matched = False
-            for key in _TERM_KEYS:
-                if key in node and isinstance(node[key], str):
-                    add(node[key])
-                    matched = True
-                    break
-            for child in node.values():
-                if isinstance(child, (dict, list)):
-                    walk(child)
-            if not matched and len(node) == 1:
-                walk(next(iter(node.values())))
-            return
-        if isinstance(node, str):
-            add(node)
-
-    walk(value)
-    return found[:limit]
-
-
-def _walk_dates(value: Any) -> list[datetime]:
-    dates: list[datetime] = []
-
-    def walk(node: Any) -> None:
-        if isinstance(node, dict):
-            for child in node.values():
-                walk(child)
-        elif isinstance(node, list):
-            for child in node:
-                walk(child)
-        elif isinstance(node, (str, int)):
-            text = str(node)
-            for match in re.findall(r"20\d{2}(?:[-/]?\d{2}){2}", text):
-                normalized = re.sub(r"[-/]", "", match)
-                try:
-                    dates.append(datetime.strptime(normalized, "%Y%m%d"))
-                except ValueError:
-                    continue
-
-    walk(value)
-    return dates
-
-
-def _latest_valid_date(value: Any) -> tuple[str, str]:
-    dates = _walk_dates(value)
-    if not dates:
-        raise ProviderUnavailable(
-            "TikHub 创作指南有效日期缺少可识别字段；为避免伪造数据日期，研究已停止"
-        )
-    latest = max(dates)
-    return latest.strftime("%Y%m%d"), latest.date().isoformat()
-
-
 def _normalized_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
 
@@ -442,8 +364,15 @@ def _video_nodes(value: Any) -> list[dict[str, Any]]:
             if _direct_value(node, _VIDEO_ID_KEYS) not in (None, ""):
                 found.append(node)
                 return
-            for child in node.values():
-                walk(child)
+            for key, child in node.items():
+                if (
+                    isinstance(child, dict)
+                    and re.fullmatch(r"\d{5,32}", str(key))
+                    and _direct_value(child, _VIDEO_ID_KEYS) in (None, "")
+                ):
+                    walk({"aweme_id": str(key), **child})
+                else:
+                    walk(child)
         elif isinstance(node, list):
             for child in node:
                 walk(child)
@@ -609,30 +538,11 @@ def _evidence_id(kind: str, identity: str) -> str:
     return f"ev_{digest[:12]}"
 
 
-def _term_evidence(
-    term: str,
-    *,
-    signal_type: TopicSignalType,
-    label: str,
-    rank: int,
-) -> TopicEvidence:
-    return TopicEvidence(
-        id=_evidence_id(signal_type.value, term),
-        evidence_type=TopicEvidenceType.TREND_TERM,
-        signal_types=[signal_type],
-        queries=[term],
-        title=term,
-        platform_labels=[label],
-        quality_tier=TopicEvidenceTier.TREND_SIGNAL,
-        qualification_reasons=["家庭教育相关的近期抖音创作趋势"],
-        source_rank=rank,
-    )
-
-
-def _emerging_low_follower_min_plays(age_hours: float) -> int:
+def _emerging_low_follower_min_plays(age_hours: float | None) -> int:
     return (
         EMERGING_LOW_FOLLOWER_MIN_PLAYS_FRESH
-        if age_hours <= FRESHEST_BREAKOUT_MAX_AGE_HOURS
+        if age_hours is not None
+        and age_hours <= FRESHEST_BREAKOUT_MAX_AGE_HOURS
         else EMERGING_LOW_FOLLOWER_MIN_PLAYS
     )
 
@@ -643,50 +553,6 @@ def _increment_diagnostic(
 ) -> None:
     if diagnostics is not None:
         setattr(diagnostics, field, int(getattr(diagnostics, field)) + 1)
-
-
-def _record_low_follower_rejections(
-    metrics: TopicMetrics,
-    diagnostics: TopicLowFollowerDiagnostics | None,
-) -> None:
-    if diagnostics is None:
-        return
-    age_hours = metrics.published_age_hours
-    if age_hours is None:
-        _increment_diagnostic(
-            diagnostics, "rejected_invalid_publish_time_count"
-        )
-        return
-    if age_hours > LOW_FOLLOWER_MAX_AGE_HOURS:
-        _increment_diagnostic(diagnostics, "rejected_too_old_count")
-    if metrics.follower_count <= 0:
-        _increment_diagnostic(
-            diagnostics, "rejected_missing_followers_count"
-        )
-    elif metrics.follower_count > EMERGING_LOW_FOLLOWER_MAX_FOLLOWERS:
-        _increment_diagnostic(
-            diagnostics, "rejected_follower_ceiling_count"
-        )
-    if metrics.play_count < _emerging_low_follower_min_plays(age_hours):
-        _increment_diagnostic(
-            diagnostics, "rejected_insufficient_plays_count"
-        )
-    if (
-        (metrics.play_follower_ratio or 0.0)
-        < EMERGING_LOW_FOLLOWER_MIN_PLAY_FOLLOWER_RATIO
-    ):
-        _increment_diagnostic(
-            diagnostics, "rejected_play_follower_ratio_count"
-        )
-    if (metrics.like_rate or 0.0) < EMERGING_LOW_FOLLOWER_MIN_LIKE_RATE:
-        _increment_diagnostic(diagnostics, "rejected_like_rate_count")
-    if (
-        (metrics.deep_engagement_rate or 0.0)
-        < EMERGING_LOW_FOLLOWER_MIN_DEEP_ENGAGEMENT_RATE
-    ):
-        _increment_diagnostic(
-            diagnostics, "rejected_deep_engagement_rate_count"
-        )
 
 
 def _low_follower_diagnostic_summary(
@@ -706,35 +572,40 @@ def _low_follower_diagnostic_summary(
         ("其他身份字段缺失", other_missing_identity),
         ("作品 ID 异常", diagnostics.rejected_invalid_video_id_count),
         ("偏离家庭教育", diagnostics.rejected_off_topic_count),
-        ("发布时间异常", diagnostics.rejected_invalid_publish_time_count),
-        ("超过 72 小时", diagnostics.rejected_too_old_count),
-        ("粉丝数缺失", diagnostics.rejected_missing_followers_count),
-        ("粉丝超过 10 万", diagnostics.rejected_follower_ceiling_count),
-        ("播放不足", diagnostics.rejected_insufficient_plays_count),
-        ("播粉比不足", diagnostics.rejected_play_follower_ratio_count),
-        ("赞播比不足", diagnostics.rejected_like_rate_count),
-        ("深度互动不足", diagnostics.rejected_deep_engagement_rate_count),
+        ("历史记录：发布时间异常", diagnostics.rejected_invalid_publish_time_count),
+        ("历史记录：超过 72 小时", diagnostics.rejected_too_old_count),
+        ("历史记录：粉丝数缺失", diagnostics.rejected_missing_followers_count),
+        ("历史记录：粉丝超过 10 万", diagnostics.rejected_follower_ceiling_count),
+        ("历史记录：播放不足", diagnostics.rejected_insufficient_plays_count),
+        ("历史记录：播粉比不足", diagnostics.rejected_play_follower_ratio_count),
+        ("历史记录：赞播比不足", diagnostics.rejected_like_rate_count),
+        ("历史记录：深度互动不足", diagnostics.rejected_deep_engagement_rate_count),
     )
-    failures = "、".join(
+    hard_rejections = "、".join(
         f"{label} {count}"
         for label, count in labels
         if count > 0
-    ) or "无可分类的指标淘汰项"
+    ) or "无"
     return (
-        f"低粉复核漏斗：检查 {diagnostics.received_count} 个样本，"
-        f"唯一合格 {diagnostics.unique_qualified_count} 条"
-        f"（强爆款 {diagnostics.strong_qualified_count}、"
-        f"潜力爆款 {diagnostics.emerging_qualified_count}、"
+        f"低粉榜样本：检查 {diagnostics.received_count} 个，"
+        f"唯一可用 {diagnostics.unique_qualified_count} 条"
+        f"（指标强复核 {diagnostics.strong_qualified_count}、"
+        f"指标潜力复核 {diagnostics.emerging_qualified_count}、"
+        f"平台榜单待补 {diagnostics.billboard_only_count}、"
+        f"批量详情补齐 {diagnostics.detail_enriched_count}、"
         f"跨检索重复 {diagnostics.duplicate_qualified_count}）；"
-        f"未通过项可重复计数：{failures}"
+        f"排序观察：发布时间未补 {diagnostics.missing_publish_time_count}、"
+        f"发布超过 72 小时 {diagnostics.older_than_72h_count}、"
+        f"粉丝数未补 {diagnostics.missing_follower_metrics_count}；"
+        f"硬淘汰：{hard_rejections}"
     )
 
 
 def _qualified_video_tier(
     metrics: TopicMetrics,
     signal_type: TopicSignalType,
-) -> tuple[TopicEvidenceTier, list[str]] | None:
-    """以平台榜单为入口，再用公开可见指标做严格的本地复核。"""
+) -> tuple[TopicEvidenceTier, list[str]]:
+    """榜单决定是否入池；公开指标只决定证据标签与排序。"""
 
     deep_rate = metrics.deep_engagement_rate or 0.0
     like_rate = metrics.like_rate or 0.0
@@ -742,8 +613,6 @@ def _qualified_video_tier(
     age_hours = metrics.published_age_hours
     if (
         signal_type == TopicSignalType.LOW_FOLLOWER_VIDEO
-        and age_hours is not None
-        and age_hours <= LOW_FOLLOWER_MAX_AGE_HOURS
         and 0 < metrics.follower_count <= LOW_FOLLOWER_MAX_FOLLOWERS
         and metrics.play_count >= LOW_FOLLOWER_MIN_PLAYS
         and play_follower_ratio >= LOW_FOLLOWER_MIN_PLAY_FOLLOWER_RATIO
@@ -752,7 +621,7 @@ def _qualified_video_tier(
     ):
         return TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT, [
             "TikHub 低粉爆款榜",
-            f"发布不超过 {LOW_FOLLOWER_MAX_AGE_HOURS} 小时",
+            "齐家可见指标强复核（不是入池门槛）",
             f"作者粉丝不超过 {LOW_FOLLOWER_MAX_FOLLOWERS}",
             f"播放不少于 {LOW_FOLLOWER_MIN_PLAYS}",
             f"播粉比不低于 {LOW_FOLLOWER_MIN_PLAY_FOLLOWER_RATIO:g}",
@@ -762,8 +631,6 @@ def _qualified_video_tier(
         ]
     if (
         signal_type == TopicSignalType.LOW_FOLLOWER_VIDEO
-        and age_hours is not None
-        and age_hours <= LOW_FOLLOWER_MAX_AGE_HOURS
         and 0 < metrics.follower_count <= EMERGING_LOW_FOLLOWER_MAX_FOLLOWERS
         and metrics.play_count >= _emerging_low_follower_min_plays(age_hours)
         and (
@@ -776,8 +643,7 @@ def _qualified_video_tier(
         min_plays = _emerging_low_follower_min_plays(age_hours)
         return TopicEvidenceTier.EMERGING_LOW_FOLLOWER_BREAKOUT, [
             "TikHub 低粉爆款榜",
-            "齐家潜力低粉爆款标准",
-            f"发布不超过 {LOW_FOLLOWER_MAX_AGE_HOURS} 小时",
+            "齐家可见指标潜力复核（不是入池门槛）",
             f"作者粉丝不超过 {EMERGING_LOW_FOLLOWER_MAX_FOLLOWERS}",
             f"当前时效档播放不少于 {min_plays}",
             f"播粉比不低于 {EMERGING_LOW_FOLLOWER_MIN_PLAY_FOLLOWER_RATIO:g}",
@@ -787,21 +653,47 @@ def _qualified_video_tier(
         ]
     if (
         signal_type == TopicSignalType.HIGH_LIKE_VIDEO
-        and age_hours is not None
-        and age_hours <= HIGH_HEAT_MAX_AGE_HOURS
         and metrics.play_count >= HIGH_HEAT_MIN_PLAYS
         and like_rate >= HIGH_HEAT_MIN_LIKE_RATE
         and deep_rate >= BREAKOUT_MIN_DEEP_ENGAGEMENT_RATE
     ):
         return TopicEvidenceTier.HIGH_HEAT_BREAKOUT, [
             "TikHub 高点赞率榜",
-            f"发布不超过 {HIGH_HEAT_MAX_AGE_HOURS} 小时",
+            "齐家可见指标高热复核（不是入池门槛）",
             f"播放不少于 {HIGH_HEAT_MIN_PLAYS}",
             f"赞播比不低于 {HIGH_HEAT_MIN_LIKE_RATE:.0%}",
             f"深度互动率不低于 {BREAKOUT_MIN_DEEP_ENGAGEMENT_RATE:.1%}",
             f"采集时日均播放约 {metrics.average_daily_plays or 0}",
         ]
-    return None
+    if signal_type == TopicSignalType.LOW_FOLLOWER_VIDEO:
+        reasons = [
+            "TikHub 低粉爆款榜",
+            "平台榜单入池；粉丝、播放与互动只用于排序",
+        ]
+        if metrics.follower_count <= 0:
+            reasons.append("作者粉丝指标待批量详情补齐")
+        if age_hours is None:
+            reasons.append("发布时间待补齐，不作淘汰")
+        elif age_hours <= FRESH_PRIORITY_MAX_AGE_HOURS:
+            reasons.append("发布 72 小时内，获得新近优先")
+        elif age_hours <= RECENT_PRIORITY_MAX_AGE_HOURS:
+            reasons.append("发布 7 天内，按近期样本排序")
+        else:
+            reasons.append("当前榜单中的较早作品，按回潮样本排序")
+        return TopicEvidenceTier.LOW_FOLLOWER_BILLBOARD, reasons
+    reasons = [
+        "TikHub 高点赞率榜",
+        "平台榜单入池；播放与互动只用于排序",
+    ]
+    if age_hours is None:
+        reasons.append("发布时间待补齐，不作淘汰")
+    elif age_hours <= FRESH_PRIORITY_MAX_AGE_HOURS:
+        reasons.append("发布 72 小时内，获得新近优先")
+    elif age_hours <= RECENT_PRIORITY_MAX_AGE_HOURS:
+        reasons.append("发布 7 天内，按近期样本排序")
+    else:
+        reasons.append("当前榜单中的较早作品，按回潮样本排序")
+    return TopicEvidenceTier.HIGH_LIKE_BILLBOARD, reasons
 
 
 def _video_evidence(
@@ -813,6 +705,7 @@ def _video_evidence(
     rank: int,
     as_of: datetime | None = None,
     low_follower_diagnostics: TopicLowFollowerDiagnostics | None = None,
+    metrics_enriched: bool = False,
 ) -> TopicEvidence | None:
     video_id = str(_deep_value(node, _VIDEO_ID_KEYS) or "").strip()[:64]
     title = _clean_term(_deep_value(node, _VIDEO_TITLE_KEYS))
@@ -946,12 +839,6 @@ def _video_evidence(
         play_count=play_count,
         as_of=as_of,
     )
-    if published_age_hours is None:
-        _increment_diagnostic(
-            low_follower_diagnostics,
-            "rejected_invalid_publish_time_count",
-        )
-        return None
     # 不信任上游返回的任意外链，统一构造可复核的抖音作品页。
     video_url = f"https://www.douyin.com/video/{video_id}"
     metrics = TopicMetrics(
@@ -974,12 +861,6 @@ def _video_evidence(
         average_daily_plays=average_daily_plays,
     )
     qualification = _qualified_video_tier(metrics, signal_type)
-    if qualification is None:
-        if signal_type == TopicSignalType.LOW_FOLLOWER_VIDEO:
-            _record_low_follower_rejections(
-                metrics, low_follower_diagnostics
-            )
-        return None
     quality_tier, qualification_reasons = qualification
     return TopicEvidence(
         id=_evidence_id("video", video_id),
@@ -1020,16 +901,135 @@ def _video_evidence(
             )
         ),
         metrics=metrics,
+        metrics_enriched=metrics_enriched,
     )
+
+
+def _merge_detail_snapshot(
+    current: TopicEvidence,
+    detail: TopicEvidence,
+) -> TopicEvidence:
+    """把批量详情的非零累计指标合入榜单快照，再重新计算比率。"""
+
+    merged = current.model_copy(deep=True)
+    current_metrics = current.metrics or TopicMetrics()
+    detail_metrics = detail.metrics or TopicMetrics()
+    play_count = max(current_metrics.play_count, detail_metrics.play_count)
+    like_count = max(current_metrics.like_count, detail_metrics.like_count)
+    comment_count = max(
+        current_metrics.comment_count, detail_metrics.comment_count
+    )
+    share_count = max(current_metrics.share_count, detail_metrics.share_count)
+    collect_count = max(
+        current_metrics.collect_count, detail_metrics.collect_count
+    )
+    follower_count = (
+        detail_metrics.follower_count or current_metrics.follower_count
+    )
+    age_hours = (
+        detail_metrics.published_age_hours
+        if detail_metrics.published_age_hours is not None
+        else current_metrics.published_age_hours
+    )
+    average_daily_plays = (
+        round(play_count / max(1.0, age_hours / 24))
+        if age_hours is not None
+        else None
+    )
+    merged.metrics = TopicMetrics(
+        play_count=play_count,
+        like_count=like_count,
+        comment_count=comment_count,
+        share_count=share_count,
+        collect_count=collect_count,
+        follower_count=follower_count,
+        like_rate=_ratio(like_count, play_count),
+        comment_rate=_ratio(comment_count, play_count),
+        share_rate=_ratio(share_count, play_count),
+        collect_rate=_ratio(collect_count, play_count),
+        deep_engagement_rate=_ratio(
+            comment_count + share_count + collect_count,
+            play_count,
+        ),
+        play_follower_ratio=_ratio(play_count, follower_count),
+        published_age_hours=age_hours,
+        average_daily_plays=average_daily_plays,
+    )
+    merged.metrics_enriched = True
+    if detail.published_at:
+        merged.published_at = detail.published_at
+    if detail.author_name:
+        merged.author_name = detail.author_name
+    if detail.duration_seconds is not None:
+        merged.duration_seconds = detail.duration_seconds
+    if len(detail.title) > len(merged.title):
+        merged.title = detail.title
+    primary_signal = (
+        TopicSignalType.LOW_FOLLOWER_VIDEO
+        if TopicSignalType.LOW_FOLLOWER_VIDEO in merged.signal_types
+        else TopicSignalType.HIGH_LIKE_VIDEO
+    )
+    merged.quality_tier, merged.qualification_reasons = _qualified_video_tier(
+        merged.metrics,
+        primary_signal,
+    )
+    return merged
+
+
+def _enrich_video_evidence(
+    items: list[TopicEvidence],
+    data: Any,
+    *,
+    as_of: datetime,
+) -> tuple[list[TopicEvidence], int]:
+    """用一次批量详情调用回填榜单视频；结构缺失时保留原榜单样本。"""
+
+    nodes_by_id: dict[str, dict[str, Any]] = {}
+    for node in _video_nodes(data):
+        video_id = str(_deep_value(node, _VIDEO_ID_KEYS) or "").strip()[:64]
+        if video_id and video_id not in nodes_by_id:
+            nodes_by_id[video_id] = node
+    enriched: list[TopicEvidence] = []
+    enriched_count = 0
+    for item in items:
+        node = nodes_by_id.get(item.video_id)
+        if node is None:
+            enriched.append(item)
+            continue
+        primary_signal = (
+            TopicSignalType.LOW_FOLLOWER_VIDEO
+            if TopicSignalType.LOW_FOLLOWER_VIDEO in item.signal_types
+            else TopicSignalType.HIGH_LIKE_VIDEO
+        )
+        detail_node = node
+        if not _clean_term(_deep_value(node, _VIDEO_TITLE_KEYS)):
+            detail_node = {**node, "desc": item.title}
+        detail = _video_evidence(
+            detail_node,
+            query=item.queries[0] if item.queries else "家庭教育",
+            signal_type=primary_signal,
+            label=item.platform_labels[0] if item.platform_labels else "TikHub 榜单",
+            rank=item.source_rank,
+            as_of=as_of,
+            metrics_enriched=True,
+        )
+        if detail is None:
+            enriched.append(item)
+            continue
+        enriched.append(_merge_detail_snapshot(item, detail))
+        enriched_count += 1
+    return enriched, enriched_count
 
 
 def _merge_evidence(items: list[TopicEvidence]) -> list[TopicEvidence]:
     tier_priority = {
         TopicEvidenceTier.UNASSESSED: 0,
         TopicEvidenceTier.TREND_SIGNAL: 1,
-        TopicEvidenceTier.HIGH_HEAT_BREAKOUT: 2,
-        TopicEvidenceTier.EMERGING_LOW_FOLLOWER_BREAKOUT: 3,
-        TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT: 4,
+        TopicEvidenceTier.HIGH_LIKE_BILLBOARD: 2,
+        TopicEvidenceTier.HIGH_HEAT_BREAKOUT: 3,
+        TopicEvidenceTier.LOW_FOLLOWER_BILLBOARD: 4,
+        TopicEvidenceTier.EMERGING_LOW_FOLLOWER_BREAKOUT: 5,
+        TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT: 6,
     }
     merged: dict[str, TopicEvidence] = {}
     for item in items:
@@ -1064,6 +1064,7 @@ def _merge_evidence(items: list[TopicEvidence]) -> list[TopicEvidence]:
             current.metrics = item.metrics
         if len(item.title) > len(current.title):
             current.title = item.title
+        current.metrics_enriched = current.metrics_enriched or item.metrics_enriched
     return list(merged.values())
 
 
@@ -1183,31 +1184,8 @@ class TikHubDouyinResearchProvider:
                 client=client,
                 on_calls=on_calls,
             )
-            _report(progress, "读取抖音创作指南的数据日期…", "topic_date", 8)
-            try:
-                valid_data = await session.request(
-                    "GET",
-                    "/api/v1/douyin/index/fetch_content_valid_date",
-                    request_label="创作指南有效日期",
-                )
-                end_date, valid_through = _latest_valid_date(valid_data)
-                valid_date = datetime.strptime(valid_through, "%Y-%m-%d").date()
-                today = datetime.now(BEIJING_TZ).date()
-                if (valid_date - today).days > 1:
-                    raise ProviderUnavailable(
-                        "TikHub 创作指南返回了未来数据日期；为避免使用错误窗口，研究已停止"
-                    )
-            except TopicCollectionFailed:
-                raise
-            except ProviderUnavailable as exc:
-                raise TopicCollectionFailed(
-                    str(exc), session.calls, warnings=warnings
-                ) from exc
-            age_days = (today - valid_date).days
-            if age_days > 14:
-                warnings.append(
-                    f"TikHub 创作指南数据已滞后 {age_days} 天，候选只宜作为补充线索"
-                )
+            collected_at = datetime.now(BEIJING_TZ)
+            valid_through = collected_at.date().isoformat()
 
             async def optional_call(label: str, coroutine):
                 try:
@@ -1218,62 +1196,11 @@ class TikHubDouyinResearchProvider:
                     warnings.append(f"{label}：{exc}")
                     return None
 
-            _report(progress, "发现母婴垂类中的家庭教育趋势…", "topic_discovery", 18)
-            keyword_data, topic_data = await asyncio.gather(
-                optional_call(
-                    "创作热门关键词不可用",
-                    session.request(
-                        "POST",
-                        "/api/v1/douyin/index/fetch_content_creative_keywords",
-                        params={
-                            "tag_id": TIKHUB_PARENTING_TAG_ID,
-                            "period": "3",
-                            "end_date": end_date,
-                        },
-                        request_label="母婴垂类近 3 天创作热词",
-                    ),
-                ),
-                optional_call(
-                    "创作飙升话题不可用",
-                    session.request(
-                        "POST",
-                        "/api/v1/douyin/index/fetch_content_creative_topic",
-                        params={
-                            "tag_id": TIKHUB_PARENTING_TAG_ID,
-                            "period": "3",
-                            "end_date": end_date,
-                            "rank_type": "rise",
-                        },
-                        request_label="母婴垂类近 3 天飙升话题",
-                    ),
-                ),
-            )
-            keywords = _extract_terms(keyword_data, limit=12)
-            topics = _extract_terms(topic_data, limit=12)
-            evidence.extend(
-                _term_evidence(
-                    term,
-                    signal_type=TopicSignalType.CREATIVE_KEYWORD,
-                    label="母婴垂类近 3 天创作热词",
-                    rank=index,
-                )
-                for index, term in enumerate(keywords, start=1)
-            )
-            evidence.extend(
-                _term_evidence(
-                    term,
-                    signal_type=TopicSignalType.RISING_TOPIC,
-                    label="母婴垂类近 3 天飙升话题",
-                    rank=index,
-                )
-                for index, term in enumerate(topics, start=1)
-            )
-
             _report(
                 progress,
-                "筛选六类家庭教育低粉爆款与高热样本…",
+                "读取六类家庭教育低粉爆款榜样本…",
                 "topic_samples",
-                36,
+                18,
             )
             sample_semaphore = asyncio.Semaphore(4)
 
@@ -1334,40 +1261,22 @@ class TikHubDouyinResearchProvider:
                     ),
                     date_window=72,
                     signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
-                    platform_label="TikHub 近 72 小时低粉爆款榜",
+                    platform_label="TikHub 72 小时窗口低粉爆款榜",
                 )
                 for query in DEFAULT_FAMILY_EDUCATION_QUERIES
             ))
-            for group in low_follower_groups:
-                evidence.extend(group)
             raw_low_follower_evidence = [
                 item
                 for group in low_follower_groups
                 for item in group
             ]
-            strong_low_follower_ids = {
-                item.id
-                for item in raw_low_follower_evidence
-                if item.quality_tier
-                == TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT
-            }
-            emerging_low_follower_ids = {
-                item.id
-                for item in raw_low_follower_evidence
-                if item.quality_tier
-                == TopicEvidenceTier.EMERGING_LOW_FOLLOWER_BREAKOUT
-            } - strong_low_follower_ids
-            low_follower_ids = (
-                strong_low_follower_ids | emerging_low_follower_ids
-            )
+            evidence.extend(raw_low_follower_evidence)
+            low_follower_ids = {item.id for item in raw_low_follower_evidence}
             low_follower_diagnostics.unique_qualified_count = len(
                 low_follower_ids
             )
-            low_follower_diagnostics.strong_qualified_count = len(
-                strong_low_follower_ids
-            )
-            low_follower_diagnostics.emerging_qualified_count = len(
-                emerging_low_follower_ids
+            low_follower_diagnostics.billboard_only_count = len(
+                low_follower_ids
             )
             low_follower_diagnostics.duplicate_qualified_count = max(
                 0,
@@ -1375,10 +1284,10 @@ class TikHubDouyinResearchProvider:
             )
             if len(low_follower_ids) < MIN_LOW_FOLLOWER_VIDEO_COUNT:
                 raise TopicCollectionFailed(
-                    f"两级复核后只有 {len(low_follower_ids)} 条低粉爆款，"
+                    f"只有 {len(low_follower_ids)} 条有效家庭教育低粉榜视频，"
                     f"少于最低要求 {MIN_LOW_FOLLOWER_VIDEO_COUNT} 条；"
                     f"{_low_follower_diagnostic_summary(low_follower_diagnostics)}；"
-                    "本轮已在高热补充查询前停止，以减少无效 API 成本",
+                    "本轮已在高点赞榜查询前停止，以减少无效 API 成本",
                     session.calls,
                     low_follower_diagnostics,
                     warnings,
@@ -1386,9 +1295,9 @@ class TikHubDouyinResearchProvider:
 
             _report(
                 progress,
-                "低粉爆款已达门槛，补充高热交叉证据…",
+                "低粉榜样本已达门槛，补充高点赞榜交叉证据…",
                 "topic_samples",
-                52,
+                42,
             )
             high_heat_groups = await asyncio.gather(*(
                 labelled_videos(
@@ -1399,7 +1308,7 @@ class TikHubDouyinResearchProvider:
                     ),
                     date_window=168,
                     signal_type=TopicSignalType.HIGH_LIKE_VIDEO,
-                    platform_label="TikHub 近 168 小时高点赞率榜",
+                    platform_label="TikHub 168 小时窗口高点赞率榜",
                 )
                 for query in DEFAULT_FAMILY_EDUCATION_QUERIES
             ))
@@ -1408,48 +1317,110 @@ class TikHubDouyinResearchProvider:
 
             _report(
                 progress,
-                "正在复核播放、粉丝与互动门槛…",
+                "批量补齐粉丝、播放与互动指标…",
                 "topic_enrichment",
                 62,
             )
+            try:
+                normalized = _merge_evidence(evidence)
+            except Exception as exc:
+                raise TopicCollectionFailed(
+                    f"TikHub 数据结构无法安全归一化：{type(exc).__name__}",
+                    session.calls,
+                    low_follower_diagnostics,
+                    warnings,
+                ) from exc
+            video_ids = [
+                item.video_id
+                for item in normalized
+                if item.evidence_type == TopicEvidenceType.VIDEO
+            ][:BATCH_DETAIL_LIMIT]
+            detail_data = None
+            if video_ids:
+                detail_data = await optional_call(
+                    "榜单视频批量详情不可用，保留平台榜单指标",
+                    session.request(
+                        "POST",
+                        "/api/v1/douyin/web/fetch_multi_video",
+                        json_body=video_ids,
+                        request_label=f"批量补齐 {len(video_ids)} 条榜单视频详情",
+                    ),
+                )
+            if detail_data is not None:
+                normalized, enriched_count = _enrich_video_evidence(
+                    normalized,
+                    detail_data,
+                    as_of=datetime.now(BEIJING_TZ),
+                )
+                if enriched_count == 0:
+                    warnings.append("批量详情返回结构未匹配作品 ID，已保留榜单样本")
 
-        try:
-            normalized = _merge_evidence(evidence)
-        except Exception as exc:
-            raise TopicCollectionFailed(
-                f"TikHub 数据结构无法安全归一化：{type(exc).__name__}",
-                session.calls,
-                low_follower_diagnostics,
-                warnings,
-            ) from exc
-        qualified_videos = [
+        usable_tiers = {
+            TopicEvidenceTier.LOW_FOLLOWER_BILLBOARD,
+            TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
+            TopicEvidenceTier.EMERGING_LOW_FOLLOWER_BREAKOUT,
+            TopicEvidenceTier.HIGH_LIKE_BILLBOARD,
+            TopicEvidenceTier.HIGH_HEAT_BREAKOUT,
+        }
+        usable_videos = [
             item
             for item in normalized
             if item.evidence_type == TopicEvidenceType.VIDEO
-            and item.quality_tier in {
-                TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
-                TopicEvidenceTier.EMERGING_LOW_FOLLOWER_BREAKOUT,
-                TopicEvidenceTier.HIGH_HEAT_BREAKOUT,
-            }
+            and item.quality_tier in usable_tiers
         ]
-        low_follower_count = sum(
-            item.quality_tier in {
-                TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
-                TopicEvidenceTier.EMERGING_LOW_FOLLOWER_BREAKOUT,
-            }
-            for item in qualified_videos
+        low_follower_videos = [
+            item
+            for item in usable_videos
+            if TopicSignalType.LOW_FOLLOWER_VIDEO in item.signal_types
+        ]
+        low_follower_diagnostics.unique_qualified_count = len(
+            low_follower_videos
+        )
+        low_follower_diagnostics.strong_qualified_count = sum(
+            item.quality_tier == TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT
+            for item in low_follower_videos
+        )
+        low_follower_diagnostics.emerging_qualified_count = sum(
+            item.quality_tier
+            == TopicEvidenceTier.EMERGING_LOW_FOLLOWER_BREAKOUT
+            for item in low_follower_videos
+        )
+        low_follower_diagnostics.billboard_only_count = sum(
+            item.quality_tier == TopicEvidenceTier.LOW_FOLLOWER_BILLBOARD
+            for item in low_follower_videos
+        )
+        low_follower_diagnostics.detail_enriched_count = sum(
+            item.metrics_enriched for item in low_follower_videos
+        )
+        low_follower_diagnostics.missing_publish_time_count = sum(
+            not item.metrics
+            or item.metrics.published_age_hours is None
+            for item in low_follower_videos
+        )
+        low_follower_diagnostics.older_than_72h_count = sum(
+            bool(
+                item.metrics
+                and item.metrics.published_age_hours is not None
+                and item.metrics.published_age_hours
+                > FRESH_PRIORITY_MAX_AGE_HOURS
+            )
+            for item in low_follower_videos
+        )
+        low_follower_diagnostics.missing_follower_metrics_count = sum(
+            not item.metrics or item.metrics.follower_count <= 0
+            for item in low_follower_videos
         )
         if (
-            len(qualified_videos) < MIN_QUALIFIED_VIDEO_COUNT
-            or low_follower_count < MIN_LOW_FOLLOWER_VIDEO_COUNT
+            len(usable_videos) < MIN_USABLE_VIDEO_COUNT
+            or len(low_follower_videos) < MIN_LOW_FOLLOWER_VIDEO_COUNT
         ):
             raise TopicCollectionFailed(
-                "通过爆款复核的家庭教育视频不足："
-                f"当前 {len(qualified_videos)} 条合格、其中 {low_follower_count} 条低粉爆款；"
-                f"至少需要 {MIN_QUALIFIED_VIDEO_COUNT} 条合格视频且包含 "
-                f"{MIN_LOW_FOLLOWER_VIDEO_COUNT} 条低粉爆款。"
+                "可用的家庭教育榜单视频不足："
+                f"当前 {len(usable_videos)} 条、其中 {len(low_follower_videos)} 条来自低粉榜；"
+                f"至少需要 {MIN_USABLE_VIDEO_COUNT} 条榜单视频且包含 "
+                f"{MIN_LOW_FOLLOWER_VIDEO_COUNT} 条低粉榜视频。"
                 f"{_low_follower_diagnostic_summary(low_follower_diagnostics)}；"
-                "本轮已停止，不会用普通搜索视频凑数",
+                "本轮已停止，不会用普通搜索或泛母婴内容凑数",
                 session.calls,
                 low_follower_diagnostics,
                 warnings,

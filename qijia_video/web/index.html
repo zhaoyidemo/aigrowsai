@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.6.1">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.7.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -44,26 +44,26 @@
             <div class="panel-heading">
               <div><p class="step">固定范围</p><h2>研究今天值得讲什么</h2></div>
             </div>
-            <p class="panel-note intake-intro">只研究抖音上的家庭教育内容。系统先收集趋势和通过复核的爆款视频，再提出 5 个可供人工判断的内容角度。</p>
+            <p class="panel-note intake-intro">只研究抖音上的家庭教育内容。系统收集 TikHub 低粉爆款榜与高点赞率榜，批量补齐可得指标后提出 5 个可供人工判断的内容角度。</p>
             <dl class="topic-scope">
               <div><dt>主题</dt><dd>家庭教育</dd></div>
               <div><dt>数据</dt><dd>抖音 · TikHub</dd></div>
-              <div><dt>窗口</dt><dd>3 天低粉 · 7 天高热</dd></div>
+              <div><dt>排序</dt><dd>72 小时内优先 · 老视频可回潮</dd></div>
               <div><dt>产出</dt><dd>5 个候选</dd></div>
             </dl>
             <details class="topic-quality-rule" open>
-              <summary>爆款证据门槛</summary>
+              <summary>榜单证据与排序口径</summary>
               <div id="topic-quality-policy">
-                <p><strong>强低粉爆款优先</strong><span>保留原严格标准，作为最强选题证据。</span></p>
-                <p><strong>潜力低粉爆款补足</strong><span>仍限制 72 小时，并按视频年龄复核播放、播粉比与互动。</span></p>
-                <p><strong>高热爆款补充</strong><span>仅保留发布 7 天内、通过播放与互动复核的视频。</span></p>
-                <p><strong>不足不凑数</strong><span>证据不够时本轮直接停止，不用普通搜索视频补位。</span></p>
+                <p><strong>榜单决定入池</strong><span>有效、相关且去重的 TikHub 榜单视频可以进入研究。</span></p>
+                <p><strong>指标用于排序</strong><span>粉丝、播放与互动只增加复核标签，不再一票否决。</span></p>
+                <p><strong>新近优先</strong><span>72 小时内优先；更早作品如仍在当前榜单，标记为回潮线索。</span></p>
+                <p><strong>不足不凑数</strong><span>仍要求家庭教育相关性和多视频交叉验证，不用普通搜索补位。</span></p>
               </div>
               <small>这是齐家的选题研究标准，不是抖音公开的官方爆款定义。作者粉丝是采集时快照；TikHub 未返回投流信息，因此不声称视频完全依靠自然流量。</small>
             </details>
             <div id="topic-cost-guard" class="topic-cost-guard">
               <strong>本轮成本保护</strong>
-              <span>最多 15 次 TikHub 请求 + 1 次编辑模型调用</span>
+              <span>最多 13 次 TikHub 请求 + 1 次编辑模型调用</span>
             </div>
             <button id="topic-start-button" class="button primary topic-start-button" type="button">开始研究今日选题</button>
             <p id="topic-start-hint" class="field-hint">点击即确认本轮可能产生 API 费用；不会自动发布或自动生成视频。</p>
@@ -83,7 +83,7 @@
           <section id="topic-empty" class="panel topic-empty-state">
             <span class="topic-empty-mark">01</span>
             <h2>从真实抖音样本开始</h2>
-            <p>候选会明确展示数据日期、平台标签、代表视频和成本。热度只用于判断“值不值得讲”，不会被当作家庭教育事实。</p>
+            <p>候选会明确展示榜单采集日期、平台标签、代表视频和成本。热度只用于判断“值不值得讲”，不会被当作家庭教育事实。</p>
           </section>
           <section id="topic-detail" class="panel topic-detail" hidden>
             <div class="panel-heading topic-detail-heading">
@@ -316,6 +316,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.6.1"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.7.0"></script>
 </body>
 </html>

@@ -29,8 +29,8 @@ class QijiaVideoSettings(BaseSettings):
     TIKHUB_API_KEY: str = ""
     TIKHUB_BASE_URL: str = "https://api.tikhub.dev"
     QIJIA_TOPIC_RESEARCH_MODEL: str = ""
-    # 单轮规划上限为 $0.10；按下方 $0.001/成功请求的基础价折算为 100 次。
-    # 当前固定研究流程仍只计划 15 次，不会为了用满预算而额外调用。
+    # 当前固定流程按下方基础价计划 13 次，折合约 ¥0.0871，不超过约 ¥0.10。
+    # 100 次只是异常保护的请求硬上限，流程不会为了用满它而额外调用。
     QIJIA_TOPIC_TIKHUB_REQUEST_BUDGET: int = 100
     # TikHub 文档给出的常见基础价为 $0.001/成功请求；具体端点和折扣以账单为准。
     QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS: float = 0.001

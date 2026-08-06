@@ -43,8 +43,10 @@ class TopicEvidenceTier(StrEnum):
 
     UNASSESSED = "unassessed"
     TREND_SIGNAL = "trend_signal"
+    LOW_FOLLOWER_BILLBOARD = "low_follower_billboard"
     LOW_FOLLOWER_BREAKOUT = "low_follower_breakout"
     EMERGING_LOW_FOLLOWER_BREAKOUT = "emerging_low_follower_breakout"
+    HIGH_LIKE_BILLBOARD = "high_like_billboard"
     HIGH_HEAT_BREAKOUT = "high_heat_breakout"
 
 
@@ -91,6 +93,7 @@ class TopicEvidence(ContractModel):
     published_at: str = Field(default="", max_length=64)
     duration_seconds: float | None = Field(default=None, ge=0)
     metrics: TopicMetrics | None = None
+    metrics_enriched: bool = False
 
     @model_validator(mode="after")
     def validate_evidence_shape(self):
@@ -102,7 +105,12 @@ class TopicEvidence(ContractModel):
                 raise ValueError("视频证据必须使用规范的抖音作品链接")
             if self.metrics is None:
                 raise ValueError("视频证据必须包含平台返回的指标快照")
-        elif self.video_id or self.video_url or self.metrics is not None:
+        elif (
+            self.video_id
+            or self.video_url
+            or self.metrics is not None
+            or self.metrics_enriched
+        ):
             raise ValueError("趋势词证据不得伪装成视频证据")
         return self
 
@@ -199,12 +207,17 @@ class TopicCostSummary(ContractModel):
 
 
 class TopicLowFollowerDiagnostics(ContractModel):
-    """低粉样本的本地复核漏斗；未通过项允许同一视频重复计数。"""
+    """低粉榜样本的整理结果；保留旧淘汰字段以兼容历史记录。"""
 
     received_count: int = Field(default=0, ge=0)
     unique_qualified_count: int = Field(default=0, ge=0)
     strong_qualified_count: int = Field(default=0, ge=0)
     emerging_qualified_count: int = Field(default=0, ge=0)
+    billboard_only_count: int = Field(default=0, ge=0)
+    detail_enriched_count: int = Field(default=0, ge=0)
+    missing_publish_time_count: int = Field(default=0, ge=0)
+    older_than_72h_count: int = Field(default=0, ge=0)
+    missing_follower_metrics_count: int = Field(default=0, ge=0)
     duplicate_qualified_count: int = Field(default=0, ge=0)
     empty_or_unrecognized_query_count: int = Field(default=0, ge=0)
     empty_query_count: int = Field(default=0, ge=0)
@@ -233,7 +246,10 @@ class TopicResearchRun(ContractModel):
     data_provider: Literal["tikhub"] = "tikhub"
     status: TopicResearchStatus = TopicResearchStatus.RUNNING
     valid_through: str = Field(default="", max_length=32)
-    data_window_note: str = Field(default="近 3 天趋势与低粉爆款、近 7 天高热补充", max_length=200)
+    data_window_note: str = Field(
+        default="TikHub 当前低粉爆款榜与高点赞率榜；新近发布优先，发布时间不作淘汰",
+        max_length=200,
+    )
     evidence: list[TopicEvidence] = Field(default_factory=list, max_length=80)
     candidates: list[TopicCandidate] = Field(default_factory=list, max_length=5)
     cost: TopicCostSummary = Field(default_factory=TopicCostSummary)

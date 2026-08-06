@@ -102,8 +102,8 @@ test('topic research is Douyin-only, cost-bounded, and human-gated', () => {
   assert.match(page, /主题<\/dt><dd>家庭教育/);
   assert.match(page, /数据<\/dt><dd>抖音 · TikHub/);
   assert.match(page, /5 个可供人工判断的内容角度/);
-  assert.match(page, /爆款证据门槛/);
-  assert.match(page, /3 天低粉 · 7 天高热/);
+  assert.match(page, /榜单证据与排序口径/);
+  assert.match(page, /72 小时内优先 · 老视频可回潮/);
   assert.match(page, /不足不凑数/);
   assert.match(page, /本轮成本保护/);
   assert.match(app, /\/topic-research\/runs', \{confirm_cost: true\}/);
@@ -116,6 +116,7 @@ test('topic research is Douyin-only, cost-bounded, and human-gated', () => {
   assert.match(app, /requestBudget \* unitPrice/);
   assert.match(app, /不会为了用满预算而增加调用/);
   assert.match(app, /evidence_policy/);
+  assert.match(app, /low_follower_billboard/);
   assert.match(app, /low_follower_breakout/);
   assert.match(app, /emerging_low_follower_breakout/);
   assert.match(app, /deep_engagement_rate/);
@@ -123,7 +124,8 @@ test('topic research is Douyin-only, cost-bounded, and human-gated', () => {
   assert.match(app, /average_daily_plays/);
   assert.match(app, /日均播放/);
   assert.match(page, /id="topic-evidence-diagnostics"/);
-  assert.match(app, /低粉样本复核漏斗/);
+  assert.match(app, /低粉榜样本整理/);
+  assert.match(app, /指标缺失与发布时间只影响标签和排序/);
   assert.match(app, /空结果查询/);
   assert.match(app, /响应结构未识别/);
   assert.match(app, /rejected_missing_title_count/);
