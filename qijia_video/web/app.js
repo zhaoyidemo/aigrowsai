@@ -353,11 +353,11 @@ function renderTopicControls() {
   const requestBudget = Number(capability?.request_budget || 0);
   const unitPrice = Number(capability?.estimated_usd_per_success);
   const maxEstimate = Number.isFinite(unitPrice) && unitPrice > 0
-    ? `，TikHub 规划上限约 ${formatUsd(plannedCalls * unitPrice)}`
+    ? `，TikHub 规划上限约 ${formatUsd((requestBudget || plannedCalls) * unitPrice)}`
     : '';
   $('#topic-cost-guard').innerHTML = `
     <strong>本轮成本保护</strong>
-    <span>计划最多 ${plannedCalls} 次 TikHub 请求${requestBudget ? `，硬上限 ${requestBudget} 次` : ''} + 1 次编辑模型调用${escapeHtml(maxEstimate)}</span>`;
+    <span>当前计划最多 ${plannedCalls} 次 TikHub 请求${requestBudget ? `，硬上限 ${requestBudget} 次` : ''} + 1 次编辑模型调用${escapeHtml(maxEstimate)}；不会为了用满预算而增加调用</span>`;
 }
 
 function renderTopicRuns() {

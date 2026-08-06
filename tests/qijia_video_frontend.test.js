@@ -57,6 +57,8 @@ test('topic research is Douyin-only, cost-bounded, and human-gated', () => {
   assert.match(page, /本轮成本保护/);
   assert.match(app, /\/topic-research\/runs', \{confirm_cost: true\}/);
   assert.match(app, /estimated_usd_per_success/);
+  assert.match(app, /\(requestBudget \|\| plannedCalls\) \* unitPrice/);
+  assert.match(app, /不会为了用满预算而增加调用/);
   assert.match(app, /tikhub_success_count/);
   assert.match(app, /TikHub 调用明细/);
   assert.match(app, /estimated_total_cost_usd/);

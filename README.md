@@ -26,7 +26,7 @@ TikHub 抖音家庭教育数据
 
 - 主题固定为家庭教育，不扩展到泛母婴、婚恋或社会热点。
 - 数据平台固定为抖音，数据服务固定为 TikHub。
-- 每轮计划最多 13 次 TikHub 请求，硬上限由 `QIJIA_TOPIC_TIKHUB_REQUEST_BUDGET` 控制。
+- 当前固定流程每轮计划最多 13 次 TikHub 请求；请求硬上限为 100 次，按 `$0.001/成功请求` 折算的单轮 TikHub 规划上限为 `$0.10`。硬上限由 `QIJIA_TOPIC_TIKHUB_REQUEST_BUDGET` 控制，当前流程不会为了用满预算而增加调用。
 - 每轮只调用 1 次编辑模型，输出恰好 5 个候选，不做播放量或爆款预测。
 - TikHub 每次调用完成后都会立即保存请求 ID 与规划成本；编辑模型的 Token 和供应商上报费用也会在候选门禁前入账。
 - 付费研究在服务重启后不会自动重跑，避免重复计费；用户可人工开始新一轮。
@@ -112,7 +112,7 @@ QIJIA_VIDEO_STORAGE=tos
 ```
 
 Seedream 与 Seedance 复用 `ARK_API_KEY`。豆包 TTS 默认复用 `VOLCENGINE_SPEECH_API_KEY`。
-中国大陆的 TikHub 默认地址为 `https://api.tikhub.dev`。`QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS` 默认采用 TikHub 文档公开的常见基础价 `$0.001/成功请求` 做规划估算；具体端点价格、每日阶梯折扣和最终费用始终以 TikHub 账单为准：<https://docs.tikhub.io/4579905m0>。
+中国大陆的 TikHub 默认地址为 `https://api.tikhub.dev`。`QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS` 默认采用 TikHub 文档公开的常见基础价 `$0.001/成功请求` 做规划估算；配合默认的 100 次请求硬上限，单轮 TikHub 规划上限为 `$0.10`。当前固定流程仍只计划 13 次请求；具体端点价格、每日阶梯折扣和最终费用始终以 TikHub 账单为准：<https://docs.tikhub.io/4579905m0>。
 
 ## 验证
 

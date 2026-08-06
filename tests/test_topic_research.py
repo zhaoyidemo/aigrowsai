@@ -300,7 +300,7 @@ class TikHubProviderContractTests(unittest.IsolatedAsyncioTestCase):
         provider = TikHubDouyinResearchProvider(
             api_key="test-key",
             base_url="https://api.tikhub.dev",
-            request_budget=13,
+            request_budget=100,
             transport=httpx.MockTransport(handler),
         )
 
@@ -311,6 +311,7 @@ class TikHubProviderContractTests(unittest.IsolatedAsyncioTestCase):
 
         collection = await provider.collect_family_education(on_calls=record_calls)
 
+        self.assertEqual(provider.request_budget, 100)
         self.assertEqual(len(collection.calls), 13)
         self.assertEqual(persisted_call_counts, list(range(1, 14)))
         self.assertTrue(all(item.succeeded for item in collection.calls))

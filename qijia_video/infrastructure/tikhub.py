@@ -32,6 +32,7 @@ BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 # 所以后续仍会再做关键词相关性过滤，绝不把整个母婴垂类都当作候选。
 TIKHUB_PARENTING_TAG_ID = "617"
 PLANNED_MAX_TIKHUB_CALLS = 13
+MAX_TIKHUB_REQUEST_BUDGET = 100
 DEFAULT_FAMILY_EDUCATION_QUERIES = (
     "亲子沟通",
     "孩子情绪",
@@ -559,7 +560,9 @@ class TikHubDouyinResearchProvider:
     ):
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "https://api.tikhub.dev").strip().rstrip("/")
-        self.request_budget = max(1, min(30, int(request_budget)))
+        self.request_budget = max(
+            1, min(MAX_TIKHUB_REQUEST_BUDGET, int(request_budget))
+        )
         self.transport = transport
         self.timeout_seconds = max(10.0, float(timeout_seconds))
 
