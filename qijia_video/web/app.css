@@ -389,6 +389,47 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
 .cost-kpi-card > span { display: block; margin-bottom: 7px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .04em; }
 .cost-kpi-card > strong { display: block; overflow-wrap: anywhere; color: #2d4740; font-size: clamp(17px, 2vw, 23px); line-height: 1.2; }
 .cost-kpi-card > small { display: block; margin-top: 7px; color: #727b7f; font-size: 9px; line-height: 1.45; }
+.performance-panel { margin-bottom: 20px; }
+.performance-heading { align-items: end; }
+.performance-heading h2 { margin-bottom: 4px; }
+.performance-heading p:not(.step) { max-width: 760px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.performance-toolbar { display: flex; align-items: end; gap: 9px; }
+.performance-toolbar label { display: grid; gap: 5px; min-width: 140px; color: var(--muted); font-size: 10px; font-weight: 700; }
+.performance-toolbar select { min-height: 38px; background: white; }
+.performance-definition { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; margin: 14px 0; border: 1px solid #d9d5ca; border-radius: 9px; padding: 10px 12px; background: #faf8f2; }
+.performance-definition strong { color: #3c554e; font-size: 10px; line-height: 1.5; }
+.performance-definition span { max-width: 520px; color: var(--muted); font-size: 9px; line-height: 1.5; text-align: right; }
+.performance-kpi-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 9px; }
+.performance-kpi-card { min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fff; }
+.performance-kpi-card.primary { border-color: #a9cbc1; background: #eff7f4; }
+.performance-kpi-card > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .03em; }
+.performance-kpi-card > strong { display: block; overflow-wrap: anywhere; color: #294a42; font-size: clamp(16px, 1.8vw, 21px); line-height: 1.2; }
+.performance-kpi-card > small { display: block; margin-top: 6px; color: #727b7f; font-size: 8px; line-height: 1.45; }
+.performance-progress { margin-top: 13px; border-radius: 9px; padding: 11px 12px; background: #f5f3ed; }
+.performance-progress > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.performance-progress > div:first-child span { color: #596467; font-size: 10px; font-weight: 700; }
+.performance-progress > div:first-child strong { color: #31453f; font-size: 11px; }
+.performance-target-meter { height: 10px; margin-top: 8px; overflow: hidden; border-radius: 999px; background: #dfdcd3; }
+.performance-target-meter > span { display: block; width: 0; height: 100%; border-radius: inherit; background: #d29b3a; transition: width .2s ease; }
+.performance-target-meter.achieved > span { background: #4f8a73; }
+.performance-target-meter.provisional > span { background: #c58a2f; }
+.performance-progress > small { display: block; margin-top: 7px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.performance-table-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 18px 0 9px; }
+.performance-table-heading h3 { margin: 0 0 3px; color: #33413f; font-size: 13px; }
+.performance-table-heading p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.performance-table td:first-child strong { max-width: 350px; }
+.performance-row-links { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 6px; }
+.performance-row-links a { color: var(--accent); font-size: 8px; font-weight: 700; text-decoration: none; }
+.performance-row-links a:hover { text-decoration: underline; }
+.performance-status { display: inline-flex; border-radius: 999px; padding: 3px 6px; font-size: 8px; font-weight: 750; }
+.performance-status.achieved { color: #24634d; background: #e5f2ec; }
+.performance-status.tracking { color: #6c5727; background: #f7efd9; }
+.performance-status.provisional { color: #7e5b24; background: #fff0cf; }
+.performance-status.unavailable { color: #657074; background: #ecefeb; }
+.performance-status.duplicate { color: #7b4d3c; background: #f7e7df; }
+.performance-row-progress { width: 132px; max-width: 100%; height: 5px; margin-top: 6px; overflow: hidden; border-radius: 999px; background: #ebe7dd; }
+.performance-row-progress span { display: block; height: 100%; border-radius: inherit; background: #5f927f; }
+.performance-scope-note { margin: 10px 0 0; color: var(--muted); font-size: 9px; line-height: 1.55; }
 .cost-timeline-panel, .cost-table-panel { margin-bottom: 20px; }
 .cost-section-heading { align-items: flex-end; }
 .panel-heading-note { color: var(--muted); font-size: 10px; }
@@ -438,6 +479,7 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
   .workspace-grid { grid-template-columns: 1fr; }
   .account-layout { grid-template-columns: 1fr; }
   .cost-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .performance-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .cost-breakdown-grid { grid-template-columns: 1fr; }
   .cost-method-grid { grid-template-columns: 1fr; }
   .topbar { padding: 22px 18px; }
@@ -468,6 +510,12 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
   .cost-toolbar-actions { align-items: stretch; flex-wrap: wrap; }
   .cost-toolbar-actions label { flex: 1 1 100%; }
   .cost-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .performance-heading, .performance-definition, .performance-table-heading { align-items: stretch; flex-direction: column; }
+  .performance-definition span { max-width: none; text-align: left; }
+  .performance-toolbar { align-items: stretch; flex-wrap: wrap; }
+  .performance-toolbar label { flex: 1 1 100%; }
+  .performance-toolbar .button { flex: 1 1 auto; }
+  .performance-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cost-timeline-row { grid-template-columns: 78px minmax(0, 1fr); }
   .cost-timeline-row > em { display: none; }
   .cost-pricing-row { grid-template-columns: minmax(100px, 1fr) auto; }

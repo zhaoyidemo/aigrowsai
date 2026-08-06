@@ -1807,7 +1807,16 @@ function renderDetail() {
 }
 
 async function loadAll({selectJobId = ''} = {}) {
-  const [cards, jobs] = await Promise.all([api('GET', '/source-cards'), api('GET', '/jobs')]);
+  const [cards, listedJobs] = await Promise.all([api('GET', '/source-cards'), api('GET', '/jobs')]);
+  const jobs = [...listedJobs];
+  if (selectJobId && !jobs.some((item) => item.id === selectJobId)) {
+    try {
+      const linkedJob = await api('GET', `/jobs/${encodeURIComponent(selectJobId)}`);
+      jobs.unshift(linkedJob);
+    } catch {
+      // The list remains usable when a stale or inaccessible deep link is opened.
+    }
+  }
   state.cards = cards;
   state.jobs = jobs;
   const previousJobId = state.selectedJob?.id || '';
@@ -2576,11 +2585,12 @@ $('#new-card-button').addEventListener('click', () => {
 
 async function init() {
   try {
-    switchWorkspace('topics');
+    const initialJobId = new URLSearchParams(window.location.search).get('job') || '';
+    switchWorkspace(initialJobId ? 'production' : 'topics');
     state.capabilities = await api('GET', '/capabilities');
     renderCapabilities();
     initializePromptFields();
-    await Promise.all([loadAll(), loadTopicRuns()]);
+    await Promise.all([loadAll({selectJobId: initialJobId}), loadTopicRuns()]);
     resumeSelectedTask().catch((error) => notify(error.message, true));
     const runningTopic = state.topicRuns.find(
       (run) => run.status === 'running'

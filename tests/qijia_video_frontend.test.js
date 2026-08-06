@@ -51,12 +51,18 @@ test('administrator can manage bounded colleague access without exposing passwor
   assert.doesNotMatch(accountsApp, /localStorage|sessionStorage/);
 });
 
-test('team cost ledger is read-only, CNY-only, and auditable', () => {
-  assert.match(page, /href="\/qijia-video\/costs">成本分析/);
-  assert.match(costsPage, /内容生产成本分析/);
+test('team cost and Douyin performance dashboard is read-only and auditable', () => {
+  assert.match(page, /href="\/qijia-video\/costs">成本与效果/);
+  assert.match(costsPage, /内容成本与效果分析/);
   assert.match(costsPage, /人民币已计成本 = 供应商回传金额 \+ 有计价依据的估算/);
   assert.match(costsPage, /1 USD = ¥6\.7/);
   assert.doesNotMatch(costsPage, />USD</);
+  assert.match(costsPage, /团队抖音内容效果/);
+  assert.match(costsPage, /播放价值 = 播放量 ÷ 1000 × ¥10/);
+  assert.match(costsPage, /id="performance-tracked-videos"/);
+  assert.match(costsPage, /id="performance-target-meter"/);
+  assert.match(costsPage, /id="performance-table-body"/);
+  assert.match(costsPage, /id="performance-export-button"/);
   assert.match(costsPage, /id="cost-by-provider"/);
   assert.match(costsPage, /id="cost-by-stage"/);
   assert.match(costsPage, /id="cost-by-creator"/);
@@ -65,6 +71,16 @@ test('team cost ledger is read-only, CNY-only, and auditable', () => {
   assert.match(costsApp, /reported_cny/);
   assert.match(costsApp, /estimated_cny/);
   assert.match(costsApp, /unpriced_event_count/);
+  assert.match(costsApp, /function renderPerformance/);
+  assert.match(costsApp, /performance\.period\?\.cohort_basis/);
+  assert.match(costsApp, /target_achievement_rate/);
+  assert.match(costsApp, /target_achieved_provisional/);
+  assert.match(costsApp, /duplicate_binding/);
+  assert.match(costsApp, /exportPerformanceCsv/);
+  assert.match(costsApp, /qijia-douyin-performance-/);
+  assert.match(costsApp, /\/qijia-video\?job=/);
+  assert.match(app, /new URLSearchParams\(window\.location\.search\)\.get\('job'\)/);
+  assert.match(app, /api\('GET', `\/jobs\/\$\{encodeURIComponent\(selectJobId\)\}`\)/);
   assert.match(costsApp, /exportCsv/);
   assert.match(costsApp, /URL\.createObjectURL/);
   assert.match(costsApp, /\^\[\\t\\r\\n \]\*\[=\+\\-@\]/);

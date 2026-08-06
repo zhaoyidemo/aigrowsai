@@ -3,6 +3,8 @@ from datetime import datetime, timedelta
 
 from qijia_video.contracts import (
     BEIJING_TZ,
+    DouyinPerformance,
+    DouyinPlaybackSnapshot,
     FirstFrameCandidate,
     JobState,
     NarrationAudioSegment,
@@ -165,6 +167,262 @@ class CostAnalysisTests(unittest.TestCase):
             "openrouter", "tikhub", "volcengine-seedream",
             "volcengine-seedance", "volcengine-seed-tts-2.0",
         })
+
+    def test_team_performance_uses_latest_plays_and_whole_lifetime_video_cost(self):
+        first = video_job(
+            job_id="job_breakout",
+            created_by="editor_a",
+            usage_records=[ProviderUsageRecord(
+                usage_id="usage_breakout",
+                operation="seedance_video",
+                provider="volcengine-seedance",
+                succeeded=True,
+                estimated_cost=20,
+                estimated_currency="CNY",
+                occurred_at=NOW_TEXT,
+            )],
+            douyin_performance=DouyinPerformance(
+                video_id="7312345678901234567",
+                video_url="https://www.douyin.com/video/7312345678901234567",
+                video_title="写作业不再催",
+                author_name="齐家AI家庭教练",
+                bound_at=NOW_TEXT,
+                updated_at=NOW_TEXT,
+                snapshots=[
+                    DouyinPlaybackSnapshot(
+                        play_count=1000,
+                        observed_at=(NOW - timedelta(hours=6)).isoformat(
+                            timespec="seconds"
+                        ),
+                    ),
+                    DouyinPlaybackSnapshot(
+                        play_count=20000,
+                        observed_at=NOW_TEXT,
+                    ),
+                ],
+            ),
+        )
+        second = video_job(
+            job_id="job_growing",
+            created_by="editor_b",
+            usage_records=[ProviderUsageRecord(
+                usage_id="usage_growing",
+                operation="seedance_video",
+                provider="volcengine-seedance",
+                succeeded=True,
+                estimated_cost=10,
+                estimated_currency="CNY",
+                occurred_at=NOW_TEXT,
+            )],
+            douyin_performance=DouyinPerformance(
+                video_id="7412345678901234567",
+                video_url="https://www.douyin.com/video/7412345678901234567",
+                bound_at=NOW_TEXT,
+                updated_at=NOW_TEXT,
+                snapshots=[DouyinPlaybackSnapshot(
+                    play_count=5000,
+                    observed_at=NOW_TEXT,
+                )],
+            ),
+        )
+        unbound = video_job(job_id="job_not_published", created_by="editor_c")
+
+        result = build_cost_analysis(
+            [first, second, unbound],
+            [topic_run()],
+            days=30,
+            now=NOW,
+        )
+        performance = result["performance"]
+        summary = performance["summary"]
+
+        self.assertEqual(performance["platform"], "douyin")
+        self.assertEqual(summary["packaged_video_count"], 3)
+        self.assertEqual(summary["bound_job_count"], 2)
+        self.assertEqual(summary["tracked_video_count"], 2)
+        self.assertEqual(summary["duplicate_binding_count"], 0)
+        self.assertEqual(summary["untracked_packaged_count"], 1)
+        self.assertAlmostEqual(summary["tracking_coverage_ratio"], 2 / 3, places=4)
+        self.assertEqual(summary["snapshot_count"], 3)
+        self.assertEqual(summary["total_play_count"], 25000)
+        self.assertEqual(summary["accounted_cost_cny"], 30)
+        self.assertEqual(summary["playback_value_cny"], 250)
+        self.assertAlmostEqual(summary["roi_multiple"], 250 / 30, places=4)
+        self.assertEqual(summary["target_views"], 30000)
+        self.assertEqual(summary["remaining_views"], 5000)
+        self.assertFalse(summary["target_achieved"])
+        self.assertEqual(summary["target_achieved_count"], 1)
+        self.assertAlmostEqual(summary["target_achievement_rate"], 0.5)
+        self.assertTrue(summary["cost_complete"])
+        self.assertEqual(
+            [row["job_id"] for row in performance["rows"]],
+            ["job_breakout", "job_growing"],
+        )
+        self.assertEqual(performance["rows"][0]["play_count"], 20000)
+        self.assertEqual(performance["rows"][0]["roi_multiple"], 10)
+        self.assertTrue(performance["rows"][0]["target_achieved"])
+        self.assertEqual(performance["rows"][1]["roi_multiple"], 5)
+        self.assertEqual(
+            performance["basis"]["cost_scope"],
+            "只包含每条视频自身的模型、数据 API 与播放回流成本；不分摊选题研究成本",
+        )
+
+    def test_team_performance_deduplicates_the_same_douyin_work(self):
+        video_id = "7712345678901234567"
+        canonical = video_job(
+            job_id="job_canonical",
+            usage_records=[ProviderUsageRecord(
+                usage_id="usage_canonical",
+                operation="seedance_video",
+                provider="volcengine-seedance",
+                succeeded=True,
+                estimated_cost=10,
+                estimated_currency="CNY",
+                occurred_at=NOW_TEXT,
+            )],
+            douyin_performance=DouyinPerformance(
+                video_id=video_id,
+                video_url=f"https://www.douyin.com/video/{video_id}",
+                bound_at=(NOW - timedelta(hours=1)).isoformat(
+                    timespec="seconds"
+                ),
+                updated_at=NOW_TEXT,
+                snapshots=[DouyinPlaybackSnapshot(
+                    play_count=100,
+                    observed_at=NOW_TEXT,
+                )],
+            ),
+        )
+        duplicate = video_job(
+            job_id="job_duplicate",
+            usage_records=[ProviderUsageRecord(
+                usage_id="usage_duplicate",
+                operation="seedance_video",
+                provider="volcengine-seedance",
+                succeeded=True,
+                estimated_cost=99,
+                estimated_currency="CNY",
+                occurred_at=NOW_TEXT,
+            )],
+            douyin_performance=DouyinPerformance(
+                video_id=video_id,
+                video_url=f"https://www.douyin.com/video/{video_id}",
+                bound_at=NOW_TEXT,
+                updated_at=NOW_TEXT,
+                snapshots=[DouyinPlaybackSnapshot(
+                    play_count=999,
+                    observed_at=NOW_TEXT,
+                )],
+            ),
+        )
+
+        performance = build_cost_analysis(
+            [duplicate, canonical], [], days=30, now=NOW
+        )["performance"]
+        summary = performance["summary"]
+        rows = {row["job_id"]: row for row in performance["rows"]}
+
+        self.assertEqual(summary["packaged_video_count"], 2)
+        self.assertEqual(summary["bound_job_count"], 2)
+        self.assertEqual(summary["tracked_video_count"], 1)
+        self.assertEqual(summary["duplicate_binding_count"], 1)
+        self.assertEqual(summary["untracked_packaged_count"], 0)
+        self.assertEqual(summary["tracking_coverage_ratio"], 0.5)
+        self.assertEqual(summary["total_play_count"], 100)
+        self.assertEqual(summary["accounted_cost_cny"], 10)
+        self.assertFalse(rows["job_canonical"]["duplicate_binding"])
+        self.assertTrue(rows["job_duplicate"]["duplicate_binding"])
+        self.assertEqual(
+            rows["job_duplicate"]["duplicate_of_job_id"],
+            "job_canonical",
+        )
+
+    def test_team_performance_cohort_uses_first_binding_not_refresh_time(self):
+        old_bound_at = (NOW - timedelta(days=40)).isoformat(timespec="seconds")
+        old_publication = video_job(
+            job_id="job_old_publication",
+            updated_at=NOW_TEXT,
+            douyin_performance=DouyinPerformance(
+                video_id="7512345678901234567",
+                video_url="https://www.douyin.com/video/7512345678901234567",
+                bound_at=old_bound_at,
+                updated_at=NOW_TEXT,
+                snapshots=[DouyinPlaybackSnapshot(
+                    play_count=999999,
+                    observed_at=NOW_TEXT,
+                )],
+            ),
+        )
+        recent_unbound = video_job(job_id="job_recent_unbound")
+
+        result = build_cost_analysis(
+            [old_publication, recent_unbound],
+            [],
+            days=30,
+            now=NOW,
+        )
+        performance = result["performance"]
+
+        self.assertEqual(performance["summary"]["packaged_video_count"], 1)
+        self.assertEqual(performance["summary"]["tracked_video_count"], 0)
+        self.assertEqual(performance["summary"]["untracked_packaged_count"], 1)
+        self.assertEqual(performance["rows"], [])
+        self.assertIn(
+            "手动刷新不会改变视频所属时间范围",
+            performance["period"]["cohort_basis"],
+        )
+
+    def test_team_performance_marks_roi_provisional_when_cost_is_unpriced(self):
+        job = video_job(
+            usage_records=[
+                ProviderUsageRecord(
+                    usage_id="usage_priced",
+                    operation="seedance_video",
+                    provider="volcengine-seedance",
+                    succeeded=True,
+                    estimated_cost=10,
+                    estimated_currency="CNY",
+                    occurred_at=NOW_TEXT,
+                ),
+                ProviderUsageRecord(
+                    usage_id="usage_unknown",
+                    operation="seedance_video",
+                    provider="volcengine-seedance",
+                    succeeded=False,
+                    occurred_at=NOW_TEXT,
+                    note="网络结果未知，待对账",
+                ),
+            ],
+            douyin_performance=DouyinPerformance(
+                video_id="7612345678901234567",
+                video_url="https://www.douyin.com/video/7612345678901234567",
+                bound_at=NOW_TEXT,
+                updated_at=NOW_TEXT,
+                snapshots=[DouyinPlaybackSnapshot(
+                    play_count=12000,
+                    observed_at=NOW_TEXT,
+                )],
+            ),
+        )
+
+        performance = build_cost_analysis(
+            [job], [], days=30, now=NOW
+        )["performance"]
+        summary = performance["summary"]
+
+        self.assertFalse(summary["cost_complete"])
+        self.assertEqual(summary["provisional_video_count"], 1)
+        self.assertEqual(summary["unpriced_event_count"], 1)
+        self.assertEqual(summary["roi_multiple"], 12)
+        self.assertFalse(summary["target_achieved"])
+        self.assertTrue(summary["target_achieved_provisional"])
+        self.assertEqual(summary["target_achieved_count"], 0)
+        self.assertEqual(summary["provisional_target_achieved_count"], 1)
+        self.assertFalse(performance["rows"][0]["cost_complete"])
+        self.assertFalse(performance["rows"][0]["target_achieved"])
+        self.assertTrue(
+            performance["rows"][0]["target_achieved_provisional"]
+        )
 
     def test_historical_artifacts_use_current_price_only_when_snapshot_is_missing(self):
         job = video_job(

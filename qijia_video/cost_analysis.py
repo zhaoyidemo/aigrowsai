@@ -603,6 +603,12 @@ def build_douyin_performance_analysis(
         if playback_value is not None and accounted_cost > 0
         else None
     )
+    cost_complete = totals["unpriced_event_count"] == 0
+    meets_accounted_target = bool(
+        play_count is not None
+        and accounted_cost > 0
+        and play_count >= target_views
+    )
     return {
         "platform": "douyin",
         "play_count": play_count,
@@ -610,8 +616,10 @@ def build_douyin_performance_analysis(
         "snapshot_count": len(snapshots),
         "accounted_cost_cny": _round_money(accounted_cost),
         "cost_coverage_ratio": totals["coverage_ratio"],
+        "cost_event_count": totals["event_count"],
+        "priced_event_count": totals["priced_event_count"],
         "unpriced_event_count": totals["unpriced_event_count"],
-        "cost_complete": totals["unpriced_event_count"] == 0,
+        "cost_complete": cost_complete,
         "playback_value_cny": playback_value,
         "roi_multiple": roi_multiple,
         "target_roi_multiple": TARGET_ROI_MULTIPLE,
@@ -621,12 +629,252 @@ def build_douyin_performance_analysis(
             if play_count is not None
             else target_views
         ),
-        "target_achieved": bool(
-            play_count is not None
-            and accounted_cost > 0
-            and play_count >= target_views
+        "target_achieved": meets_accounted_target and cost_complete,
+        "target_achieved_provisional": (
+            meets_accounted_target and not cost_complete
         ),
         "basis": "每千次播放按 ¥10 估值；目标 ROI 为 10 倍",
+    }
+
+
+def build_team_content_performance(
+    jobs: list[VideoJob],
+    *,
+    days: int = 30,
+    seedream_price_per_image: float = 0.22,
+    seedance_price_per_million_tokens: float = 4.2,
+    seedance_model_prices_per_million_tokens: dict[str, float] | None = None,
+    tts_price_per_10000_characters: float = 5.0,
+    now: datetime | None = None,
+) -> dict:
+    """Build a comparable cohort from manually bound Douyin publications.
+
+    The selected period decides which publications belong to the cohort. Once a
+    publication is included, both its latest cumulative play count and its
+    whole-life video cost are used so the ROI numerator and denominator remain
+    comparable. Refreshing a snapshot never moves an old publication into a
+    newer cohort.
+    """
+
+    current = now or datetime.now(BEIJING_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=BEIJING_TZ)
+    current = current.astimezone(BEIJING_TZ)
+    safe_days = max(0, min(3650, int(days or 0)))
+    cutoff = current - timedelta(days=safe_days) if safe_days else None
+
+    packaged_jobs: list[VideoJob] = []
+    for job in jobs:
+        if job.state.value != "packaged":
+            continue
+        cohort_time = _parse_time(
+            (
+                job.douyin_performance.bound_at
+                if job.douyin_performance
+                else job.updated_at or job.created_at
+            )
+        )
+        if cutoff is None or cohort_time >= cutoff:
+            packaged_jobs.append(job)
+
+    rows: list[dict] = []
+    for job in packaged_jobs:
+        performance = job.douyin_performance
+        if performance is None:
+            continue
+        analysis = build_douyin_performance_analysis(
+            job,
+            seedream_price_per_image=seedream_price_per_image,
+            seedance_price_per_million_tokens=(
+                seedance_price_per_million_tokens
+            ),
+            seedance_model_prices_per_million_tokens=(
+                seedance_model_prices_per_million_tokens
+            ),
+            tts_price_per_10000_characters=(
+                tts_price_per_10000_characters
+            ),
+        )
+        rows.append({
+            "job_id": job.id,
+            "title": _job_title(job),
+            "creator": job.created_by or "未知",
+            "video_id": performance.video_id,
+            "video_url": performance.video_url,
+            "video_title": performance.video_title,
+            "author_name": performance.author_name,
+            "bound_at": performance.bound_at,
+            "updated_at": performance.updated_at,
+            **analysis,
+        })
+
+    rows_by_video_id: dict[str, list[dict]] = {}
+    for row in rows:
+        rows_by_video_id.setdefault(row["video_id"], []).append(row)
+    for bindings in rows_by_video_id.values():
+        bindings.sort(
+            key=lambda item: (
+                _parse_time(item["bound_at"]),
+                item["job_id"],
+            )
+        )
+        canonical_job_id = bindings[0]["job_id"]
+        for index, row in enumerate(bindings):
+            row["duplicate_binding"] = index > 0
+            row["duplicate_of_job_id"] = (
+                canonical_job_id if index > 0 else ""
+            )
+
+    rows.sort(
+        key=lambda item: (
+            not bool(item["duplicate_binding"]),
+            item["roi_multiple"] is not None,
+            _number(item["roi_multiple"]),
+            int(item["play_count"] or 0),
+            item["observed_at"],
+        ),
+        reverse=True,
+    )
+    unique_rows = [
+        item for item in rows if not item["duplicate_binding"]
+    ]
+    bound_job_count = len(rows)
+    tracked_count = len(unique_rows)
+    duplicate_binding_count = bound_job_count - tracked_count
+    packaged_count = len(packaged_jobs)
+    total_play_count = sum(
+        int(item["play_count"] or 0) for item in unique_rows
+    )
+    total_cost = _round_money(sum(
+        _number(item["accounted_cost_cny"]) for item in unique_rows
+    ))
+    total_value = _round_money(sum(
+        _number(item["playback_value_cny"]) for item in unique_rows
+    ))
+    total_cost_events = sum(
+        int(item["cost_event_count"] or 0) for item in unique_rows
+    )
+    total_priced_events = sum(
+        int(item["priced_event_count"] or 0) for item in unique_rows
+    )
+    total_unpriced_events = sum(
+        int(item["unpriced_event_count"] or 0) for item in unique_rows
+    )
+    portfolio_target_views = math.ceil(
+        total_cost
+        * TARGET_ROI_MULTIPLE
+        * 1000
+        / PLAYBACK_VALUE_CNY_PER_1000
+    )
+    portfolio_roi = (
+        round(total_value / total_cost, 4)
+        if total_cost > 0
+        else None
+    )
+    target_achieved_count = sum(
+        bool(item["target_achieved"]) for item in unique_rows
+    )
+    provisional_target_achieved_count = sum(
+        bool(item["target_achieved_provisional"]) for item in unique_rows
+    )
+    portfolio_meets_accounted_target = bool(
+        tracked_count
+        and total_cost > 0
+        and total_play_count >= portfolio_target_views
+    )
+    latest_observed = max(
+        (
+            _parse_time(item["observed_at"])
+            for item in unique_rows
+            if item["observed_at"]
+        ),
+        default=None,
+    )
+    return {
+        "platform": "douyin",
+        "period": {
+            "days": safe_days,
+            "label": "全部记录" if safe_days == 0 else f"最近 {safe_days} 天",
+            "cohort_basis": (
+                "已绑定视频按首次绑定时间纳入；未绑定的已打包视频按任务更新时间纳入。"
+                "手动刷新不会改变视频所属时间范围。"
+            ),
+        },
+        "summary": {
+            "packaged_video_count": packaged_count,
+            "bound_job_count": bound_job_count,
+            "tracked_video_count": tracked_count,
+            "duplicate_binding_count": duplicate_binding_count,
+            "untracked_packaged_count": max(
+                0, packaged_count - bound_job_count
+            ),
+            "tracking_coverage_ratio": (
+                round(tracked_count / packaged_count, 4)
+                if packaged_count
+                else 0
+            ),
+            "snapshot_count": sum(
+                int(item["snapshot_count"] or 0) for item in unique_rows
+            ),
+            "total_play_count": total_play_count,
+            "accounted_cost_cny": total_cost,
+            "playback_value_cny": total_value,
+            "roi_multiple": portfolio_roi,
+            "target_roi_multiple": TARGET_ROI_MULTIPLE,
+            "target_views": portfolio_target_views,
+            "remaining_views": max(
+                0, portfolio_target_views - total_play_count
+            ),
+            "target_achieved": bool(
+                portfolio_meets_accounted_target
+                and total_unpriced_events == 0
+            ),
+            "target_achieved_provisional": bool(
+                portfolio_meets_accounted_target
+                and total_unpriced_events > 0
+            ),
+            "target_achieved_count": target_achieved_count,
+            "provisional_target_achieved_count": (
+                provisional_target_achieved_count
+            ),
+            "target_achievement_rate": (
+                round(target_achieved_count / tracked_count, 4)
+                if tracked_count
+                else 0
+            ),
+            "cost_event_count": total_cost_events,
+            "priced_event_count": total_priced_events,
+            "unpriced_event_count": total_unpriced_events,
+            "cost_coverage_ratio": (
+                round(total_priced_events / total_cost_events, 4)
+                if total_cost_events
+                else 0
+            ),
+            "cost_complete": total_unpriced_events == 0,
+            "provisional_video_count": sum(
+                not bool(item["cost_complete"]) for item in unique_rows
+            ),
+            "latest_observed_at": (
+                latest_observed.isoformat(timespec="seconds")
+                if latest_observed
+                else ""
+            ),
+        },
+        "rows": rows,
+        "basis": {
+            "playback_value": "播放量 ÷ 1000 × ¥10",
+            "portfolio_roi": "纳入视频播放价值合计 ÷ 纳入视频全生命周期已计成本",
+            "target": "10 倍 ROI；团队目标播放量按合计成本计算",
+            "cost_scope": (
+                "只包含每条视频自身的模型、数据 API 与播放回流成本；"
+                "不分摊选题研究成本"
+            ),
+            "data_scope": (
+                "只读取已手填绑定的抖音作品最新快照；"
+                "不采集小红书、视频号或 APP 下载注册；"
+                "同一抖音作品重复绑定时只按最早绑定任务计入团队合计"
+            ),
+        },
     }
 
 
@@ -812,6 +1060,19 @@ def build_cost_analysis(
             ),
         },
         "summary": summary,
+        "performance": build_team_content_performance(
+            jobs,
+            days=safe_days,
+            seedream_price_per_image=seedream_price_per_image,
+            seedance_price_per_million_tokens=(
+                seedance_price_per_million_tokens
+            ),
+            seedance_model_prices_per_million_tokens=model_prices,
+            tts_price_per_10000_characters=(
+                tts_price_per_10000_characters
+            ),
+            now=current,
+        ),
         "timeline": timeline,
         "by_provider": _group_rows(
             events,

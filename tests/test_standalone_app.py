@@ -67,7 +67,7 @@ class StandaloneAuthenticationTests(unittest.TestCase):
         )
         costs = self.client.get("/qijia-video/costs")
         self.assertEqual(costs.status_code, 200)
-        self.assertIn("内容生产成本分析", costs.text)
+        self.assertIn("内容成本与效果分析", costs.text)
         self.assertEqual(costs.headers["cache-control"], "no-store")
 
     def test_wrong_password_fails_without_a_session(self):
