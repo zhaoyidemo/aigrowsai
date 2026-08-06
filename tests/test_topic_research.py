@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -26,6 +26,7 @@ from qijia_video.topic_contracts import (
     TopicCandidateProposal,
     TopicContentPillar,
     TopicEvidence,
+    TopicEvidenceTier,
     TopicEvidenceType,
     TopicMetrics,
     TopicModelUsage,
@@ -45,15 +46,29 @@ def video_evidence(index: int) -> TopicEvidence:
     return TopicEvidence(
         id=f"ev_{index:012x}",
         evidence_type=TopicEvidenceType.VIDEO,
-        signal_types=[TopicSignalType.SEARCH_VIDEO],
+        signal_types=[TopicSignalType.LOW_FOLLOWER_VIDEO],
         queries=["亲子沟通"],
         title=f"家庭教育视频样本 {index}",
-        platform_labels=["近 7 天综合搜索样本"],
+        platform_labels=["TikHub 近 3 天低粉爆款标签"],
+        quality_tier=TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
+        qualification_reasons=["测试中的低粉爆款证据"],
         source_rank=index,
         video_id=video_id,
         video_url=f"https://www.douyin.com/video/{video_id}",
         author_name="测试作者",
-        metrics=TopicMetrics(play_count=1000 + index, like_count=100),
+        metrics=TopicMetrics(
+            play_count=600_000 + index,
+            like_count=36_000,
+            comment_count=2_500,
+            share_count=1_400,
+            collect_count=1_000,
+            follower_count=20_000,
+            like_rate=0.06,
+            deep_engagement_rate=0.008167,
+            play_follower_ratio=30,
+            published_age_hours=24,
+            average_daily_plays=600_000,
+        ),
     )
 
 
@@ -67,7 +82,7 @@ def topic_fixture() -> tuple[list[TopicEvidence], list[TopicCandidateProposal]]:
         platform_labels=["母婴垂类近 3 天创作热词"],
         source_rank=1,
     )
-    videos = [video_evidence(index) for index in range(1, 6)]
+    videos = [video_evidence(index) for index in range(1, 11)]
     pillars = [
         TopicContentPillar.COMMUNICATION,
         TopicContentPillar.EMOTION,
@@ -83,7 +98,11 @@ def topic_fixture() -> tuple[list[TopicEvidence], list[TopicCandidateProposal]]:
             editorial_angle="从家长可观察的日常互动切入，提出一个需要继续查证的教育命题。",
             opening_hook="孩子真正需要的，也许不是你立刻给出的答案。",
             why_now="近期抖音家庭教育样本持续出现这一困惑，且代表视频已有可见互动数据。",
-            evidence_refs=[term.id, videos[index - 1].id],
+            evidence_refs=[
+                term.id,
+                videos[(index - 1) * 2].id,
+                videos[(index - 1) * 2 + 1].id,
+            ],
             risk_note="不诊断儿童，不承诺单一方法适用于所有家庭。",
         )
         for index, pillar in enumerate(pillars, start=1)
@@ -93,7 +112,7 @@ def topic_fixture() -> tuple[list[TopicEvidence], list[TopicCandidateProposal]]:
 
 class StaticTopicDataProvider:
     name = "fake-tikhub"
-    request_budget = 13
+    request_budget = 15
     configured = True
 
     def __init__(self, evidence: list[TopicEvidence]):
@@ -176,26 +195,28 @@ class TopicNormalizationTests(unittest.TestCase):
         self.assertEqual(card.parent_question, "孩子情绪失控时，家长如何先稳定互动？")
 
     def test_video_normalization_uses_canonical_link_and_transparent_rates(self):
+        as_of = datetime(2026, 8, 6, 12, tzinfo=BEIJING_TZ)
         item = _video_evidence(
             {
                 "aweme_id": "73000000000000001",
                 "desc": "孩子发脾气时，家长如何回应",
-                "create_time": 1_722_787_200,
-                "author": {"nickname": "家庭教育作者", "follower_count": 500},
+                "create_time": int((as_of - timedelta(hours=48)).timestamp()),
+                "author": {"nickname": "家庭教育作者", "follower_count": 25_000},
                 "statistics": {
-                    "play_count": 10_000,
-                    "digg_count": 500,
-                    "comment_count": 80,
-                    "share_count": 40,
-                    "collect_count": 100,
+                    "play_count": 500_000,
+                    "digg_count": 25_000,
+                    "comment_count": 2_000,
+                    "share_count": 1_200,
+                    "collect_count": 800,
                 },
                 "video": {"duration": 45_000},
                 "share_url": "https://untrusted.example/video",
             },
             query="孩子情绪",
-            signal_type=TopicSignalType.SEARCH_VIDEO,
-            label="近 7 天综合搜索样本",
+            signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
+            label="TikHub 近 3 天低粉爆款标签",
             rank=1,
+            as_of=as_of,
         )
 
         self.assertIsNotNone(item)
@@ -206,6 +227,120 @@ class TopicNormalizationTests(unittest.TestCase):
         self.assertEqual(item.duration_seconds, 45)
         self.assertEqual(item.metrics.like_rate, 0.05)
         self.assertEqual(item.metrics.play_follower_ratio, 20)
+        self.assertEqual(item.metrics.deep_engagement_rate, 0.008)
+        self.assertEqual(item.metrics.published_age_hours, 48)
+        self.assertEqual(item.metrics.average_daily_plays, 250_000)
+        self.assertEqual(
+            item.quality_tier,
+            TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
+        )
+
+    def test_video_normalization_rejects_weak_or_off_topic_platform_labels(self):
+        as_of = datetime(2026, 8, 6, 12, tzinfo=BEIJING_TZ)
+        base = {
+            "aweme_id": "73000000000000002",
+            "desc": "孩子发脾气时家长如何回应",
+            "create_time": int((as_of - timedelta(hours=24)).timestamp()),
+            "author": {"follower_count": 20_000},
+            "statistics": {
+                "play_count": 499_999,
+                "digg_count": 30_000,
+                "comment_count": 2_500,
+                "share_count": 1_500,
+                "collect_count": 1_000,
+            },
+        }
+        weak = _video_evidence(
+            base,
+            query="孩子情绪",
+            signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
+            label="TikHub 近 3 天低粉爆款标签",
+            rank=1,
+            as_of=as_of,
+        )
+        off_topic = _video_evidence(
+            {
+                **base,
+                "aweme_id": "73000000000000003",
+                "desc": "今天的城市晚霞真好看",
+                "statistics": {
+                    "play_count": 1_000_000,
+                    "digg_count": 80_000,
+                    "comment_count": 4_000,
+                    "share_count": 2_500,
+                    "collect_count": 1_500,
+                },
+            },
+            query="孩子情绪",
+            signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
+            label="TikHub 近 3 天低粉爆款标签",
+            rank=1,
+            as_of=as_of,
+        )
+        stale = _video_evidence(
+            {
+                **base,
+                "aweme_id": "73000000000000004",
+                "create_time": int((as_of - timedelta(hours=73)).timestamp()),
+                "statistics": {
+                    "play_count": 1_000_000,
+                    "digg_count": 80_000,
+                    "comment_count": 4_000,
+                    "share_count": 2_500,
+                    "collect_count": 1_500,
+                },
+            },
+            query="孩子情绪",
+            signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
+            label="TikHub 近 3 天低粉爆款标签",
+            rank=1,
+            as_of=as_of,
+        )
+        missing_time_payload = {
+            **base,
+            "aweme_id": "73000000000000005",
+            "statistics": {
+                "play_count": 1_000_000,
+                "digg_count": 80_000,
+                "comment_count": 4_000,
+                "share_count": 2_500,
+                "collect_count": 1_500,
+            },
+        }
+        missing_time_payload.pop("create_time")
+        missing_time = _video_evidence(
+            missing_time_payload,
+            query="孩子情绪",
+            signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
+            label="TikHub 近 3 天低粉爆款标签",
+            rank=1,
+            as_of=as_of,
+        )
+        future = _video_evidence(
+            {
+                **base,
+                "aweme_id": "73000000000000006",
+                "create_time": int((as_of + timedelta(seconds=1)).timestamp()),
+                "statistics": {
+                    "play_count": 1_000_000,
+                    "digg_count": 80_000,
+                    "comment_count": 4_000,
+                    "share_count": 2_500,
+                    "collect_count": 1_500,
+                },
+            },
+            query="孩子情绪",
+            signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
+            label="TikHub 近 3 天低粉爆款标签",
+            rank=1,
+            as_of=as_of,
+        )
+
+        self.assertIsNone(weak)
+        self.assertIsNone(off_topic)
+        self.assertIsNone(stale)
+        self.assertIsNone(missing_time)
+        self.assertIsNone(future)
 
     def test_term_filter_keeps_family_education_and_excludes_maternal_goods(self):
         terms = _extract_terms({
@@ -224,24 +359,28 @@ class TopicNormalizationTests(unittest.TestCase):
 class TikHubProviderContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_fixed_research_plan_matches_documented_tikhub_contracts(self):
         today = datetime.now(BEIJING_TZ).strftime("%Y%m%d")
-        search_ids = {
-            query: f"731000000000000{index:02d}"
-            for index, query in enumerate(DEFAULT_FAMILY_EDUCATION_QUERIES, start=1)
-        }
+        collection_now = datetime.now(BEIJING_TZ)
         seen_paths: list[str] = []
         item_labels: set[str] = set()
 
-        def aweme(video_id: str, title: str) -> dict:
+        def aweme(video_id: str, title: str, label_type: str) -> dict:
+            low_follower = label_type == "1"
             return {
                 "aweme_id": video_id,
                 "desc": title,
-                "author": {"nickname": "测试作者", "follower_count": 800},
+                "create_time": int((
+                    collection_now - timedelta(hours=12 if low_follower else 72)
+                ).timestamp()),
+                "author": {
+                    "nickname": "测试作者",
+                    "follower_count": 20_000 if low_follower else 500_000,
+                },
                 "statistics": {
-                    "play_count": 20_000,
-                    "digg_count": 900,
-                    "comment_count": 60,
-                    "share_count": 30,
-                    "collect_count": 120,
+                    "play_count": 600_000 if low_follower else 1_200_000,
+                    "digg_count": 36_000 if low_follower else 108_000,
+                    "comment_count": 3_000 if low_follower else 6_000,
+                    "share_count": 1_800 if low_follower else 3_600,
+                    "collect_count": 1_200 if low_follower else 2_400,
                 },
                 "video": {"duration": 36_000},
             }
@@ -272,28 +411,21 @@ class TikHubProviderContractTests(unittest.IsolatedAsyncioTestCase):
                     {"topic_name": "青春期亲子边界"},
                     {"topic_name": "孩子学习习惯"},
                 ]})
-            if path.endswith("/fetch_video_search_v2"):
-                payload = json.loads(request.content)
-                self.assertEqual(payload["publish_time"], "7")
-                self.assertEqual(payload["filter_duration"], "0-1")
-                query = payload["keyword"]
-                return response({
-                    "business_data": [{"data": {"aweme_info": aweme(
-                        search_ids[query], f"{query}的家庭教育样本"
-                    )}}]
-                })
-            if path.endswith("/fetch_content_creative_keyword_items"):
-                keyword = request.url.params["keyword"]
-                suffix = "91" if keyword == "亲子沟通" else "92"
-                return response({"items": [aweme(
-                    f"731000000000000{suffix}", f"{keyword}贡献视频"
-                )]})
             if path.endswith("/fetch_item_query"):
                 self.assertEqual(request.url.params["category_id"], "617")
+                self.assertEqual(request.url.params["duration_type"], "6")
                 item_labels.add(request.url.params["label_type"])
                 label = request.url.params["label_type"]
+                self.assertEqual(
+                    request.url.params["date_type"],
+                    "3" if label == "1" else "7",
+                )
+                query = request.url.params["query"]
+                query_index = DEFAULT_FAMILY_EDUCATION_QUERIES.index(query) + 1
                 return response({"items": [aweme(
-                    f"7310000000000008{label}", "家庭教育平台标签样本"
+                    f"7310000000000{query_index:02d}{label}",
+                    f"{query}的家庭教育爆款样本",
+                    label,
                 )]})
             self.fail(f"unexpected request: {path}")
 
@@ -312,14 +444,18 @@ class TikHubProviderContractTests(unittest.IsolatedAsyncioTestCase):
         collection = await provider.collect_family_education(on_calls=record_calls)
 
         self.assertEqual(provider.request_budget, 100)
-        self.assertEqual(len(collection.calls), 13)
-        self.assertEqual(persisted_call_counts, list(range(1, 14)))
+        self.assertEqual(len(collection.calls), 15)
+        self.assertEqual(persisted_call_counts, list(range(1, 16)))
         self.assertTrue(all(item.succeeded for item in collection.calls))
-        self.assertEqual(item_labels, {"1", "2"})
+        self.assertEqual(item_labels, {"1", "4"})
         self.assertGreaterEqual(
             sum(item.evidence_type == TopicEvidenceType.VIDEO for item in collection.evidence),
-            6,
+            10,
         )
+        self.assertGreaterEqual(sum(
+            item.quality_tier == TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT
+            for item in collection.evidence
+        ), 5)
         self.assertTrue(all(
             item.video_url.startswith("https://www.douyin.com/video/")
             for item in collection.evidence
@@ -378,7 +514,7 @@ class TopicResearchServiceTests(unittest.IsolatedAsyncioTestCase):
 
         class FailingProvider:
             name = "failing-tikhub"
-            request_budget = 13
+            request_budget = 15
             configured = True
 
             async def collect_family_education(self, progress=None, on_calls=None):

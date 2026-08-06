@@ -17,10 +17,10 @@ from qijia_video.topic_contracts import (
     TopicCandidate,
     TopicCostSummary,
     TopicEvidence,
+    TopicEvidenceTier,
     TopicEvidenceType,
     TopicResearchRun,
     TopicResearchStatus,
-    TopicSignalType,
 )
 from qijia_video.topic_ports import (
     TopicCollectionFailed,
@@ -195,20 +195,48 @@ class TopicResearchService:
             item for item in evidence
             if item.evidence_type == TopicEvidenceType.TREND_TERM
         ][:20]
-        quality_signals = {
-            TopicSignalType.RELATED_VIDEO,
-            TopicSignalType.HIGH_COMPLETION_VIDEO,
-            TopicSignalType.LOW_FOLLOWER_VIDEO,
+        quality_tiers = {
+            TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
+            TopicEvidenceTier.HIGH_HEAT_BREAKOUT,
         }
         videos = [
             item for item in evidence
             if item.evidence_type == TopicEvidenceType.VIDEO
+            and item.quality_tier in quality_tiers
         ]
-        videos.sort(key=lambda item: (
-            not bool(set(item.signal_types) & quality_signals),
-            -(item.metrics.play_count if item.metrics else 0),
-            item.source_rank or 999,
-        ))
+        tier_order = {
+            TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT: 0,
+            TopicEvidenceTier.HIGH_HEAT_BREAKOUT: 1,
+        }
+
+        def evidence_rank(item: TopicEvidence) -> tuple:
+            metrics = item.metrics
+            age_hours = (
+                metrics.published_age_hours
+                if metrics and metrics.published_age_hours is not None
+                else float("inf")
+            )
+            if age_hours <= 24:
+                freshness_bucket = 0
+            elif age_hours <= 72:
+                freshness_bucket = 1
+            else:
+                freshness_bucket = 2
+            return (
+                tier_order[item.quality_tier],
+                freshness_bucket,
+                -(
+                    metrics.average_daily_plays
+                    if metrics and metrics.average_daily_plays
+                    else 0
+                ),
+                age_hours,
+                -(metrics.play_follower_ratio if metrics and metrics.play_follower_ratio else 0),
+                -(metrics.play_count if metrics else 0),
+                item.source_rank or 999,
+            )
+
+        videos.sort(key=evidence_rank)
         return [*terms, *videos[:30]]
 
     @staticmethod
@@ -232,11 +260,23 @@ class TopicResearchService:
                 )
             if len(refs) < 2:
                 raise QualityGateFailed("候选选题至少需要两条抖音研究证据")
-            if not any(
-                evidence_by_id[ref].evidence_type == TopicEvidenceType.VIDEO
+            qualified_refs = [
+                ref
                 for ref in refs
+                if evidence_by_id[ref].evidence_type == TopicEvidenceType.VIDEO
+                and evidence_by_id[ref].quality_tier in {
+                    TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
+                    TopicEvidenceTier.HIGH_HEAT_BREAKOUT,
+                }
+            ]
+            if len(qualified_refs) < 2:
+                raise QualityGateFailed("每个候选至少需要两条独立的爆款视频共同验证")
+            if not any(
+                evidence_by_id[ref].quality_tier
+                == TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT
+                for ref in qualified_refs
             ):
-                raise QualityGateFailed("候选选题至少需要一条可复核的视频样本")
+                raise QualityGateFailed("每个候选至少需要一条低粉爆款视频")
             normalized_title = re.sub(
                 r"[^\w\u4e00-\u9fff]+", "", proposal.title.casefold()
             )
@@ -268,9 +308,38 @@ class TopicResearchService:
             for candidate in candidates
             for ref in candidate.evidence_refs
             if evidence_by_id[ref].evidence_type == TopicEvidenceType.VIDEO
+            and evidence_by_id[ref].quality_tier in {
+                TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
+                TopicEvidenceTier.HIGH_HEAT_BREAKOUT,
+            }
         }
-        if len(referenced_videos) < 3:
-            raise QualityGateFailed("五个候选不能反复依赖同一批视频，至少需引用三条视频样本")
+        if len(referenced_videos) < 8:
+            raise QualityGateFailed("五个候选不能反复依赖同一批证据，至少需引用八条不同爆款视频")
+        low_follower_videos = {
+            ref
+            for ref in referenced_videos
+            if evidence_by_id[ref].quality_tier
+            == TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT
+        }
+        if len(low_follower_videos) < 5:
+            raise QualityGateFailed("五个候选合计至少需要引用五条不同的低粉爆款视频")
+        top_low_follower_groups = [
+            {
+                ref
+                for ref in candidate.evidence_refs
+                if evidence_by_id[ref].quality_tier
+                == TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT
+            }
+            for candidate in candidates[:3]
+        ]
+        has_distinct_top_evidence = any(
+            len({first, second, third}) == 3
+            for first in top_low_follower_groups[0]
+            for second in top_low_follower_groups[1]
+            for third in top_low_follower_groups[2]
+        )
+        if not has_distinct_top_evidence:
+            raise QualityGateFailed("排名前三位的候选必须分别引用不同的低粉爆款视频")
         return candidates
 
     async def execute(

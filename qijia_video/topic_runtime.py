@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from qijia_video import run_service as task_service
 from qijia_video.contracts import Actor
+from qijia_video.cost_analysis import USD_TO_CNY_RATE
 from qijia_video.errors import ProviderUnavailable
 from qijia_video.infrastructure.postgres_repository import (
     PostgresAggregateRepository,
@@ -14,6 +15,7 @@ from qijia_video.infrastructure.postgres_repository import (
 from qijia_video.infrastructure.tikhub import (
     PLANNED_MAX_TIKHUB_CALLS,
     TikHubDouyinResearchProvider,
+    evidence_quality_policy,
 )
 from qijia_video.infrastructure.topic_providers import OpenRouterTopicEditor
 from qijia_video.settings import settings
@@ -77,14 +79,17 @@ class TopicResearchRuntime:
             "model": self.editor.model,
             "request_budget": self.data_provider.request_budget,
             "planned_max_calls": PLANNED_MAX_TIKHUB_CALLS,
+            "evidence_policy": evidence_quality_policy(),
             "estimated_usd_per_success": max(
                 0.0,
                 float(settings.QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS),
             ),
+            "usd_to_cny_rate": USD_TO_CNY_RATE,
             "missing_configuration": missing,
             "cost_confirmation_required": True,
             "notes": [
                 "TikHub 与字节跳动无官方隶属关系，数据仅用于选题研究",
+                "低粉爆款采用 TikHub 精选标签并叠加齐家可见指标复核",
                 "抖音趋势不会自动转成已核验来源卡",
                 "TikHub 金额是规划估算，实际端点价格与阶梯折扣以供应商账单为准",
                 "为避免服务重启后重复计费，中断的研究不会自动重跑",

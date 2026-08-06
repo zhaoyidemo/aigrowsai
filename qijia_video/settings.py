@@ -30,7 +30,7 @@ class QijiaVideoSettings(BaseSettings):
     TIKHUB_BASE_URL: str = "https://api.tikhub.dev"
     QIJIA_TOPIC_RESEARCH_MODEL: str = ""
     # 单轮规划上限为 $0.10；按下方 $0.001/成功请求的基础价折算为 100 次。
-    # 当前固定研究流程仍只计划 13 次，不会为了用满预算而额外调用。
+    # 当前固定研究流程仍只计划 15 次，不会为了用满预算而额外调用。
     QIJIA_TOPIC_TIKHUB_REQUEST_BUDGET: int = 100
     # TikHub 文档给出的常见基础价为 $0.001/成功请求；具体端点和折扣以账单为准。
     QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS: float = 0.001
@@ -40,7 +40,7 @@ class QijiaVideoSettings(BaseSettings):
         "https://ark.cn-beijing.volces.com/api/v3"
     )
     QIJIA_VIDEO_SEEDANCE_MODEL: str = "doubao-seedance-2-0-260128"
-    # 仅用于前端费用估算；不参与供应商结算，也不要求 Railway 显式配置。
+    # 写入成本账本的估算快照；不参与供应商结算，也不要求 Railway 显式配置。
     QIJIA_VIDEO_SEEDANCE_PRICE_PER_MILLION: float = 46.0
     QIJIA_VIDEO_SEEDANCE_DOWNLOAD_HOSTS: str = (
         ".volces.com,.volccdn.com,.byteimg.com"
@@ -53,7 +53,7 @@ class QijiaVideoSettings(BaseSettings):
     QIJIA_VIDEO_SEEDREAM_DOWNLOAD_HOSTS: str = (
         ".volces.com,.volccdn.com,.byteimg.com"
     )
-    # Used only for the workbench estimate; billing remains authoritative in Ark.
+    # Saved as a ledger snapshot; Ark billing remains authoritative.
     QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE: float = 0.22
 
     # 新版豆包语音控制台优先使用单个 API Key；旧版账号仍可使用
@@ -68,6 +68,8 @@ class QijiaVideoSettings(BaseSettings):
         "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
     )
     QIJIA_VIDEO_TTS_RESOURCE_ID: str = "seed-tts-2.0"
+    # 豆包语音合成官网按量刊例价；套餐、赠送额度与账单优惠不在此估算中。
+    QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS: float = 5.0
     # Vivi 2.0 is a public Seed-TTS 2.0 voice. The previous ``mars`` voice
     # belongs to the 1.0 resource family and is rejected by seed-tts-2.0.
     QIJIA_VIDEO_TTS_VOICE_ID: str = "zh_female_vv_uranus_bigtts"

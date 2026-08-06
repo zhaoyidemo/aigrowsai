@@ -130,6 +130,15 @@ class QijiaVideoRuntime:
             quality_checker=FfprobeQualityChecker(),
             media_packager=FfmpegMediaPackager(),
             work_root=settings.work_root_path(PROJECT_ROOT),
+            seedream_price_per_image=(
+                settings.QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE
+            ),
+            seedance_price_per_million_tokens=(
+                settings.QIJIA_VIDEO_SEEDANCE_PRICE_PER_MILLION
+            ),
+            tts_price_per_10000_characters=(
+                settings.QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS
+            ),
         )
 
     def capabilities(self) -> dict:
@@ -194,6 +203,15 @@ class QijiaVideoRuntime:
                 "candidates_per_shot": 1,
                 "model": settings.QIJIA_VIDEO_SEEDREAM_MODEL,
                 "basis": "按生成图片张数估算，实际账单以火山方舟为准",
+            },
+            "tts_pricing": {
+                "currency": "CNY",
+                "yuan_per_10000_characters": max(
+                    0.0,
+                    float(settings.QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS),
+                ),
+                "model": settings.QIJIA_VIDEO_TTS_RESOURCE_ID,
+                "basis": "按发送字符数和官网按量刊例价估算，套餐与实际账单优先",
             },
             "notes": [
                 "生产链路不使用 Mock；收费生成 Provider 失败时不会伪造结果或自动换模型",

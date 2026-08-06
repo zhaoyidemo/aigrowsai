@@ -10,6 +10,7 @@ import secrets
 import shutil
 import tempfile
 import time
+import uuid
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
@@ -25,6 +26,7 @@ from qijia_video.contracts import (
     JobState,
     ProviderTask,
     ProviderTaskState,
+    ProviderUsageRecord,
     QualityReport,
     RenderManifest,
     ScriptDraft,
@@ -116,6 +118,9 @@ class QijiaVideoService:
         work_root: Path,
         video_poll_interval_seconds: float = 5.0,
         video_timeout_seconds: float = 900.0,
+        seedream_price_per_image: float = 0.22,
+        seedance_price_per_million_tokens: float = 46.0,
+        tts_price_per_10000_characters: float = 5.0,
     ):
         self.repository = repository
         self.script_provider = script_provider
@@ -133,6 +138,15 @@ class QijiaVideoService:
             0.01, float(video_poll_interval_seconds)
         )
         self.video_timeout_seconds = max(30.0, float(video_timeout_seconds))
+        self.seedream_price_per_image = max(
+            0.0, float(seedream_price_per_image)
+        )
+        self.seedance_price_per_million_tokens = max(
+            0.0, float(seedance_price_per_million_tokens)
+        )
+        self.tts_price_per_10000_characters = max(
+            0.0, float(tts_price_per_10000_characters)
+        )
 
     @staticmethod
     def _report(
@@ -155,6 +169,109 @@ class QijiaVideoService:
     def _assert_revision(actual: int, expected: int):
         if int(actual) != int(expected):
             raise RevisionConflict("内容已在其他页面更新，请刷新后重试")
+
+    @staticmethod
+    def _remember_usage_record(
+        job: VideoJob,
+        usage: ProviderUsageRecord,
+    ) -> None:
+        record = usage.model_copy(deep=True)
+        existing = next(
+            (
+                item
+                for item in job.usage_records
+                if item.usage_id == record.usage_id
+            ),
+            None,
+        )
+        if existing:
+            job.usage_records = [
+                record if item.usage_id == record.usage_id else item
+                for item in job.usage_records
+            ]
+        else:
+            job.usage_records.append(record)
+
+    async def _persist_usage_record(
+        self,
+        job: VideoJob,
+        usage: ProviderUsageRecord,
+        actor: Actor,
+    ) -> VideoJob:
+        record = usage.model_copy(deep=True)
+        if (
+            record.operation == "tts_synthesis"
+            and record.provider == "volcengine-seed-tts-2.0"
+            and record.succeeded
+            and record.estimated_cost is None
+            and record.unit == "character"
+            and self.tts_price_per_10000_characters > 0
+        ):
+            # Set the currency first because assignment validation requires it
+            # to exist as soon as an amount is present.
+            record.estimated_currency = "CNY"
+            record.estimated_cost = round(
+                record.quantity * self.tts_price_per_10000_characters / 10000,
+                8,
+            )
+            record.pricing_basis = (
+                f"豆包语音合成按量刊例价 ¥{self.tts_price_per_10000_characters:g}"
+                "/万字符；套餐、赠送额度与供应商账单优先"
+            )
+        elif (
+            record.operation == "tts_synthesis"
+            and record.provider == "volcengine-seed-tts-2.0"
+            and record.succeeded
+            and record.estimated_cost is None
+        ):
+            record.note = "；".join(
+                item
+                for item in (
+                    record.note,
+                    "豆包语音单价未配置，金额待供应商账单核对",
+                )
+                if item
+            )
+        self._remember_usage_record(job, record)
+        return await self._save_job(job, actor)
+
+    def _snapshot_image_cost(
+        self, candidate: FirstFrameCandidate
+    ) -> FirstFrameCandidate:
+        if (
+            self.image_provider.name == "volcengine-seedream"
+            and self.seedream_price_per_image > 0
+        ):
+            candidate.estimated_cost_cny = round(
+                self.seedream_price_per_image, 8
+            )
+            candidate.pricing_basis = (
+                f"Seedream 按量刊例价 ¥{self.seedream_price_per_image:g}/张；"
+                "套餐、折扣与火山方舟账单优先"
+            )
+        return candidate
+
+    def _snapshot_video_cost(self, task: ProviderTask) -> ProviderTask:
+        if task.provider != "volcengine-seedance":
+            return task
+        rate = task.pricing_rate_cny_per_million
+        if rate is None and self.seedance_price_per_million_tokens > 0:
+            rate = self.seedance_price_per_million_tokens
+            task.pricing_rate_cny_per_million = rate
+        if rate is not None and rate > 0:
+            task.pricing_basis = (
+                "Seedance 无视频输入按量刊例价 "
+                f"¥{rate:g}/百万 tokens；"
+                "套餐、折扣与火山方舟账单优先"
+            )
+        if task.usage_total_tokens > 0 and rate is not None and rate > 0:
+            task.estimated_cost_cny = round(
+                task.usage_total_tokens
+                * rate
+                / 1_000_000,
+                8,
+            )
+        return task
 
     @staticmethod
     def _validate_verified_card(card: SourceCard):
@@ -495,9 +612,23 @@ class QijiaVideoService:
                 percent=14,
             )
             settings = job.generation_settings or GenerationSettings()
-            script = await self.script_provider.generate(
-                card, settings.script_prompt
+            async def persist_script_usage(usage: ProviderUsageRecord) -> None:
+                nonlocal job
+                job = await self._persist_usage_record(job, usage, actor)
+
+            generate_with_usage = getattr(
+                self.script_provider, "generate_with_usage", None
             )
+            if callable(generate_with_usage):
+                script = await generate_with_usage(
+                    card,
+                    settings.script_prompt,
+                    on_usage=persist_script_usage,
+                )
+            else:
+                script = await self.script_provider.generate(
+                    card, settings.script_prompt
+                )
             self._validate_generated_script_length(script)
             self._validate_script(script, card)
             self._report(
@@ -978,12 +1109,28 @@ class QijiaVideoService:
             percent=44,
         )
         base_style = self._storyboard_base_style(job)
-        plan = await self.storyboard_provider.generate(
-            job.script,
-            base_style,
-            beat_groups,
-            visual_types,
+        async def persist_storyboard_usage(usage: ProviderUsageRecord) -> None:
+            nonlocal job
+            job = await self._persist_usage_record(job, usage, actor)
+
+        generate_with_usage = getattr(
+            self.storyboard_provider, "generate_with_usage", None
         )
+        if callable(generate_with_usage):
+            plan = await generate_with_usage(
+                job.script,
+                base_style,
+                beat_groups,
+                visual_types,
+                on_usage=persist_storyboard_usage,
+            )
+        else:
+            plan = await self.storyboard_provider.generate(
+                job.script,
+                base_style,
+                beat_groups,
+                visual_types,
+            )
         if plan.input_hash != expected_hash:
             raise ProviderUnavailable("分镜 Provider 返回了错误的输入指纹")
         if [item.beat_ids for item in plan.shots] != beat_groups:
@@ -1132,18 +1279,42 @@ class QijiaVideoService:
                         frame=shot_index + 1,
                         frame_count=total,
                     )
-                    if reference_image_url:
-                        generated = await self.image_provider.generate(
-                            prompt,
-                            seed=seed,
-                            reference_image_url=reference_image_url,
+                    try:
+                        if reference_image_url:
+                            generated = await self.image_provider.generate(
+                                prompt,
+                                seed=seed,
+                                reference_image_url=reference_image_url,
+                            )
+                        else:
+                            generated = await self.image_provider.generate(
+                                prompt,
+                                seed=seed,
+                            )
+                    except ProviderUnavailable:
+                        job = await self._persist_usage_record(
+                            job,
+                            ProviderUsageRecord(
+                                usage_id=f"usage_seedream_attempt_{uuid.uuid4().hex}",
+                                operation="seedream_image",
+                                provider=self.image_provider.name,
+                                model_id=str(
+                                    getattr(self.image_provider, "model", "") or ""
+                                ),
+                                request_id=candidate_id,
+                                succeeded=False,
+                                quantity=1,
+                                unit="image",
+                                note=(
+                                    "图片生成请求失败或结果未知，是否计费需与"
+                                    "火山方舟账单核对"
+                                ),
+                                occurred_at=timestamp(),
+                            ),
+                            actor,
                         )
-                    else:
-                        generated = await self.image_provider.generate(
-                            prompt,
-                            seed=seed,
-                        )
-                    candidate = FirstFrameCandidate(
+                        raise
+                    candidate = self._snapshot_image_cost(FirstFrameCandidate(
                         candidate_id=candidate_id,
                         shot_id=shot.shot_id,
                         variant=variant,
@@ -1154,7 +1325,41 @@ class QijiaVideoService:
                         size=generated.size,
                         usage_total_tokens=generated.usage_total_tokens,
                         created_at=timestamp(),
-                    )
+                    ))
+                    self._remember_usage_record(job, ProviderUsageRecord(
+                        usage_id=(
+                            "usage_seedream_"
+                            + content_hash({
+                                "job_id": job.id,
+                                "candidate_id": candidate.candidate_id,
+                            })[:40]
+                        ),
+                        operation="seedream_image",
+                        provider=self.image_provider.name,
+                        model_id=candidate.model_id,
+                        request_id=candidate.candidate_id,
+                        succeeded=True,
+                        total_tokens=candidate.usage_total_tokens,
+                        quantity=1,
+                        unit="image",
+                        estimated_cost=candidate.estimated_cost_cny,
+                        estimated_currency=(
+                            "CNY"
+                            if candidate.estimated_cost_cny is not None
+                            else None
+                        ),
+                        pricing_basis=candidate.pricing_basis,
+                        note=(
+                            "测试 Provider 不计入生产费用"
+                            if self.image_provider.name != "volcengine-seedream"
+                            else (
+                                "Seedream 单价未配置，金额待火山方舟账单核对"
+                                if candidate.estimated_cost_cny is None
+                                else ""
+                            )
+                        ),
+                        occurred_at=candidate.created_at,
+                    ))
                     self._replace_first_frame_candidate(job, candidate)
                     # Persist the paid response before downloading so a retry
                     # never submits the same Seedream request again.
@@ -1337,8 +1542,91 @@ class QijiaVideoService:
             ))
         return requests
 
-    @staticmethod
-    def _replace_video_task(job: VideoJob, task: ProviderTask) -> None:
+    def _record_video_task_usage(
+        self,
+        job: VideoJob,
+        task: ProviderTask,
+        previous: ProviderTask | None = None,
+    ) -> None:
+        if previous:
+            task.created_at = previous.created_at or task.created_at
+            task.pricing_rate_cny_per_million = (
+                previous.pricing_rate_cny_per_million
+            )
+            if (
+                task.pricing_rate_cny_per_million is None
+                and previous.estimated_cost_cny is not None
+                and previous.usage_total_tokens > 0
+            ):
+                task.pricing_rate_cny_per_million = round(
+                    previous.estimated_cost_cny
+                    * 1_000_000
+                    / previous.usage_total_tokens,
+                    8,
+                )
+            if (
+                task.usage_total_tokens == 0
+                and previous.estimated_cost_cny is not None
+            ):
+                task.estimated_cost_cny = previous.estimated_cost_cny
+            task.pricing_basis = previous.pricing_basis
+        elif not task.created_at:
+            task.created_at = timestamp()
+        self._snapshot_video_cost(task)
+        self._remember_usage_record(job, ProviderUsageRecord(
+            usage_id=(
+                "usage_seedance_"
+                + content_hash({
+                    "provider": task.provider,
+                    "provider_task_id": task.provider_task_id,
+                })[:40]
+            ),
+            operation="seedance_video",
+            provider=task.provider,
+            model_id=task.model_id,
+            request_id=task.provider_task_id,
+            succeeded=task.state == ProviderTaskState.SUCCEEDED,
+            total_tokens=task.usage_total_tokens,
+            quantity=1,
+            unit="video",
+            estimated_cost=task.estimated_cost_cny,
+            estimated_currency=(
+                "CNY" if task.estimated_cost_cny is not None else None
+            ),
+            pricing_basis=task.pricing_basis,
+            note=(
+                "测试 Provider 不计入生产费用"
+                if task.provider != "volcengine-seedance"
+                else (
+                    "供应商尚未回传 usage.total_tokens，金额待状态查询或账单核对"
+                    if task.usage_total_tokens == 0
+                    else (
+                        "Seedance 单价未配置，金额待火山方舟账单核对"
+                        if task.estimated_cost_cny is None
+                        else ""
+                    )
+                )
+            ),
+            occurred_at=task.created_at,
+        ))
+
+    def _replace_video_task(self, job: VideoJob, task: ProviderTask) -> None:
+        previous = next(
+            (
+                item
+                for item in [
+                    *job.video_tasks,
+                    *(version.task for version in job.visual_versions),
+                ]
+                if item.request_fingerprint == task.request_fingerprint
+                or (
+                    task.provider_task_id
+                    and item.provider_task_id == task.provider_task_id
+                )
+            ),
+            None,
+        )
+        self._record_video_task_usage(job, task, previous)
         job.video_tasks = [
             item
             for item in job.video_tasks
@@ -1415,9 +1703,33 @@ class QijiaVideoService:
                 first_frame_url = await self.storage.signed_get_url(
                     candidate.asset, expires=3600
                 )
-            task = await self.video_provider.submit(
-                request, first_frame_url=first_frame_url
-            )
+            try:
+                task = await self.video_provider.submit(
+                    request, first_frame_url=first_frame_url
+                )
+            except ProviderUnavailable:
+                job = await self._persist_usage_record(
+                    job,
+                    ProviderUsageRecord(
+                        usage_id=f"usage_seedance_attempt_{uuid.uuid4().hex}",
+                        operation="seedance_video",
+                        provider=self.video_provider.name,
+                        model_id=str(
+                            getattr(self.video_provider, "model", "") or ""
+                        ),
+                        request_id=request.request_id,
+                        succeeded=False,
+                        quantity=1,
+                        unit="video",
+                        note=(
+                            "视频生成提交失败或结果未知，是否计费需与"
+                            "火山方舟账单核对"
+                        ),
+                        occurred_at=timestamp(),
+                    ),
+                    actor,
+                )
+                raise
             if task.request_fingerprint != fingerprint:
                 raise ProviderUnavailable("视频 Provider 返回了错误的请求指纹")
             task.request_id = request.request_id
@@ -2281,6 +2593,11 @@ class QijiaVideoService:
                     )
                 request = version.request
                 task = version.task
+                self._record_video_task_usage(job, task, version.task)
+                version = self._remember_visual_version(
+                    job, request, task, version.asset, actor
+                )
+                job = await self._save_job(job, actor)
             else:
                 self._remember_current_visuals(job, actor)
                 job.state = JobState.PRODUCING
@@ -2325,12 +2642,39 @@ class QijiaVideoService:
                     first_frame_url = await self.storage.signed_get_url(
                         frame_candidate.asset, expires=3600
                     )
-                task = await self.video_provider.submit(
-                    request, first_frame_url=first_frame_url
-                )
+                try:
+                    task = await self.video_provider.submit(
+                        request, first_frame_url=first_frame_url
+                    )
+                except ProviderUnavailable:
+                    job = await self._persist_usage_record(
+                        job,
+                        ProviderUsageRecord(
+                            usage_id=(
+                                f"usage_seedance_attempt_{uuid.uuid4().hex}"
+                            ),
+                            operation="seedance_video",
+                            provider=self.video_provider.name,
+                            model_id=str(
+                                getattr(self.video_provider, "model", "") or ""
+                            ),
+                            request_id=request.request_id,
+                            succeeded=False,
+                            quantity=1,
+                            unit="video",
+                            note=(
+                                "视频生成提交失败或结果未知，是否计费需与"
+                                "火山方舟账单核对"
+                            ),
+                            occurred_at=timestamp(),
+                        ),
+                        actor,
+                    )
+                    raise
                 if task.request_fingerprint != request.fingerprint():
                     raise ProviderUnavailable("视频 Provider 返回了错误的请求指纹")
                 task.request_id = shot_id
+                self._record_video_task_usage(job, task)
                 version = self._remember_visual_version(
                     job, request, task, None, actor
                 )
@@ -2366,6 +2710,7 @@ class QijiaVideoService:
                     task.provider_task_id, request.fingerprint()
                 )
                 task.request_id = shot_id
+                self._record_video_task_usage(job, task, version.task)
                 version = self._remember_visual_version(
                     job, request, task, None, actor
                 )
@@ -2785,9 +3130,23 @@ class QijiaVideoService:
                     )
                     if item.media_type.startswith("video/")
                 ]
-                narration, generated_files = await self.tts_provider.synthesize(
-                    job.script, workspace
+                async def persist_tts_usage(usage: ProviderUsageRecord) -> None:
+                    nonlocal job
+                    job = await self._persist_usage_record(job, usage, actor)
+
+                synthesize_with_usage = getattr(
+                    self.tts_provider, "synthesize_with_usage", None
                 )
+                if callable(synthesize_with_usage):
+                    narration, generated_files = await synthesize_with_usage(
+                        job.script,
+                        workspace,
+                        on_usage=persist_tts_usage,
+                    )
+                else:
+                    narration, generated_files = (
+                        await self.tts_provider.synthesize(job.script, workspace)
+                    )
                 audio_assets = []
                 for generated in generated_files:
                     key = f"qijia-video/{job.id}/audio/{generated.path.name}"

@@ -13,6 +13,8 @@ const renderEntry = fs.readFileSync(path.join(root, 'video_renderer', 'render.mj
 const login = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'login.html'), 'utf8');
 const accountsPage = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'accounts.html'), 'utf8');
 const accountsApp = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'accounts.js'), 'utf8');
+const costsPage = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'costs.html'), 'utf8');
+const costsApp = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'costs.js'), 'utf8');
 
 test('qijia video uses an independent page and API namespace', () => {
   assert.match(page, /齐家 AI 家庭教育内容工作台/);
@@ -49,6 +51,27 @@ test('administrator can manage bounded colleague access without exposing passwor
   assert.doesNotMatch(accountsApp, /localStorage|sessionStorage/);
 });
 
+test('team cost ledger is read-only, CNY-only, and auditable', () => {
+  assert.match(page, /href="\/qijia-video\/costs">成本分析/);
+  assert.match(costsPage, /内容生产成本分析/);
+  assert.match(costsPage, /人民币已计成本 = 供应商回传金额 \+ 有计价依据的估算/);
+  assert.match(costsPage, /1 USD = ¥6\.7/);
+  assert.doesNotMatch(costsPage, />USD</);
+  assert.match(costsPage, /id="cost-by-provider"/);
+  assert.match(costsPage, /id="cost-by-stage"/);
+  assert.match(costsPage, /id="cost-by-creator"/);
+  assert.match(costsPage, /id="cost-event-body"/);
+  assert.match(costsApp, /const API = '\/api\/qijia-video\/costs'/);
+  assert.match(costsApp, /reported_cny/);
+  assert.match(costsApp, /estimated_cny/);
+  assert.match(costsApp, /unpriced_event_count/);
+  assert.match(costsApp, /exportCsv/);
+  assert.match(costsApp, /URL\.createObjectURL/);
+  assert.match(costsApp, /\^\[\\t\\r\\n \]\*\[=\+\\-@\]/);
+  assert.doesNotMatch(costsApp, /method:\s*['"](?:POST|PUT|PATCH|DELETE)/);
+  assert.doesNotMatch(costsApp, /reported_usd|estimated_usd|accounted_usd|自动发布/);
+});
+
 test('final approval binds the whole review bundle', () => {
   assert.match(app, /review_bundle_hash: job\.review_bundle_hash/);
   assert.doesNotMatch(app, /draft_hash:/);
@@ -79,11 +102,25 @@ test('topic research is Douyin-only, cost-bounded, and human-gated', () => {
   assert.match(page, /主题<\/dt><dd>家庭教育/);
   assert.match(page, /数据<\/dt><dd>抖音 · TikHub/);
   assert.match(page, /5 个可供人工判断的内容角度/);
+  assert.match(page, /爆款证据门槛/);
+  assert.match(page, /3 天低粉 · 7 天高热/);
+  assert.match(page, /不足不凑数/);
   assert.match(page, /本轮成本保护/);
   assert.match(app, /\/topic-research\/runs', \{confirm_cost: true\}/);
   assert.match(app, /estimated_usd_per_success/);
-  assert.match(app, /\(requestBudget \|\| plannedCalls\) \* unitPrice/);
+  assert.match(app, /formatCnyFromUsd/);
+  assert.match(app, /usdToCnyRate/);
+  assert.match(app, /1 USD = ¥\$\{usdToCnyRate\(\)\}/);
+  assert.doesNotMatch(app, /function formatUsd/);
+  assert.match(app, /plannedCalls \* unitPrice/);
+  assert.match(app, /requestBudget \* unitPrice/);
   assert.match(app, /不会为了用满预算而增加调用/);
+  assert.match(app, /evidence_policy/);
+  assert.match(app, /low_follower_breakout/);
+  assert.match(app, /deep_engagement_rate/);
+  assert.match(app, /published_age_hours/);
+  assert.match(app, /average_daily_plays/);
+  assert.match(app, /日均播放/);
   assert.match(app, /tikhub_success_count/);
   assert.match(app, /TikHub 调用明细/);
   assert.match(app, /estimated_total_cost_usd/);

@@ -48,11 +48,19 @@ function formatCount(value) {
   return new Intl.NumberFormat('zh-CN').format(Math.round(count));
 }
 
-function formatUsd(value, fallback = '金额待账单') {
+function usdToCnyRate() {
+  const configured = Number(state.capabilities?.topic_research?.usd_to_cny_rate);
+  return Number.isFinite(configured) && configured > 0 ? configured : 6.7;
+}
+
+function formatCnyFromUsd(value, fallback = '金额待账单') {
   if (value === null || value === undefined || value === '') return fallback;
   const amount = Number(value);
   if (!Number.isFinite(amount) || amount < 0) return fallback;
-  return `$${amount.toFixed(6).replace(/0+$/, '').replace(/\.$/, '') || '0'}`;
+  return new Intl.NumberFormat('zh-CN', {
+    style: 'currency', currency: 'CNY',
+    minimumFractionDigits: 2, maximumFractionDigits: 4,
+  }).format(amount * usdToCnyRate());
 }
 
 function formatPercent(value) {
@@ -357,15 +365,38 @@ function renderTopicControls() {
     button.textContent = '开始研究今日选题';
     $('#topic-start-hint').textContent = '点击即确认本轮可能产生 API 费用；不会自动发布或自动生成视频。';
   }
-  const plannedCalls = Number(capability?.planned_max_calls || 13);
+  const plannedCalls = Number(capability?.planned_max_calls || 15);
   const requestBudget = Number(capability?.request_budget || 0);
   const unitPrice = Number(capability?.estimated_usd_per_success);
-  const maxEstimate = Number.isFinite(unitPrice) && unitPrice > 0
-    ? `，TikHub 规划上限约 ${formatUsd((requestBudget || plannedCalls) * unitPrice)}`
+  const plannedEstimate = Number.isFinite(unitPrice) && unitPrice > 0
+    ? `（约 ${formatCnyFromUsd(plannedCalls * unitPrice)}）`
+    : '';
+  const hardEstimate = Number.isFinite(unitPrice) && unitPrice > 0 && requestBudget
+    ? `（约 ${formatCnyFromUsd(requestBudget * unitPrice)}）`
     : '';
   $('#topic-cost-guard').innerHTML = `
     <strong>本轮成本保护</strong>
-    <span>当前计划最多 ${plannedCalls} 次 TikHub 请求${requestBudget ? `，硬上限 ${requestBudget} 次` : ''} + 1 次编辑模型调用${escapeHtml(maxEstimate)}；不会为了用满预算而增加调用</span>`;
+    <span>当前计划最多 ${plannedCalls} 次 TikHub 请求${escapeHtml(plannedEstimate)} + 1 次编辑模型调用${requestBudget ? `；TikHub 硬上限 ${requestBudget} 次${escapeHtml(hardEstimate)}` : ''}。不会为了用满预算而增加调用</span>`;
+
+  const policy = capability?.evidence_policy || {};
+  const low = policy.low_follower_breakout || {};
+  const high = policy.high_heat_breakout || {};
+  const gate = policy.research_gate || {};
+  const lowFollowers = Number(low.max_followers || 50000);
+  const lowPlays = Number(low.min_plays || 500000);
+  const lowRatio = Number(low.min_play_follower_ratio || 20);
+  const lowLike = Number(low.min_like_rate || 0.05);
+  const deepRate = Number(low.min_deep_engagement_rate || 0.008);
+  const lowAgeHours = Number(low.max_age_hours || 72);
+  const highPlays = Number(high.min_plays || 1000000);
+  const highLike = Number(high.min_like_rate || 0.08);
+  const highAgeHours = Number(high.max_age_hours || 168);
+  const lowAgeLabel = lowAgeHours % 24 === 0 ? `${lowAgeHours / 24} 天` : `${lowAgeHours} 小时`;
+  const highAgeLabel = highAgeHours % 24 === 0 ? `${highAgeHours / 24} 天` : `${highAgeHours} 小时`;
+  $('#topic-quality-policy').innerHTML = `
+    <p><strong>低粉爆款（优先）</strong><span>发布 ≤ ${lowAgeLabel} + TikHub 低粉爆款标签 + 粉丝 ≤ ${formatCount(lowFollowers)} + 播放 ≥ ${formatCount(lowPlays)} + 播粉比 ≥ ${lowRatio} + 赞播比 ≥ ${formatPercent(lowLike)} + 深度互动率 ≥ ${formatPercent(deepRate)}</span></p>
+    <p><strong>高热爆款（补充）</strong><span>发布 ≤ ${highAgeLabel} + TikHub 高点赞率标签 + 播放 ≥ ${formatCount(highPlays)} + 赞播比 ≥ ${formatPercent(highLike)} + 深度互动率 ≥ ${formatPercent(Number(high.min_deep_engagement_rate || deepRate))}</span></p>
+    <p><strong>不足不凑数</strong><span>至少 ${Number(gate.min_qualified_videos || 10)} 条合格视频，其中至少 ${Number(gate.min_low_follower_videos || 5)} 条低粉爆款；每个选题还必须有两条独立爆款共同验证。</span></p>`;
 }
 
 function renderTopicRuns() {
@@ -390,8 +421,21 @@ function topicMetricPills(evidence) {
   const metrics = evidence?.metrics;
   if (!metrics) return '';
   const values = [];
+  const hasPublishedAge = (
+    metrics.published_age_hours !== null
+    && metrics.published_age_hours !== undefined
+  );
+  const ageHours = Number(metrics.published_age_hours);
+  if (hasPublishedAge && Number.isFinite(ageHours) && ageHours >= 0) {
+    const ageLabel = ageHours < 1
+      ? '发布不足 1 小时'
+      : (ageHours <= 72 ? `发布 ${Math.round(ageHours)} 小时` : `发布 ${(ageHours / 24).toFixed(1)} 天`);
+    values.push(ageLabel);
+  }
+  if (metrics.average_daily_plays) values.push(`日均播放 ${formatCount(metrics.average_daily_plays)}`);
   if (metrics.play_count) values.push(`播放 ${formatCount(metrics.play_count)}`);
   if (metrics.like_rate !== null && metrics.like_rate !== undefined) values.push(`赞播比 ${formatPercent(metrics.like_rate)}`);
+  if (metrics.deep_engagement_rate !== null && metrics.deep_engagement_rate !== undefined) values.push(`深互动 ${formatPercent(metrics.deep_engagement_rate)}`);
   if (metrics.comment_count) values.push(`评论 ${formatCount(metrics.comment_count)}`);
   if (metrics.share_count) values.push(`分享 ${formatCount(metrics.share_count)}`);
   if (metrics.follower_count) values.push(`作者粉丝 ${formatCount(metrics.follower_count)}`);
@@ -418,8 +462,15 @@ function topicEvidenceRow(evidence) {
   const title = evidence.video_url
     ? `<a href="${escapeHtml(evidence.video_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(evidence.title)} ↗</a>`
     : `<strong>${escapeHtml(evidence.title)}</strong>`;
+  const tier = {
+    low_follower_breakout: ['低粉爆款', ''],
+    high_heat_breakout: ['高热爆款', 'high-heat'],
+    trend_signal: ['趋势信号', 'trend'],
+    unassessed: ['未按新标准复核', 'trend'],
+  }[evidence.quality_tier || 'unassessed'] || ['研究证据', 'trend'];
+  const qualification = (evidence.qualification_reasons || []).join('；');
   return `<div class="topic-evidence-row">
-    <div class="topic-evidence-copy">${title}<span>${escapeHtml(subline)}</span></div>
+    <div class="topic-evidence-copy"><span class="topic-evidence-tier ${tier[1]}">${tier[0]}</span>${title}<span>${escapeHtml(subline)}</span>${qualification ? `<span>复核：${escapeHtml(qualification)}</span>` : ''}</div>
     <div class="topic-metrics">${topicMetricPills(evidence)}</div>
   </div>`;
 }
@@ -430,18 +481,31 @@ function renderTopicCost(run) {
   const calls = cost.tikhub_calls || [];
   const tikhubCost = cost.estimated_tikhub_cost_usd === null || cost.estimated_tikhub_cost_usd === undefined
     ? '金额待账单'
-    : `约 ${formatUsd(cost.estimated_tikhub_cost_usd)}`;
+    : `约 ${formatCnyFromUsd(cost.estimated_tikhub_cost_usd)}`;
   const modelState = model?.request_count
     ? (model.succeeded ? '成功' : (run?.status === 'running' ? '已调用，结果待确认' : '失败或中断'))
     : '等待调用';
   const modelTokens = model?.total_tokens ? ` · ${formatCount(model.total_tokens)} tokens` : '';
   const modelCost = model?.request_count
-    ? `${modelState} · ${formatUsd(model.reported_cost_usd)}${modelTokens}`
+    ? `${modelState} · ${formatCnyFromUsd(model.reported_cost_usd)}${modelTokens}`
     : modelState;
-  const totalCost = formatUsd(cost.estimated_total_cost_usd, '待供应商返回完整金额');
+  const totalCost = formatCnyFromUsd(cost.estimated_total_cost_usd, '待供应商返回完整金额');
   const unitCost = cost.estimated_cost_per_candidate_usd === null || cost.estimated_cost_per_candidate_usd === undefined
     ? ''
-    : ` · 每个候选约 ${formatUsd(cost.estimated_cost_per_candidate_usd)}`;
+    : ` · 每个候选约 ${formatCnyFromUsd(cost.estimated_cost_per_candidate_usd)}`;
+  const successCount = Number(cost.tikhub_success_count || 0);
+  const hasTikhubEstimate = (
+    cost.estimated_tikhub_cost_usd !== null
+    && cost.estimated_tikhub_cost_usd !== undefined
+  );
+  const tikhubEstimate = Number(cost.estimated_tikhub_cost_usd);
+  const fallbackUnitPrice = Number(state.capabilities?.topic_research?.estimated_usd_per_success);
+  const snapshotUnitPrice = successCount > 0 && hasTikhubEstimate && Number.isFinite(tikhubEstimate)
+    ? tikhubEstimate / successCount
+    : fallbackUnitPrice;
+  const costBasis = Number.isFinite(snapshotUnitPrice) && snapshotUnitPrice > 0
+    ? `TikHub 按 ${formatCnyFromUsd(snapshotUnitPrice)}/成功请求估算，失败响应按 ¥0 估算；美元成本固定按 1 USD = ¥${usdToCnyRate()} 换算，供应商账单优先。`
+    : `美元成本固定按 1 USD = ¥${usdToCnyRate()} 换算；当前金额待供应商账单。`;
   const callDetails = calls.length ? `<details class="topic-cost-details">
     <summary>查看 ${calls.length} 次 TikHub 调用明细</summary>
     <div>${calls.map((call, index) => {
@@ -463,7 +527,7 @@ function renderTopicCost(run) {
     <div class="topic-cost-item"><span>TikHub 规划成本</span><strong>${escapeHtml(tikhubCost)}</strong></div>
     <div class="topic-cost-item"><span>编辑模型</span><strong>${escapeHtml(modelCost)}</strong></div>
     <div class="topic-cost-item"><span>本轮总成本</span><strong>${escapeHtml(totalCost + unitCost)}</strong></div>
-    <p class="topic-cost-basis">${escapeHtml(cost.tikhub_cost_basis || '调用后记录成本依据；实际账单以供应商为准。')}</p>
+    <p class="topic-cost-basis">${escapeHtml(costBasis)}</p>
     ${callDetails}
     ${modelDetails}`;
 }
@@ -525,6 +589,7 @@ function renderTopicDetail() {
       ? (editable ? '继续补充来源' : '用这个选题创作')
       : (editable ? '采用并补充来源' : '创建者尚未采用');
     const evidence = candidate.evidence_refs.map((id) => evidenceById.get(id)).filter(Boolean);
+    const lowFollowerCount = evidence.filter((item) => item.quality_tier === 'low_follower_breakout').length;
     return `<article class="topic-candidate ${selected ? 'selected' : ''}">
       <header class="topic-candidate-header">
         <span class="topic-rank">${String(candidate.rank).padStart(2, '0')}</span>
@@ -536,7 +601,7 @@ function renderTopicDetail() {
         <div class="topic-copy-block"><span>开场钩子</span><p class="topic-hook">${escapeHtml(candidate.opening_hook)}</p></div>
         <div class="topic-copy-block full"><span>为什么现在值得讲</span><p>${escapeHtml(candidate.why_now)}</p></div>
         <div class="topic-copy-block full"><span>内容边界</span><p class="topic-risk">${escapeHtml(candidate.risk_note)}</p></div>
-        <details class="topic-evidence"><summary>查看 ${evidence.length} 条抖音研究依据</summary><div class="topic-evidence-list">${evidence.map(topicEvidenceRow).join('')}</div></details>
+        <details class="topic-evidence"><summary>查看 ${evidence.length} 条抖音研究依据${lowFollowerCount ? ` · ${lowFollowerCount} 条低粉爆款` : ''}</summary><div class="topic-evidence-list">${evidence.map(topicEvidenceRow).join('')}</div></details>
         <div class="topic-candidate-actions">
           <span>采用后仍需补充独立可靠资料，趋势数据不会进入脚本来源。</span>
           <button class="button ${selected ? 'secondary' : 'primary'}" type="button" data-adopt-topic="${escapeHtml(candidate.id)}" ${actionDisabled ? 'disabled' : ''}>${actionLabel}</button>

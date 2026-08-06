@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.5.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -16,6 +16,7 @@
       <p class="subtitle">抖音选题研究 · 来源核验 · 视频生产</p>
     </div>
     <div class="topbar-actions">
+      <a class="back-link" href="/qijia-video/costs">成本分析</a>
       <a id="account-management-link" class="back-link" href="/qijia-video/accounts" data-admin-only hidden>账号管理</a>
       <form action="/logout" method="post">
         <button class="back-link" type="submit">退出登录</button>
@@ -43,16 +44,25 @@
             <div class="panel-heading">
               <div><p class="step">固定范围</p><h2>研究今天值得讲什么</h2></div>
             </div>
-            <p class="panel-note intake-intro">只研究抖音上的家庭教育内容。系统先收集趋势和代表视频，再提出 5 个可供人工判断的内容角度。</p>
+            <p class="panel-note intake-intro">只研究抖音上的家庭教育内容。系统先收集趋势和通过复核的爆款视频，再提出 5 个可供人工判断的内容角度。</p>
             <dl class="topic-scope">
               <div><dt>主题</dt><dd>家庭教育</dd></div>
               <div><dt>数据</dt><dd>抖音 · TikHub</dd></div>
-              <div><dt>窗口</dt><dd>3 天趋势 · 7 天视频</dd></div>
+              <div><dt>窗口</dt><dd>3 天低粉 · 7 天高热</dd></div>
               <div><dt>产出</dt><dd>5 个候选</dd></div>
             </dl>
+            <details class="topic-quality-rule" open>
+              <summary>爆款证据门槛</summary>
+              <div id="topic-quality-policy">
+                <p><strong>低粉爆款优先</strong><span>发布 72 小时内，并同时复核 TikHub 标签、粉丝、播放、播粉比与互动。</span></p>
+                <p><strong>高热爆款补充</strong><span>仅保留发布 7 天内、通过播放与互动复核的视频。</span></p>
+                <p><strong>不足不凑数</strong><span>证据不够时本轮直接停止，不用普通搜索视频补位。</span></p>
+              </div>
+              <small>这是齐家的选题研究标准，不是抖音公开的官方爆款定义。作者粉丝是采集时快照；TikHub 未返回投流信息，因此不声称视频完全依靠自然流量。</small>
+            </details>
             <div id="topic-cost-guard" class="topic-cost-guard">
               <strong>本轮成本保护</strong>
-              <span>最多 13 次 TikHub 请求 + 1 次编辑模型调用</span>
+              <span>最多 15 次 TikHub 请求 + 1 次编辑模型调用</span>
             </div>
             <button id="topic-start-button" class="button primary topic-start-button" type="button">开始研究今日选题</button>
             <p id="topic-start-hint" class="field-hint">点击即确认本轮可能产生 API 费用；不会自动发布或自动生成视频。</p>
@@ -304,6 +314,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.5.0"></script>
 </body>
 </html>

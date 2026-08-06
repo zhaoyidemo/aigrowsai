@@ -65,6 +65,10 @@ class StandaloneAuthenticationTests(unittest.TestCase):
             self.client.get("/qijia-video/accounts").status_code,
             200,
         )
+        costs = self.client.get("/qijia-video/costs")
+        self.assertEqual(costs.status_code, 200)
+        self.assertIn("内容生产成本分析", costs.text)
+        self.assertEqual(costs.headers["cache-control"], "no-store")
 
     def test_wrong_password_fails_without_a_session(self):
         response = self.client.post(
@@ -94,6 +98,21 @@ class StandaloneAuthenticationTests(unittest.TestCase):
                 self.assertEqual(
                     response.headers["location"], "/qijia-video"
                 )
+
+    def test_cost_page_is_an_allowed_post_login_destination(self):
+        response = self.client.post(
+            "/login",
+            data={
+                "username": "admin",
+                "password": "correct-horse-battery",
+                "next": "/qijia-video/costs?days=90",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(
+            response.headers["location"], "/qijia-video/costs?days=90"
+        )
 
 
 class StandaloneRunServiceTests(unittest.IsolatedAsyncioTestCase):

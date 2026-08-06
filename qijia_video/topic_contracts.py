@@ -35,6 +35,16 @@ class TopicSignalType(StrEnum):
     RELATED_VIDEO = "related_video"
     HIGH_COMPLETION_VIDEO = "high_completion_video"
     LOW_FOLLOWER_VIDEO = "low_follower_video"
+    HIGH_LIKE_VIDEO = "high_like_video"
+
+
+class TopicEvidenceTier(StrEnum):
+    """可解释的证据强度；旧记录默认未评估，不会被冒充为爆款。"""
+
+    UNASSESSED = "unassessed"
+    TREND_SIGNAL = "trend_signal"
+    LOW_FOLLOWER_BREAKOUT = "low_follower_breakout"
+    HIGH_HEAT_BREAKOUT = "high_heat_breakout"
 
 
 class TopicContentPillar(StrEnum):
@@ -58,7 +68,10 @@ class TopicMetrics(ContractModel):
     comment_rate: float | None = Field(default=None, ge=0)
     share_rate: float | None = Field(default=None, ge=0)
     collect_rate: float | None = Field(default=None, ge=0)
+    deep_engagement_rate: float | None = Field(default=None, ge=0)
     play_follower_ratio: float | None = Field(default=None, ge=0)
+    published_age_hours: float | None = Field(default=None, ge=0)
+    average_daily_plays: int | None = Field(default=None, ge=0)
 
 
 class TopicEvidence(ContractModel):
@@ -68,6 +81,8 @@ class TopicEvidence(ContractModel):
     queries: list[str] = Field(default_factory=list, max_length=8)
     title: str = Field(min_length=1, max_length=500)
     platform_labels: list[str] = Field(default_factory=list, max_length=8)
+    quality_tier: TopicEvidenceTier = TopicEvidenceTier.UNASSESSED
+    qualification_reasons: list[str] = Field(default_factory=list, max_length=8)
     source_rank: int = Field(default=0, ge=0)
     video_id: str = Field(default="", max_length=64)
     video_url: str = Field(default="", max_length=2000)
@@ -189,7 +204,7 @@ class TopicResearchRun(ContractModel):
     data_provider: Literal["tikhub"] = "tikhub"
     status: TopicResearchStatus = TopicResearchStatus.RUNNING
     valid_through: str = Field(default="", max_length=32)
-    data_window_note: str = Field(default="近 3 天创作趋势与近 7 天视频样本", max_length=200)
+    data_window_note: str = Field(default="近 3 天趋势与低粉爆款、近 7 天高热补充", max_length=200)
     evidence: list[TopicEvidence] = Field(default_factory=list, max_length=80)
     candidates: list[TopicCandidate] = Field(default_factory=list, max_length=5)
     cost: TopicCostSummary = Field(default_factory=TopicCostSummary)

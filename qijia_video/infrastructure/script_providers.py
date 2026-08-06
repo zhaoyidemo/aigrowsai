@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
 from pydantic import ValidationError
 
 from qijia_video.contracts import (
+    ProviderUsageRecord,
     ScriptDraft,
     ScriptReview,
     SourceCard,
@@ -26,6 +29,7 @@ from qijia_video.prompts import (
 
 SCRIPT_PROMPT_VERSION = "qijia_script_v11_reference_normalization"
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v6_hook_first"
+UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
 
 
 _SCRIPT_RESPONSE_SCHEMA = {
@@ -312,6 +316,95 @@ def _json_object(content: Any) -> dict:
     raise ProviderUnavailable("模型没有返回有效 JSON")
 
 
+def _nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _openrouter_usage_record(
+    body: dict | None,
+    *,
+    usage_id: str,
+    operation: str,
+    fallback_model: str,
+    request_id: str = "",
+    http_status_code: int | None = None,
+    succeeded: bool = False,
+    note: str = "",
+) -> ProviderUsageRecord:
+    payload = body if isinstance(body, dict) else {}
+    usage = payload.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    prompt_details = usage.get("prompt_tokens_details")
+    prompt_details = prompt_details if isinstance(prompt_details, dict) else {}
+    completion_details = usage.get("completion_tokens_details")
+    completion_details = (
+        completion_details if isinstance(completion_details, dict) else {}
+    )
+    raw_cost = usage.get("cost")
+    try:
+        reported_cost = max(0.0, float(raw_cost)) if raw_cost is not None else None
+    except (TypeError, ValueError):
+        reported_cost = None
+    input_tokens = _nonnegative_int(
+        usage.get("prompt_tokens") or usage.get("input_tokens")
+    )
+    output_tokens = _nonnegative_int(
+        usage.get("completion_tokens") or usage.get("output_tokens")
+    )
+    total_tokens = _nonnegative_int(
+        usage.get("total_tokens") or input_tokens + output_tokens
+    )
+    missing_cost_note = (
+        "供应商响应未提供 usage.cost，金额需与 OpenRouter Activity 对账"
+        if reported_cost is None
+        else ""
+    )
+    return ProviderUsageRecord(
+        usage_id=usage_id,
+        operation=operation,
+        provider="openrouter",
+        model_id=str(payload.get("model") or fallback_model),
+        request_id=str(payload.get("id") or request_id),
+        succeeded=bool(succeeded),
+        http_status_code=http_status_code,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        cached_tokens=_nonnegative_int(prompt_details.get("cached_tokens")),
+        reasoning_tokens=_nonnegative_int(
+            completion_details.get("reasoning_tokens")
+        ),
+        quantity=1,
+        unit="request",
+        reported_cost=reported_cost,
+        reported_currency="USD" if reported_cost is not None else None,
+        pricing_basis=(
+            "OpenRouter 非流式响应 usage.cost 供应商回传金额"
+            if reported_cost is not None
+            else ""
+        ),
+        note="；".join(item for item in (note, missing_cost_note) if item),
+        occurred_at=timestamp(),
+    )
+
+
+async def _record_usage(
+    recorder: UsageRecorder | None,
+    usage: ProviderUsageRecord,
+) -> None:
+    if not recorder:
+        return
+    try:
+        await recorder(usage.model_copy(deep=True))
+    except Exception as exc:
+        raise ProviderUnavailable(
+            "模型调用已经发生，但成本账本无法持久化；流程已停止"
+        ) from exc
+
+
 async def _openrouter_json_request(
     *,
     api_key: str,
@@ -324,7 +417,10 @@ async def _openrouter_json_request(
     max_completion_tokens: int,
     timeout_seconds: float,
     transport: httpx.AsyncBaseTransport | None,
+    operation: str,
+    on_usage: UsageRecorder | None = None,
 ) -> dict:
+    usage_id = f"usage_{uuid.uuid4().hex}"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -357,15 +453,48 @@ async def _openrouter_json_request(
                 _chat_url(base_url), headers=headers, json=payload
             )
         except (httpx.TimeoutException, httpx.RequestError) as exc:
+            await _record_usage(on_usage, _openrouter_usage_record(
+                None,
+                usage_id=usage_id,
+                operation=operation,
+                fallback_model=model,
+                succeeded=False,
+                note="网络异常后是否计费未知",
+            ))
             raise ProviderUnavailable(f"OpenRouter {label}请求失败") from exc
     request_id = response.headers.get("x-request-id", "")
     try:
         body = response.json()
     except ValueError as exc:
+        await _record_usage(on_usage, _openrouter_usage_record(
+            None,
+            usage_id=usage_id,
+            operation=operation,
+            fallback_model=model,
+            request_id=request_id,
+            http_status_code=response.status_code,
+            succeeded=False,
+            note="响应无法解析，是否计费需对账",
+        ))
         raise ProviderUnavailable(
             f"OpenRouter {label}返回了无法读取的响应"
             + (f"；request_id={request_id}" if request_id else "")
         ) from exc
+    response_succeeded = bool(
+        response.status_code < 400
+        and isinstance(body, dict)
+        and not body.get("error")
+        and body.get("choices")
+    )
+    await _record_usage(on_usage, _openrouter_usage_record(
+        body if isinstance(body, dict) else None,
+        usage_id=usage_id,
+        operation=operation,
+        fallback_model=model,
+        request_id=request_id,
+        http_status_code=response.status_code,
+        succeeded=response_succeeded,
+    ))
     if response.status_code >= 400:
         try:
             message = str(
@@ -588,6 +717,15 @@ class OpenRouterScriptProvider:
     async def generate(
         self, card: SourceCard, prompt: str | None = None
     ) -> ScriptDraft:
+        return await self.generate_with_usage(card, prompt)
+
+    async def generate_with_usage(
+        self,
+        card: SourceCard,
+        prompt: str | None = None,
+        *,
+        on_usage: UsageRecorder | None = None,
+    ) -> ScriptDraft:
         if not self.configured:
             raise ProviderUnavailable(
                 "真实脚本生成未配置：请设置 OPENROUTER_API_KEY"
@@ -613,6 +751,8 @@ class OpenRouterScriptProvider:
             max_completion_tokens=4800,
             timeout_seconds=self.timeout_seconds,
             transport=self.transport,
+            operation="script_generation",
+            on_usage=on_usage,
         )
 
         return self._script_from_generated(card, generated)
@@ -706,6 +846,22 @@ class OpenRouterStoryboardProvider:
         base_style: str,
         beat_groups: list[list[str]],
         visual_types: list[str],
+    ) -> StoryboardPlan:
+        return await self.generate_with_usage(
+            script,
+            base_style,
+            beat_groups,
+            visual_types,
+        )
+
+    async def generate_with_usage(
+        self,
+        script: ScriptDraft,
+        base_style: str,
+        beat_groups: list[list[str]],
+        visual_types: list[str],
+        *,
+        on_usage: UsageRecorder | None = None,
     ) -> StoryboardPlan:
         if not self.configured:
             raise ProviderUnavailable(
@@ -814,6 +970,8 @@ class OpenRouterStoryboardProvider:
             max_completion_tokens=4000,
             timeout_seconds=self.timeout_seconds,
             transport=self.transport,
+            operation="storyboard_generation",
+            on_usage=on_usage,
         )
         raw_shots = _normalize_storyboard_rows(
             generated.get("shots"), target_segments

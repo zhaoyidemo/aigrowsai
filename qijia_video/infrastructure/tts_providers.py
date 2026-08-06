@@ -7,6 +7,7 @@ import json
 import re
 import shutil
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import httpx
@@ -14,7 +15,9 @@ import httpx
 from qijia_video.contracts import (
     NarrationAudioSegment,
     NarrationManifest,
+    ProviderUsageRecord,
     ScriptDraft,
+    timestamp,
 )
 from qijia_video.errors import ProviderUnavailable
 from qijia_video.ports import GeneratedFile
@@ -27,6 +30,7 @@ TTS_TEXT_MAX_BYTES = 1000
 # Kept for import compatibility with older tests/integrations. New narration
 # synthesis does not insert artificial gaps between approved script beats.
 SEGMENT_GAP_SECONDS = 0.18
+UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
 
 
 class VolcengineTtsProvider:
@@ -125,7 +129,43 @@ class VolcengineTtsProvider:
         done = code == 20000000 or sequence < 0
         return audio, duration, done
 
-    async def _synthesize_segment(self, text: str, destination: Path) -> float:
+    async def _record_usage(
+        self,
+        recorder: UsageRecorder | None,
+        *,
+        request_id: str,
+        text: str,
+        succeeded: bool,
+        note: str = "",
+    ) -> None:
+        if not recorder:
+            return
+        usage = ProviderUsageRecord(
+            usage_id=f"usage_tts_{request_id.replace('-', '')}",
+            operation="tts_synthesis",
+            provider=self.name,
+            model_id=self.resource_id,
+            request_id=request_id,
+            succeeded=succeeded,
+            quantity=len(text),
+            unit="character",
+            note=note,
+            occurred_at=timestamp(),
+        )
+        try:
+            await recorder(usage)
+        except Exception as exc:
+            raise ProviderUnavailable(
+                "TTS 调用已经发生，但成本账本无法持久化；流程已停止"
+            ) from exc
+
+    async def _synthesize_segment(
+        self,
+        text: str,
+        destination: Path,
+        *,
+        on_usage: UsageRecorder | None = None,
+    ) -> float:
         if len(text.encode("utf-8")) > TTS_TEXT_MAX_BYTES:
             raise ProviderUnavailable(
                 "单次豆包 TTS 文本超过 1000 UTF-8 字节"
@@ -142,11 +182,11 @@ class VolcengineTtsProvider:
         destination.parent.mkdir(parents=True, exist_ok=True)
         chunks: list[bytes] = []
         reported_duration = 0.0
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(self.timeout_seconds, connect=20.0),
-            transport=self.transport,
-        ) as client:
-            try:
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout_seconds, connect=20.0),
+                transport=self.transport,
+            ) as client:
                 async with client.stream(
                     "POST",
                     self.endpoint,
@@ -171,12 +211,35 @@ class VolcengineTtsProvider:
                             chunks.append(audio)
                         if duration:
                             reported_duration = max(reported_duration, duration)
-            except ProviderUnavailable:
-                raise
-            except (httpx.TimeoutException, httpx.RequestError) as exc:
-                raise ProviderUnavailable("豆包 TTS 请求失败") from exc
-        if not chunks:
-            raise ProviderUnavailable("豆包 TTS 没有返回音频")
+            if not chunks:
+                raise ProviderUnavailable("豆包 TTS 没有返回音频")
+        except ProviderUnavailable:
+            await self._record_usage(
+                on_usage,
+                request_id=request_id,
+                text=text,
+                succeeded=False,
+                note="TTS 请求失败，是否计费需与供应商账单核对",
+            )
+            raise
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            await self._record_usage(
+                on_usage,
+                request_id=request_id,
+                text=text,
+                succeeded=False,
+                note="TTS 网络异常，是否计费需与供应商账单核对",
+            )
+            raise ProviderUnavailable("豆包 TTS 请求失败") from exc
+        # A non-empty audio response is the billable provider outcome. Record
+        # it before local ffprobe/concatenation can fail so paid work is not
+        # mislabeled as a zero-cost provider failure.
+        await self._record_usage(
+            on_usage,
+            request_id=request_id,
+            text=text,
+            succeeded=True,
+        )
         destination.write_bytes(b"".join(chunks))
         actual_duration = await self._probe_duration(destination)
         return actual_duration or reported_duration
@@ -385,6 +448,15 @@ class VolcengineTtsProvider:
     async def synthesize(
         self, script: ScriptDraft, workspace: Path
     ) -> tuple[NarrationManifest, list[GeneratedFile]]:
+        return await self.synthesize_with_usage(script, workspace)
+
+    async def synthesize_with_usage(
+        self,
+        script: ScriptDraft,
+        workspace: Path,
+        *,
+        on_usage: UsageRecorder | None = None,
+    ) -> tuple[NarrationManifest, list[GeneratedFile]]:
         if not self.configured:
             raise ProviderUnavailable(
                 "真实 TTS 未配置：请设置 VOLCENGINE_TTS_API_KEY，或设置 "
@@ -402,7 +474,15 @@ class VolcengineTtsProvider:
             path = audio_dir / (
                 "narration.mp3" if len(chunks) == 1 else f"chunk_{index:02d}.mp3"
             )
-            duration = await self._synthesize_segment(text, path)
+            duration = (
+                await self._synthesize_segment(
+                    text,
+                    path,
+                    on_usage=on_usage,
+                )
+                if on_usage
+                else await self._synthesize_segment(text, path)
+            )
             if duration <= 0:
                 raise ProviderUnavailable("完整旁白音频时长无效")
             chunk_paths.append(path)

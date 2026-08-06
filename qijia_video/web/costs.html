@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>成本分析 · 齐家 AI 内容工作台</title>
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.3.0">
+</head>
+<body>
+  <a class="skip-link" href="#cost-workspace">跳到成本分析</a>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">团队成本账本</p>
+      <h1>内容生产成本分析</h1>
+      <p class="subtitle">选题研究 · 脚本 · 分镜 · 图片 · 视频 · 配音</p>
+    </div>
+    <div class="topbar-actions">
+      <a class="back-link" href="/qijia-video">返回工作台</a>
+      <form action="/logout" method="post">
+        <button class="back-link" type="submit">退出登录</button>
+      </form>
+    </div>
+  </header>
+
+  <main id="cost-workspace" class="shell cost-shell" tabindex="-1">
+    <section id="cost-status" class="status-card" aria-live="polite">
+      <span class="status-dot"></span>
+      <span>正在读取团队成本账本…</span>
+    </section>
+    <div id="cost-notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+    <section class="panel cost-toolbar" aria-label="成本分析范围">
+      <div>
+        <p class="step">分析范围</p>
+        <h2 id="cost-period-title">最近 30 天</h2>
+        <p>查看报表不会调用 TikHub、模型或生成服务，也不会产生新费用。</p>
+      </div>
+      <div class="cost-toolbar-actions">
+        <label>时间范围
+          <select id="cost-period-select">
+            <option value="7">最近 7 天</option>
+            <option value="30" selected>最近 30 天</option>
+            <option value="90">最近 90 天</option>
+            <option value="365">最近 365 天</option>
+            <option value="0">全部记录</option>
+          </select>
+        </label>
+        <button id="cost-refresh-button" class="button secondary" type="button">刷新</button>
+        <button id="cost-export-button" class="button secondary" type="button" disabled>导出内容汇总 CSV</button>
+      </div>
+    </section>
+
+    <section class="cost-definition" aria-label="计算口径">
+      <strong>人民币已计成本 = 供应商回传金额 + 有计价依据的估算</strong>
+      <span>美元成本固定按 1 USD = ¥6.7 换算；估算不等于最终账单，待对账请求不计入金额但保留在覆盖率中。</span>
+    </section>
+
+    <section class="cost-kpi-grid" aria-label="成本摘要">
+      <article class="cost-kpi-card primary">
+        <span>人民币总成本</span>
+        <strong id="cost-accounted-cny">¥0.00</strong>
+        <small id="cost-cny-breakdown">回传 ¥0.00 · 估算 ¥0.00</small>
+      </article>
+      <article class="cost-kpi-card">
+        <span>计价覆盖率</span>
+        <strong id="cost-coverage">—</strong>
+        <small id="cost-coverage-detail">正在计算</small>
+      </article>
+      <article class="cost-kpi-card">
+        <span>计费相关请求</span>
+        <strong id="cost-request-count">0</strong>
+        <small id="cost-token-count">0 tokens</small>
+      </article>
+      <article class="cost-kpi-card">
+        <span>已打包视频</span>
+        <strong id="cost-completed-videos">0</strong>
+        <small id="cost-work-count">0 个视频任务 · 0 轮选题</small>
+      </article>
+      <article class="cost-kpi-card">
+        <span>视频投入 / 已打包视频</span>
+        <strong id="cost-per-video">—</strong>
+        <small>只作经营观察，包含同期未完工视频投入</small>
+      </article>
+    </section>
+
+    <section class="panel cost-timeline-panel">
+      <div class="panel-heading cost-section-heading">
+        <div><p class="step">时间变化</p><h2>成本趋势</h2></div>
+        <div class="cost-legend"><span class="cny">人民币</span></div>
+      </div>
+      <div id="cost-timeline" class="cost-timeline"><p class="empty">正在加载…</p></div>
+    </section>
+
+    <div class="cost-breakdown-grid">
+      <section class="panel">
+        <div class="panel-heading"><div><p class="step">供应商</p><h2>钱花在哪里</h2></div></div>
+        <div id="cost-by-provider" class="cost-breakdown-list"><p class="empty">正在加载…</p></div>
+      </section>
+      <section class="panel">
+        <div class="panel-heading"><div><p class="step">生产阶段</p><h2>流程成本</h2></div></div>
+        <div id="cost-by-stage" class="cost-breakdown-list"><p class="empty">正在加载…</p></div>
+      </section>
+      <section class="panel">
+        <div class="panel-heading"><div><p class="step">团队成员</p><h2>创建人归集</h2></div></div>
+        <div id="cost-by-creator" class="cost-breakdown-list"><p class="empty">正在加载…</p></div>
+      </section>
+    </div>
+
+    <section class="panel cost-table-panel">
+      <div class="panel-heading cost-section-heading">
+        <div><p class="step">内容维度</p><h2>每项内容的累计投入</h2></div>
+        <span id="cost-content-count" class="panel-heading-note"></span>
+      </div>
+      <div class="cost-table-wrap">
+        <table class="cost-table">
+          <thead><tr><th>内容</th><th>创建人 / 状态</th><th>请求 / tokens</th><th>人民币成本</th><th>计价覆盖</th></tr></thead>
+          <tbody id="cost-content-body"><tr><td colspan="5" class="empty">正在加载…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel cost-table-panel">
+      <div class="panel-heading cost-section-heading">
+        <div><p class="step">审计明细</p><h2>最近供应商调用</h2></div>
+        <span id="cost-event-count" class="panel-heading-note"></span>
+      </div>
+      <div class="cost-table-wrap">
+        <table class="cost-table cost-event-table">
+          <thead><tr><th>时间 / 阶段</th><th>内容</th><th>供应商 / 模型</th><th>请求用量</th><th>金额口径</th></tr></thead>
+          <tbody id="cost-event-body"><tr><td colspan="5" class="empty">正在加载…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="cost-method-grid">
+      <section class="panel">
+        <div class="panel-heading"><div><p class="step">当前计价</p><h2>单价与数据来源</h2></div></div>
+        <div id="cost-pricing" class="cost-pricing-list"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-heading"><div><p class="step">覆盖边界</p><h2>如何理解这些数字</h2></div></div>
+        <ul id="cost-coverage-notes" class="cost-note-list"></ul>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="/qijia-video/assets/costs.js?v=1.3.0"></script>
+</body>
+</html>

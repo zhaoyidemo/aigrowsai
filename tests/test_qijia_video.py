@@ -29,6 +29,9 @@ from qijia_video.contracts import (
     SourceCard,
     SourceCardInput,
     ProviderTaskState,
+    ProviderTask,
+    ProviderUsageRecord,
+    VideoJob,
     VisualGenerationRequest,
     content_hash,
     timestamp,
@@ -812,9 +815,19 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "hashtags": ["家庭教育", "家长成长", "亲子沟通"],
             }
             return httpx.Response(200, json={
+                "id": "generation-script-1",
+                "model": "resolved/test-model",
                 "choices": [{"message": {"content": json.dumps(
                     generated, ensure_ascii=False
-                )}}]
+                )}}],
+                "usage": {
+                    "prompt_tokens": 800,
+                    "completion_tokens": 200,
+                    "total_tokens": 1000,
+                    "cost": 0.0123,
+                    "prompt_tokens_details": {"cached_tokens": 120},
+                    "completion_tokens_details": {"reasoning_tokens": 40},
+                },
             })
 
         provider = OpenRouterScriptProvider(
@@ -829,7 +842,14 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             revision=2,
             status="verified",
         )
-        script = await provider.generate(card)
+        usage_records: list[ProviderUsageRecord] = []
+
+        async def record_usage(usage: ProviderUsageRecord) -> None:
+            usage_records.append(usage)
+
+        script = await provider.generate_with_usage(
+            card, on_usage=record_usage
+        )
         review = await provider.review(card, script)
         self.assertEqual(len(calls), 1)
         request_body = json.loads(calls[0].content)
@@ -878,6 +898,15 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(review.passed)
         self.assertEqual(review.input_hash, content_hash(script))
         self.assertEqual(review.prompt_version, SCRIPT_PROMPT_VERSION)
+        self.assertEqual(len(usage_records), 1)
+        self.assertTrue(usage_records[0].succeeded)
+        self.assertEqual(usage_records[0].request_id, "generation-script-1")
+        self.assertEqual(usage_records[0].model_id, "resolved/test-model")
+        self.assertEqual(usage_records[0].total_tokens, 1000)
+        self.assertEqual(usage_records[0].cached_tokens, 120)
+        self.assertEqual(usage_records[0].reasoning_tokens, 40)
+        self.assertEqual(usage_records[0].reported_currency, "USD")
+        self.assertAlmostEqual(usage_records[0].reported_cost, 0.0123)
         custom_prompt = provider._prompt(card, "只用短句，语气平静。")
         self.assertTrue(custom_prompt.startswith("只用短句，语气平静。"))
         self.assertIn("【系统输出格式】", custom_prompt)
@@ -1251,9 +1280,16 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             return 1.5
 
         provider._probe_duration = fixed_duration
+        usage_records: list[ProviderUsageRecord] = []
+
+        async def record_usage(usage: ProviderUsageRecord) -> None:
+            usage_records.append(usage)
+
         with tempfile.TemporaryDirectory() as directory:
             duration = await provider._synthesize_segment(
-                "这是一句真实接口契约测试。", Path(directory) / "voice.mp3"
+                "这是一句真实接口契约测试。",
+                Path(directory) / "voice.mp3",
+                on_usage=record_usage,
             )
         self.assertEqual(duration, 1.5)
         self.assertEqual(len(requests), 1)
@@ -1261,6 +1297,10 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             requests[0].headers["x-api-resource-id"], "seed-tts-2.0"
         )
+        self.assertEqual(len(usage_records), 1)
+        self.assertTrue(usage_records[0].succeeded)
+        self.assertEqual(usage_records[0].operation, "tts_synthesis")
+        self.assertEqual(usage_records[0].quantity, len("这是一句真实接口契约测试。"))
 
     async def test_tts_legacy_credentials_use_app_key_header(self):
         provider = VolcengineTtsProvider(
@@ -1299,6 +1339,41 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.temporary.cleanup()
+
+    async def test_seedance_cost_keeps_submission_price_snapshot(self):
+        job = VideoJob.model_validate({
+            "id": "job-cost-snapshot",
+            "state": "producing",
+            "source_card_id": "card-cost",
+            "source_card_revision": 1,
+            "source_card_snapshot": {"title": "成本快照"},
+        })
+        queued = ProviderTask(
+            provider="volcengine-seedance",
+            provider_task_id="seedance-task-cost",
+            request_fingerprint="c" * 64,
+            request_id="shot_01",
+            state="queued",
+        )
+        self.service._record_video_task_usage(job, queued)
+        self.assertEqual(queued.pricing_rate_cny_per_million, 46)
+        self.assertIsNone(queued.estimated_cost_cny)
+
+        succeeded = queued.model_copy(update={
+            "state": ProviderTaskState.SUCCEEDED,
+            "usage_total_tokens": 100000,
+        })
+        self.service.seedance_price_per_million_tokens = 99
+        self.service._record_video_task_usage(job, succeeded, queued)
+
+        self.assertEqual(succeeded.pricing_rate_cny_per_million, 46)
+        self.assertAlmostEqual(succeeded.estimated_cost_cny, 4.6)
+        matching = [
+            item for item in job.usage_records
+            if item.request_id == "seedance-task-cost"
+        ]
+        self.assertEqual(len(matching), 1)
+        self.assertAlmostEqual(matching[0].estimated_cost, 4.6)
 
     async def test_six_script_beats_are_all_grouped_into_five_visual_shots(self):
         card = await self.service.create_source_card(valid_card(), self.actor)

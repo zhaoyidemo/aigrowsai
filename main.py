@@ -12,7 +12,12 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from qijia_video import MODULE_VERSION, account_api, api as qijia_video_api
+from qijia_video import (
+    MODULE_VERSION,
+    account_api,
+    api as qijia_video_api,
+    cost_api,
+)
 from qijia_video import topic_api as qijia_topic_api
 from qijia_video import auth, run_service
 from qijia_video.database import (
@@ -100,6 +105,8 @@ def _safe_next(value: str) -> str:
         or candidate.startswith("/qijia-video?")
         or candidate == "/qijia-video/accounts"
         or candidate.startswith("/qijia-video/accounts?")
+        or candidate == "/qijia-video/costs"
+        or candidate.startswith("/qijia-video/costs?")
     ) and "\\" not in candidate:
         return candidate
     return "/qijia-video"
@@ -186,8 +193,10 @@ async def task_status(task_id: str, request: Request):
 app.include_router(qijia_video_api.api_router)
 app.include_router(qijia_topic_api.topic_api_router)
 app.include_router(account_api.account_api_router)
+app.include_router(cost_api.cost_api_router)
 app.include_router(qijia_video_api.page_router)
 app.include_router(account_api.account_page_router)
+app.include_router(cost_api.cost_page_router)
 app.mount(
     "/qijia-video/assets",
     StaticFiles(directory=WEB_DIR),

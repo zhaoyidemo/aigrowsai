@@ -552,6 +552,43 @@ class AssetRef(ContractModel):
     duration_seconds: float | None = Field(default=None, ge=0)
 
 
+class ProviderUsageRecord(ContractModel):
+    """One provider attempt persisted before downstream validation can fail."""
+
+    usage_id: str = Field(min_length=1, max_length=96)
+    operation: str = Field(min_length=1, max_length=64)
+    provider: str = Field(min_length=1, max_length=128)
+    model_id: str = Field(default="", max_length=256)
+    request_id: str = Field(default="", max_length=256)
+    request_count: int = Field(default=1, ge=1, le=100)
+    succeeded: bool = False
+    http_status_code: int | None = Field(default=None, ge=100, le=599)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    cached_tokens: int = Field(default=0, ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    quantity: float = Field(default=1, ge=0)
+    unit: str = Field(default="request", max_length=32)
+    reported_cost: float | None = Field(default=None, ge=0)
+    reported_currency: Literal["USD", "CNY"] | None = None
+    estimated_cost: float | None = Field(default=None, ge=0)
+    estimated_currency: Literal["USD", "CNY"] | None = None
+    pricing_basis: str = Field(default="", max_length=500)
+    note: str = Field(default="", max_length=500)
+    occurred_at: str = Field(default="", max_length=64)
+
+    @model_validator(mode="after")
+    def validate_money_currency(self):
+        if self.reported_cost is not None and not self.reported_currency:
+            raise ValueError("供应商回传金额必须标明币种")
+        if self.estimated_cost is not None and not self.estimated_currency:
+            raise ValueError("估算金额必须标明币种")
+        if self.reported_cost is not None and self.estimated_cost is not None:
+            raise ValueError("单次调用不能同时计入供应商回传金额和估算金额")
+        return self
+
+
 class FirstFrameCandidate(ContractModel):
     candidate_id: str = Field(
         min_length=1,
@@ -566,6 +603,8 @@ class FirstFrameCandidate(ContractModel):
     source_url: str = Field(default="", max_length=4000)
     size: str = Field(default="", max_length=64)
     usage_total_tokens: int = Field(default=0, ge=0)
+    estimated_cost_cny: float | None = Field(default=None, ge=0)
+    pricing_basis: str = Field(default="", max_length=500)
     asset: AssetRef | None = None
     created_at: str
 
@@ -696,6 +735,10 @@ class ProviderTask(ContractModel):
     error_message: str = ""
     raw_status: str = ""
     usage_total_tokens: int = Field(default=0, ge=0)
+    estimated_cost_cny: float | None = Field(default=None, ge=0)
+    pricing_rate_cny_per_million: float | None = Field(default=None, ge=0)
+    pricing_basis: str = Field(default="", max_length=500)
+    created_at: str = Field(default="", max_length=64)
 
 
 class VisualShotVersion(ContractModel):
@@ -817,6 +860,11 @@ class VideoJob(ContractModel):
     script: ScriptDraft | None = None
     script_hash: str = ""
     script_review: ScriptReview | None = None
+    # This is an append-only audit trail.  A hard item limit would eventually
+    # make an otherwise valid paid workflow impossible to save after repeated
+    # revisions, so retention is intentionally controlled by the aggregate
+    # repository rather than by schema validation.
+    usage_records: list[ProviderUsageRecord] = Field(default_factory=list)
     approvals: list[ApprovalRecord] = Field(default_factory=list)
     narration_manifest: NarrationManifest | None = None
     storyboard_plan: StoryboardPlan | None = None
