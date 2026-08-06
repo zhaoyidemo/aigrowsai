@@ -29,6 +29,54 @@ function setBusy(busy) {
   });
 }
 
+const validationFieldLabels = {
+  username: '账号名',
+  password: '初始密码',
+  new_password: '新密码',
+  expected_revision: '账号版本',
+  is_active: '启用状态',
+  can_use_workbench: '工作台权限',
+};
+
+function validationIssueMessage(issue) {
+  if (!issue || typeof issue !== 'object') return '';
+  const location = Array.isArray(issue.loc)
+    ? issue.loc.filter((part) => !['body', 'query', 'path'].includes(String(part)))
+    : [];
+  const fieldName = String(location[location.length - 1] || '');
+  const fieldLabel = validationFieldLabels[fieldName] || fieldName || '请求内容';
+  const context = issue.ctx && typeof issue.ctx === 'object' ? issue.ctx : {};
+  const type = String(issue.type || '');
+  const knownReasons = {
+    missing: '不能为空',
+    extra_forbidden: '包含不支持的字段',
+    bool_parsing: '必须是有效的开关值',
+    int_parsing: '必须是有效的整数',
+  };
+  let reason = knownReasons[type] || '';
+  if (type === 'string_too_short') reason = `至少需要 ${Number(context.min_length) || 1} 个字符`;
+  if (type === 'string_too_long') reason = `不能超过 ${Number(context.max_length) || 0} 个字符`;
+  if (type === 'greater_than_equal') reason = `不能小于 ${context.ge}`;
+  if (!reason) {
+    reason = String(issue.msg || issue.message || '格式不正确')
+      .replace(/^Field required$/i, '不能为空')
+      .replace(/^Input should be a valid boolean$/i, '必须是有效的开关值');
+  }
+  return `${fieldLabel}：${reason}`;
+}
+
+function apiErrorMessage(payload) {
+  const detail = payload?.detail ?? payload?.message;
+  if (Array.isArray(detail)) {
+    const messages = detail.map(validationIssueMessage).filter(Boolean);
+    return [...new Set(messages)].join('；') || '账号信息格式不正确';
+  }
+  if (detail && typeof detail === 'object') {
+    return validationIssueMessage(detail) || '账号操作失败';
+  }
+  return String(detail || '账号操作失败');
+}
+
 async function api(method, path = '', body = undefined) {
   const response = await fetch(`${API}${path}`, {
     method,
@@ -39,7 +87,7 @@ async function api(method, path = '', body = undefined) {
   let payload;
   try { payload = await response.json(); } catch { payload = {}; }
   if (!response.ok || payload.code !== 0) {
-    throw new Error(payload.detail || payload.message || '账号操作失败');
+    throw new Error(apiErrorMessage(payload));
   }
   return payload.data;
 }
@@ -104,16 +152,17 @@ function memberFor(form) {
 
 $('#account-create-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  notify(''); setBusy(true);
   const form = event.currentTarget;
   const data = new FormData(form);
+  const request = {
+    username: String(data.get('username') || '').trim(),
+    password: String(data.get('password') || ''),
+    can_use_workbench: data.get('can_use_workbench') === 'on',
+    is_active: data.get('is_active') === 'on',
+  };
+  notify(''); setBusy(true);
   try {
-    await api('POST', '', {
-      username: String(data.get('username') || '').trim(),
-      password: String(data.get('password') || ''),
-      can_use_workbench: data.get('can_use_workbench') === 'on',
-      is_active: data.get('is_active') === 'on',
-    });
+    await api('POST', '', request);
     form.reset();
     form.elements.can_use_workbench.checked = true;
     form.elements.is_active.checked = true;
@@ -132,10 +181,10 @@ $('#account-list').addEventListener('submit', async (event) => {
   event.preventDefault();
   const member = memberFor(form);
   if (!member || state.busy) return;
+  const data = new FormData(form);
   notify(''); setBusy(true);
   try {
     if (form.matches('[data-account-update]')) {
-      const data = new FormData(form);
       await api('PATCH', `/${encodeURIComponent(member.id)}`, {
         expected_revision: member.revision,
         can_use_workbench: data.get('can_use_workbench') === 'on',
@@ -144,7 +193,7 @@ $('#account-list').addEventListener('submit', async (event) => {
       await loadAccounts();
       notify(`账号 ${member.username} 的权限已保存；如有变化，旧会话已失效。`);
     } else {
-      const password = String(new FormData(form).get('new_password') || '');
+      const password = String(data.get('new_password') || '');
       await api('POST', `/${encodeURIComponent(member.id)}/actions/reset-password`, {
         expected_revision: member.revision,
         new_password: password,

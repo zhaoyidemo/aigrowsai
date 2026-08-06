@@ -33,6 +33,19 @@ test('administrator can manage bounded colleague access without exposing passwor
   assert.match(accountsPage, /autocomplete="new-password"/);
   assert.match(accountsApp, /\/actions\/reset-password/);
   assert.match(accountsApp, /can_use_workbench/);
+  assert.match(accountsApp, /Array\.isArray\(detail\)/);
+  assert.match(accountsApp, /账号名.*初始密码.*新密码/s);
+  assert.doesNotMatch(accountsApp, /new Error\(payload\.detail \|\|/);
+  const createHandler = accountsApp.slice(
+    accountsApp.indexOf("$('#account-create-form').addEventListener"),
+    accountsApp.indexOf("$('#account-list').addEventListener"),
+  );
+  assert.ok(createHandler.indexOf('new FormData(form)') < createHandler.indexOf('setBusy(true)'));
+  const updateHandler = accountsApp.slice(
+    accountsApp.indexOf("$('#account-list').addEventListener"),
+    accountsApp.indexOf("$('#account-refresh-button').addEventListener"),
+  );
+  assert.ok(updateHandler.indexOf('new FormData(form)') < updateHandler.indexOf('setBusy(true)'));
   assert.doesNotMatch(accountsApp, /localStorage|sessionStorage/);
 });
 
