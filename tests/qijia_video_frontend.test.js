@@ -124,9 +124,14 @@ test('topic research is Douyin-only, cost-bounded, and human-gated', () => {
   assert.match(app, /日均播放/);
   assert.match(page, /id="topic-evidence-diagnostics"/);
   assert.match(app, /低粉样本复核漏斗/);
+  assert.match(app, /空结果查询/);
+  assert.match(app, /响应结构未识别/);
+  assert.match(app, /rejected_missing_title_count/);
   assert.match(app, /rejected_insufficient_plays_count/);
   assert.match(app, /tikhub_success_count/);
   assert.match(app, /TikHub 调用明细/);
+  assert.match(app, /request_label/);
+  assert.match(app, /data_shape/);
   assert.match(app, /estimated_total_cost_usd/);
   assert.match(app, /reported_cost_usd/);
   assert.match(app, /data-adopt-topic/);

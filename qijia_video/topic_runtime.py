@@ -89,7 +89,7 @@ class TopicResearchRuntime:
             "cost_confirmation_required": True,
             "notes": [
                 "TikHub 与字节跳动无官方隶属关系，数据仅用于选题研究",
-                "低粉爆款采用 TikHub 精选标签并叠加强/潜力两级可见指标复核",
+                "低粉爆款采用 TikHub 抖音榜单并叠加强/潜力两级可见指标复核",
                 "抖音趋势不会自动转成已核验来源卡",
                 "TikHub 金额是规划估算，实际端点价格与阶梯折扣以供应商账单为准",
                 "为避免服务重启后重复计费，中断的研究不会自动重跑",

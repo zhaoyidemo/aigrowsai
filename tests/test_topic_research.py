@@ -19,6 +19,7 @@ from qijia_video.infrastructure.tikhub import (
     TikHubDouyinResearchProvider,
     _extract_terms,
     _video_evidence,
+    _video_evidence_list,
 )
 from qijia_video.infrastructure.topic_providers import OpenRouterTopicEditor
 from qijia_video.topic_contracts import (
@@ -50,7 +51,7 @@ def video_evidence(index: int) -> TopicEvidence:
         signal_types=[TopicSignalType.LOW_FOLLOWER_VIDEO],
         queries=["亲子沟通"],
         title=f"家庭教育视频样本 {index}",
-        platform_labels=["TikHub 近 3 天低粉爆款标签"],
+        platform_labels=["TikHub 近 72 小时低粉爆款榜"],
         quality_tier=TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT,
         qualification_reasons=["测试中的低粉爆款证据"],
         source_rank=index,
@@ -215,7 +216,7 @@ class TopicNormalizationTests(unittest.TestCase):
             },
             query="孩子情绪",
             signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
-            label="TikHub 近 3 天低粉爆款标签",
+            label="TikHub 近 72 小时低粉爆款榜",
             rank=1,
             as_of=as_of,
         )
@@ -252,7 +253,7 @@ class TopicNormalizationTests(unittest.TestCase):
             },
             query="亲子沟通",
             signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
-            label="TikHub 近 3 天低粉爆款标签",
+            label="TikHub 近 72 小时低粉爆款榜",
             rank=1,
             as_of=as_of,
         )
@@ -265,6 +266,45 @@ class TopicNormalizationTests(unittest.TestCase):
         self.assertEqual(item.metrics.play_follower_ratio, 12)
         self.assertEqual(item.metrics.like_rate, 0.03)
         self.assertEqual(item.metrics.deep_engagement_rate, 0.003)
+
+    def test_video_diagnostics_separate_empty_schema_and_missing_title(self):
+        as_of = datetime(2026, 8, 6, 12, tzinfo=BEIJING_TZ)
+        diagnostics = TopicLowFollowerDiagnostics()
+
+        empty = _video_evidence_list(
+            {"list": [], "total": 0},
+            query="家庭教育",
+            signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
+            label="TikHub 近 72 小时低粉爆款榜",
+            as_of=as_of,
+            low_follower_diagnostics=diagnostics,
+        )
+        unrecognized = _video_evidence_list(
+            {"rows": [{"unknownVideoKey": "value"}], "total": 1},
+            query="家庭教育",
+            signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
+            label="TikHub 近 72 小时低粉爆款榜",
+            as_of=as_of,
+            low_follower_diagnostics=diagnostics,
+        )
+        missing_title = _video_evidence_list(
+            {"list": [{"itemId": "73000000000000008"}]},
+            query="家庭教育",
+            signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
+            label="TikHub 近 72 小时低粉爆款榜",
+            as_of=as_of,
+            low_follower_diagnostics=diagnostics,
+        )
+
+        self.assertEqual(empty, [])
+        self.assertEqual(unrecognized, [])
+        self.assertEqual(missing_title, [])
+        self.assertEqual(diagnostics.empty_or_unrecognized_query_count, 2)
+        self.assertEqual(diagnostics.empty_query_count, 1)
+        self.assertEqual(diagnostics.unrecognized_query_count, 1)
+        self.assertEqual(diagnostics.received_count, 1)
+        self.assertEqual(diagnostics.rejected_missing_identity_count, 1)
+        self.assertEqual(diagnostics.rejected_missing_title_count, 1)
 
     def test_video_normalization_rejects_weak_or_excluded_platform_labels(self):
         as_of = datetime(2026, 8, 6, 12, tzinfo=BEIJING_TZ)
@@ -286,7 +326,7 @@ class TopicNormalizationTests(unittest.TestCase):
             base,
             query="孩子情绪",
             signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
-            label="TikHub 近 3 天低粉爆款标签",
+            label="TikHub 近 72 小时低粉爆款榜",
             rank=1,
             as_of=as_of,
             low_follower_diagnostics=diagnostics,
@@ -306,7 +346,7 @@ class TopicNormalizationTests(unittest.TestCase):
             },
             query="孩子情绪",
             signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
-            label="TikHub 近 3 天低粉爆款标签",
+            label="TikHub 近 72 小时低粉爆款榜",
             rank=1,
             as_of=as_of,
             low_follower_diagnostics=diagnostics,
@@ -326,7 +366,7 @@ class TopicNormalizationTests(unittest.TestCase):
             },
             query="孩子情绪",
             signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
-            label="TikHub 近 3 天低粉爆款标签",
+            label="TikHub 近 72 小时低粉爆款榜",
             rank=1,
             as_of=as_of,
             low_follower_diagnostics=diagnostics,
@@ -347,7 +387,7 @@ class TopicNormalizationTests(unittest.TestCase):
             missing_time_payload,
             query="孩子情绪",
             signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
-            label="TikHub 近 3 天低粉爆款标签",
+            label="TikHub 近 72 小时低粉爆款榜",
             rank=1,
             as_of=as_of,
             low_follower_diagnostics=diagnostics,
@@ -367,7 +407,7 @@ class TopicNormalizationTests(unittest.TestCase):
             },
             query="孩子情绪",
             signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
-            label="TikHub 近 3 天低粉爆款标签",
+            label="TikHub 近 72 小时低粉爆款榜",
             rank=1,
             as_of=as_of,
             low_follower_diagnostics=diagnostics,
@@ -403,28 +443,28 @@ class TikHubProviderContractTests(unittest.IsolatedAsyncioTestCase):
         today = datetime.now(BEIJING_TZ).strftime("%Y%m%d")
         collection_now = datetime.now(BEIJING_TZ)
         seen_paths: list[str] = []
-        item_labels: set[str] = set()
+        sample_paths: set[str] = set()
 
-        def aweme(video_id: str, title: str, label_type: str) -> dict:
-            low_follower = label_type == "1"
+        def aweme(video_id: str, title: str, sample_kind: str) -> dict:
+            low_follower = sample_kind == "low"
             return {
-                "aweme_id": video_id,
-                "desc": title,
-                "create_time": int((
+                "itemID": video_id,
+                "title": title,
+                "publishDate": int((
                     collection_now - timedelta(hours=12 if low_follower else 72)
                 ).timestamp()),
                 "author": {
-                    "nickname": "测试作者",
-                    "follower_count": 20_000 if low_follower else 500_000,
+                    "nickName": "测试作者",
+                    "fansCount": 20_000 if low_follower else 500_000,
                 },
                 "statistics": {
-                    "play_count": 600_000 if low_follower else 1_200_000,
-                    "digg_count": 36_000 if low_follower else 108_000,
-                    "comment_count": 3_000 if low_follower else 6_000,
-                    "share_count": 1_800 if low_follower else 3_600,
-                    "collect_count": 1_200 if low_follower else 2_400,
+                    "playCount": 600_000 if low_follower else 1_200_000,
+                    "diggCount": 36_000 if low_follower else 108_000,
+                    "commentCount": 3_000 if low_follower else 6_000,
+                    "shareCount": 1_800 if low_follower else 3_600,
+                    "favoriteCount": 1_200 if low_follower else 2_400,
                 },
-                "video": {"duration": 36_000},
+                "video": {"durationSeconds": 36},
             }
 
         def response(data) -> httpx.Response:
@@ -453,21 +493,23 @@ class TikHubProviderContractTests(unittest.IsolatedAsyncioTestCase):
                     {"topic_name": "青春期亲子边界"},
                     {"topic_name": "孩子学习习惯"},
                 ]})
-            if path.endswith("/fetch_item_query"):
-                self.assertEqual(request.url.params["category_id"], "617")
-                self.assertEqual(request.url.params["duration_type"], "0")
-                item_labels.add(request.url.params["label_type"])
-                label = request.url.params["label_type"]
-                self.assertEqual(
-                    request.url.params["date_type"],
-                    "3" if label == "1" else "7",
-                )
-                query = request.url.params["query"]
+            if path.endswith("/fetch_hot_total_low_fan_list") or path.endswith(
+                "/fetch_hot_total_high_like_list"
+            ):
+                sample_paths.add(path)
+                body = json.loads(request.content.decode("utf-8"))
+                low_follower = path.endswith("/fetch_hot_total_low_fan_list")
+                self.assertEqual(body["page"], 1)
+                self.assertEqual(body["page_size"], 20)
+                self.assertEqual(body["date_window"], 72 if low_follower else 168)
+                self.assertEqual(body["tags"], [])
+                query = body["keyword"]
                 query_index = DEFAULT_FAMILY_EDUCATION_QUERIES.index(query) + 1
-                return response({"items": [aweme(
-                    f"7310000000000{query_index:02d}{label}",
+                sample_kind = "low" if low_follower else "high"
+                return response({"list": [aweme(
+                    f"7310000000000{query_index:02d}{1 if low_follower else 4}",
                     f"{query}的家庭教育爆款样本",
-                    label,
+                    sample_kind,
                 )]})
             self.fail(f"unexpected request: {path}")
 
@@ -489,7 +531,17 @@ class TikHubProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(collection.calls), 15)
         self.assertEqual(persisted_call_counts, list(range(1, 16)))
         self.assertTrue(all(item.succeeded for item in collection.calls))
-        self.assertEqual(item_labels, {"1", "4"})
+        self.assertEqual(sample_paths, {
+            "/api/v1/douyin/billboard/fetch_hot_total_low_fan_list",
+            "/api/v1/douyin/billboard/fetch_hot_total_high_like_list",
+        })
+        sample_calls = [
+            item
+            for item in collection.calls
+            if "/billboard/" in item.endpoint
+        ]
+        self.assertTrue(all(item.request_label for item in sample_calls))
+        self.assertTrue(all("list" in item.data_shape for item in sample_calls))
         self.assertGreaterEqual(
             sum(item.evidence_type == TopicEvidenceType.VIDEO for item in collection.evidence),
             10,

@@ -402,9 +402,9 @@ function renderTopicControls() {
   const lowAgeLabel = lowAgeHours % 24 === 0 ? `${lowAgeHours / 24} 天` : `${lowAgeHours} 小时`;
   const highAgeLabel = highAgeHours % 24 === 0 ? `${highAgeHours / 24} 天` : `${highAgeHours} 小时`;
   $('#topic-quality-policy').innerHTML = `
-    <p><strong>强低粉爆款（最优先）</strong><span>发布 ≤ ${lowAgeLabel} + TikHub 低粉爆款标签 + 粉丝 ≤ ${formatCount(lowFollowers)} + 播放 ≥ ${formatCount(lowPlays)} + 播粉比 ≥ ${lowRatio} + 赞播比 ≥ ${formatPercent(lowLike)} + 深度互动率 ≥ ${formatPercent(deepRate)}</span></p>
+    <p><strong>强低粉爆款（最优先）</strong><span>发布 ≤ ${lowAgeLabel} + TikHub 低粉爆款榜 + 粉丝 ≤ ${formatCount(lowFollowers)} + 播放 ≥ ${formatCount(lowPlays)} + 播粉比 ≥ ${lowRatio} + 赞播比 ≥ ${formatPercent(lowLike)} + 深度互动率 ≥ ${formatPercent(deepRate)}</span></p>
     <p><strong>潜力低粉爆款（补足）</strong><span>发布 ≤ ${lowAgeLabel} + 粉丝 ≤ ${formatCount(emergingFollowers)} + ${emergingFreshHours} 小时内播放 ≥ ${formatCount(emergingFreshPlays)}，之后播放 ≥ ${formatCount(emergingPlays)} + 播粉比 ≥ ${emergingRatio} + 赞播比 ≥ ${formatPercent(emergingLike)} + 深度互动率 ≥ ${formatPercent(emergingDeepRate)}</span></p>
-    <p><strong>高热爆款（补充）</strong><span>发布 ≤ ${highAgeLabel} + TikHub 高点赞率标签 + 播放 ≥ ${formatCount(highPlays)} + 赞播比 ≥ ${formatPercent(highLike)} + 深度互动率 ≥ ${formatPercent(Number(high.min_deep_engagement_rate || deepRate))}</span></p>
+    <p><strong>高热爆款（补充）</strong><span>发布 ≤ ${highAgeLabel} + TikHub 高点赞率榜 + 播放 ≥ ${formatCount(highPlays)} + 赞播比 ≥ ${formatPercent(highLike)} + 深度互动率 ≥ ${formatPercent(Number(high.min_deep_engagement_rate || deepRate))}</span></p>
     <p><strong>不足不凑数</strong><span>至少 ${Number(gate.min_qualified_videos || 10)} 条合格视频，其中至少 ${Number(gate.min_low_follower_videos || 5)} 条来自两个低粉层级；查询不限时长且不增加调用，每个选题仍需两条独立爆款共同验证。</span></p>`;
 }
 
@@ -490,27 +490,49 @@ function renderTopicDiagnostics(run) {
   const diagnostics = run?.low_follower_diagnostics || {};
   const received = Number(diagnostics.received_count || 0);
   const qualified = Number(diagnostics.unique_qualified_count || 0);
-  if (!received && !qualified) {
+  const emptyQueries = Number(diagnostics.empty_query_count || 0);
+  const unrecognizedQueries = Number(diagnostics.unrecognized_query_count || 0);
+  const queryFailures = Number(
+    diagnostics.empty_or_unrecognized_query_count || 0,
+  );
+  if (!received && !qualified && !queryFailures && !emptyQueries && !unrecognizedQueries) {
     node.hidden = true;
     node.innerHTML = '';
     return;
   }
+  const legacyUnclassifiedQueries = Math.max(
+    0,
+    queryFailures
+      - emptyQueries
+      - unrecognizedQueries,
+  );
+  const missingVideoIds = Number(diagnostics.rejected_missing_video_id_count || 0);
+  const missingTitles = Number(diagnostics.rejected_missing_title_count || 0);
+  const legacyMissingIdentity = Math.max(
+    0,
+    Number(diagnostics.rejected_missing_identity_count || 0)
+      - missingVideoIds
+      - missingTitles,
+  );
   const rejectionLabels = [
-    ['无可识别视频的查询', 'empty_or_unrecognized_query_count'],
-    ['身份字段缺失', 'rejected_missing_identity_count'],
-    ['作品 ID 异常', 'rejected_invalid_video_id_count'],
-    ['偏离家庭教育', 'rejected_off_topic_count'],
-    ['发布时间异常', 'rejected_invalid_publish_time_count'],
-    ['超过 72 小时', 'rejected_too_old_count'],
-    ['粉丝数缺失', 'rejected_missing_followers_count'],
-    ['粉丝超过 10 万', 'rejected_follower_ceiling_count'],
-    ['播放不足', 'rejected_insufficient_plays_count'],
-    ['播粉比不足', 'rejected_play_follower_ratio_count'],
-    ['赞播比不足', 'rejected_like_rate_count'],
-    ['深度互动不足', 'rejected_deep_engagement_rate_count'],
+    ['空结果查询', emptyQueries],
+    ['响应结构未识别', unrecognizedQueries],
+    ['未分类的空/结构异常查询', legacyUnclassifiedQueries],
+    ['作品 ID 缺失', missingVideoIds],
+    ['标题缺失', missingTitles],
+    ['其他身份字段缺失', legacyMissingIdentity],
+    ['作品 ID 异常', Number(diagnostics.rejected_invalid_video_id_count || 0)],
+    ['偏离家庭教育', Number(diagnostics.rejected_off_topic_count || 0)],
+    ['发布时间异常', Number(diagnostics.rejected_invalid_publish_time_count || 0)],
+    ['超过 72 小时', Number(diagnostics.rejected_too_old_count || 0)],
+    ['粉丝数缺失', Number(diagnostics.rejected_missing_followers_count || 0)],
+    ['粉丝超过 10 万', Number(diagnostics.rejected_follower_ceiling_count || 0)],
+    ['播放不足', Number(diagnostics.rejected_insufficient_plays_count || 0)],
+    ['播粉比不足', Number(diagnostics.rejected_play_follower_ratio_count || 0)],
+    ['赞播比不足', Number(diagnostics.rejected_like_rate_count || 0)],
+    ['深度互动不足', Number(diagnostics.rejected_deep_engagement_rate_count || 0)],
   ];
   const rejectionPills = rejectionLabels
-    .map(([label, key]) => [label, Number(diagnostics[key] || 0)])
     .filter(([, count]) => count > 0)
     .map(([label, count]) => `<span>${escapeHtml(label)} ${formatCount(count)}</span>`)
     .join('');
@@ -565,9 +587,11 @@ function renderTopicCost(run) {
     <summary>查看 ${calls.length} 次 TikHub 调用明细</summary>
     <div>${calls.map((call, index) => {
       const endpoint = String(call.endpoint || '').split('/').filter(Boolean).pop() || call.endpoint || 'unknown';
+      const requestLabel = call.request_label ? ` · ${call.request_label}` : '';
+      const dataShape = call.data_shape ? ` · 返回结构 ${call.data_shape}` : '';
       const requestId = call.request_id ? ` · ${call.request_id}` : '';
       const responseCode = call.response_code === null || call.response_code === undefined ? 'code —' : `code ${call.response_code}`;
-      return `<p><span>${index + 1}. ${escapeHtml(endpoint)}</span><strong>${call.succeeded ? '成功' : '失败'} · ${escapeHtml(responseCode)} · ${Number(call.elapsed_ms || 0)} ms${escapeHtml(requestId)}</strong></p>`;
+      return `<p><span>${index + 1}. ${escapeHtml(endpoint + requestLabel + dataShape)}</span><strong>${call.succeeded ? '成功' : '失败'} · ${escapeHtml(responseCode)} · ${Number(call.elapsed_ms || 0)} ms${escapeHtml(requestId)}</strong></p>`;
     }).join('')}</div>
   </details>` : '';
   const modelTokenDetail = model?.request_count

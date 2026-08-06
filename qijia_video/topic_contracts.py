@@ -147,10 +147,12 @@ class TopicCandidateProposal(ContractModel):
 
 class TikHubCallRecord(ContractModel):
     endpoint: str = Field(min_length=1, max_length=300)
+    request_label: str = Field(default="", max_length=200)
     request_id: str = Field(default="", max_length=200)
     response_code: int | None = None
     elapsed_ms: int = Field(default=0, ge=0)
     cache_message: str = Field(default="", max_length=300)
+    data_shape: str = Field(default="", max_length=300)
     succeeded: bool = False
 
 
@@ -205,7 +207,11 @@ class TopicLowFollowerDiagnostics(ContractModel):
     emerging_qualified_count: int = Field(default=0, ge=0)
     duplicate_qualified_count: int = Field(default=0, ge=0)
     empty_or_unrecognized_query_count: int = Field(default=0, ge=0)
+    empty_query_count: int = Field(default=0, ge=0)
+    unrecognized_query_count: int = Field(default=0, ge=0)
     rejected_missing_identity_count: int = Field(default=0, ge=0)
+    rejected_missing_video_id_count: int = Field(default=0, ge=0)
+    rejected_missing_title_count: int = Field(default=0, ge=0)
     rejected_invalid_video_id_count: int = Field(default=0, ge=0)
     rejected_off_topic_count: int = Field(default=0, ge=0)
     rejected_invalid_publish_time_count: int = Field(default=0, ge=0)

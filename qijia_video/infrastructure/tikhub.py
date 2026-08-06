@@ -30,14 +30,15 @@ from qijia_video.topic_contracts import (
 
 
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
-# TikHub 当前筛选表将 617 定义为“母婴”。家庭教育只是其中的子集，
-# 所以后续仍会再做关键词相关性过滤，绝不把整个母婴垂类都当作候选。
+# TikHub 抖音指数筛选表将 617 定义为“母婴”。它只用于读取创作趋势；
+# 爆款证据改走支持关键词和滚动时间窗口的抖音榜单接口，再做本地相关性复核。
 TIKHUB_PARENTING_TAG_ID = "617"
 PLANNED_MAX_TIKHUB_CALLS = 15
 MAX_TIKHUB_REQUEST_BUDGET = 100
+BILLBOARD_PAGE_SIZE = 20
 
 # TikHub 没有公开“低粉爆款”的内部阈值。下面是齐家自己的二次复核门槛，
-# 只把同时通过平台精选标签和可见指标校验的视频交给选题编辑模型。
+# 只把同时进入平台榜单并通过可见指标校验的视频交给选题编辑模型。
 LOW_FOLLOWER_MAX_FOLLOWERS = 50_000
 LOW_FOLLOWER_MIN_PLAYS = 500_000
 LOW_FOLLOWER_MIN_PLAY_FOLLOWER_RATIO = 20.0
@@ -57,20 +58,49 @@ HIGH_HEAT_MAX_AGE_HOURS = 168
 MIN_QUALIFIED_VIDEO_COUNT = 10
 MIN_LOW_FOLLOWER_VIDEO_COUNT = 5
 DEFAULT_FAMILY_EDUCATION_QUERIES = (
+    "家庭教育",
     "亲子沟通",
     "孩子情绪",
     "学习习惯",
-    "规则边界 孩子",
-    "手机沉迷 孩子",
-    "青春期 亲子",
+    "青春期教育",
+    "父母成长",
 )
 
 _VALID_ENDPOINTS = {
     "/api/v1/douyin/index/fetch_content_valid_date",
     "/api/v1/douyin/index/fetch_content_creative_keywords",
     "/api/v1/douyin/index/fetch_content_creative_topic",
-    "/api/v1/douyin/index/fetch_item_query",
+    "/api/v1/douyin/billboard/fetch_hot_total_low_fan_list",
+    "/api/v1/douyin/billboard/fetch_hot_total_high_like_list",
 }
+
+_VIDEO_ID_KEYS = (
+    "aweme_id",
+    "awemeId",
+    "itemId",
+    "item_id",
+    "itemIdStr",
+    "item_id_str",
+    "videoId",
+    "video_id",
+)
+_VIDEO_TITLE_KEYS = (
+    "desc",
+    "itemTitle",
+    "item_title",
+    "caption",
+    "title",
+    "itemName",
+    "item_name",
+    "itemDesc",
+    "item_desc",
+    "itemDescription",
+    "item_description",
+    "videoTitle",
+    "video_title",
+    "contentTitle",
+    "content_title",
+)
 _TERM_KEYS = (
     "keyword",
     "word",
@@ -198,6 +228,7 @@ class TikHubRequestSession:
         *,
         params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
+        request_label: str = "",
     ) -> Any:
         if endpoint not in _VALID_ENDPOINTS:
             raise ValueError("不允许调用未声明的 TikHub 端点")
@@ -207,6 +238,7 @@ class TikHubRequestSession:
         response_code: int | None = None
         request_id = ""
         cache_message = ""
+        data_shape = ""
         request_succeeded = False
         try:
             response = await self.client.request(
@@ -223,6 +255,7 @@ class TikHubRequestSession:
             if not isinstance(decoded, dict):
                 raise ProviderUnavailable("TikHub 响应不是预期的 JSON 对象")
             body = decoded
+            data_shape = _data_shape(body.get("data"))
             raw_code = body.get("code")
             try:
                 response_code = int(raw_code) if raw_code is not None else None
@@ -250,10 +283,12 @@ class TikHubRequestSession:
         finally:
             self.calls.append(TikHubCallRecord(
                 endpoint=endpoint,
+                request_label=str(request_label or "")[:200],
                 request_id=request_id,
                 response_code=response_code,
                 elapsed_ms=max(0, round((time.perf_counter() - started) * 1000)),
                 cache_message=cache_message,
+                data_shape=data_shape,
                 succeeded=request_succeeded,
             ))
             if self.on_calls:
@@ -364,11 +399,28 @@ def _latest_valid_date(value: Any) -> tuple[str, str]:
     return latest.strftime("%Y%m%d"), latest.date().isoformat()
 
 
+def _normalized_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _direct_value(node: Any, aliases: tuple[str, ...]) -> Any:
+    if not isinstance(node, dict):
+        return None
+    for alias in aliases:
+        if alias in node and node[alias] not in (None, ""):
+            return node[alias]
+    normalized_aliases = {_normalized_key(alias) for alias in aliases}
+    for key, value in node.items():
+        if _normalized_key(key) in normalized_aliases and value not in (None, ""):
+            return value
+    return None
+
+
 def _deep_value(node: Any, aliases: tuple[str, ...]) -> Any:
     if isinstance(node, dict):
-        for alias in aliases:
-            if alias in node and node[alias] not in (None, ""):
-                return node[alias]
+        direct = _direct_value(node, aliases)
+        if direct not in (None, ""):
+            return direct
         for child in node.values():
             if isinstance(child, (dict, list)):
                 value = _deep_value(child, aliases)
@@ -387,7 +439,7 @@ def _video_nodes(value: Any) -> list[dict[str, Any]]:
 
     def walk(node: Any) -> None:
         if isinstance(node, dict):
-            if any(key in node for key in ("aweme_id", "itemId", "item_id")):
+            if _direct_value(node, _VIDEO_ID_KEYS) not in (None, ""):
                 found.append(node)
                 return
             for child in node.values():
@@ -398,6 +450,59 @@ def _video_nodes(value: Any) -> list[dict[str, Any]]:
 
     walk(value)
     return found
+
+
+def _payload_is_empty(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, (int, float)):
+        return value == 0
+    if isinstance(value, dict):
+        return not value or all(
+            _payload_is_empty(child) for child in value.values()
+        )
+    if isinstance(value, list):
+        return not value or all(_payload_is_empty(child) for child in value)
+    return False
+
+
+def _data_shape(value: Any, *, depth: int = 0) -> str:
+    """只记录字段结构，不保存 TikHub 返回的业务数据。"""
+
+    if isinstance(value, dict):
+        keys = sorted(str(key)[:40] for key in value)[:12]
+        current = "object{" + ",".join(keys) + "}"
+        if depth >= 2:
+            return current
+        nested = next(
+            (
+                child
+                for child in value.values()
+                if isinstance(child, (dict, list)) and child
+            ),
+            None,
+        )
+        return (
+            f"{current}>{_data_shape(nested, depth=depth + 1)}"
+            if nested is not None
+            else current
+        )[:300]
+    if isinstance(value, list):
+        current = f"array[{len(value)}]"
+        if depth >= 2 or not value:
+            return current
+        nested = next(
+            (child for child in value if isinstance(child, (dict, list))),
+            value[0],
+        )
+        return f"{current}>{_data_shape(nested, depth=depth + 1)}"[:300]
+    if value is None:
+        return "null"
+    return type(value).__name__[:300]
 
 
 def _number(value: Any) -> int:
@@ -411,6 +516,10 @@ def _number(value: Any) -> int:
         multiplier, text = 10_000, text[:-1]
     elif text.endswith("亿"):
         multiplier, text = 100_000_000, text[:-1]
+    elif text.lower().endswith("w"):
+        multiplier, text = 10_000, text[:-1]
+    elif text.lower().endswith("k"):
+        multiplier, text = 1_000, text[:-1]
     try:
         return max(0, round(float(text) * multiplier))
     except ValueError:
@@ -426,7 +535,15 @@ def _ratio(numerator: int, denominator: int) -> float | None:
 def _published_datetime(value: Any) -> datetime | None:
     if value in (None, ""):
         return None
-    if isinstance(value, (int, float)) or str(value).isdigit():
+    raw_text = str(value).strip()
+    if re.fullmatch(r"20\d{6}", raw_text):
+        try:
+            return datetime.strptime(raw_text, "%Y%m%d").replace(
+                tzinfo=BEIJING_TZ
+            )
+        except ValueError:
+            return None
+    if isinstance(value, (int, float)) or raw_text.isdigit():
         raw = int(value)
         if raw > 10_000_000_000:
             raw //= 1000
@@ -436,7 +553,7 @@ def _published_datetime(value: Any) -> datetime | None:
             )
         except (OverflowError, OSError, ValueError):
             return None
-    text = str(value).strip()
+    text = raw_text
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
@@ -575,12 +692,18 @@ def _record_low_follower_rejections(
 def _low_follower_diagnostic_summary(
     diagnostics: TopicLowFollowerDiagnostics,
 ) -> str:
+    other_missing_identity = max(
+        0,
+        diagnostics.rejected_missing_identity_count
+        - diagnostics.rejected_missing_video_id_count
+        - diagnostics.rejected_missing_title_count,
+    )
     labels = (
-        ("身份字段缺失", diagnostics.rejected_missing_identity_count),
-        (
-            "无可识别视频的查询",
-            diagnostics.empty_or_unrecognized_query_count,
-        ),
+        ("空结果查询", diagnostics.empty_query_count),
+        ("响应结构未识别", diagnostics.unrecognized_query_count),
+        ("作品 ID 缺失", diagnostics.rejected_missing_video_id_count),
+        ("标题缺失", diagnostics.rejected_missing_title_count),
+        ("其他身份字段缺失", other_missing_identity),
         ("作品 ID 异常", diagnostics.rejected_invalid_video_id_count),
         ("偏离家庭教育", diagnostics.rejected_off_topic_count),
         ("发布时间异常", diagnostics.rejected_invalid_publish_time_count),
@@ -611,7 +734,7 @@ def _qualified_video_tier(
     metrics: TopicMetrics,
     signal_type: TopicSignalType,
 ) -> tuple[TopicEvidenceTier, list[str]] | None:
-    """以平台精选标签为入口，再用公开可见指标做严格的本地复核。"""
+    """以平台榜单为入口，再用公开可见指标做严格的本地复核。"""
 
     deep_rate = metrics.deep_engagement_rate or 0.0
     like_rate = metrics.like_rate or 0.0
@@ -628,7 +751,7 @@ def _qualified_video_tier(
         and deep_rate >= BREAKOUT_MIN_DEEP_ENGAGEMENT_RATE
     ):
         return TopicEvidenceTier.LOW_FOLLOWER_BREAKOUT, [
-            "TikHub 低粉爆款精选标签",
+            "TikHub 低粉爆款榜",
             f"发布不超过 {LOW_FOLLOWER_MAX_AGE_HOURS} 小时",
             f"作者粉丝不超过 {LOW_FOLLOWER_MAX_FOLLOWERS}",
             f"播放不少于 {LOW_FOLLOWER_MIN_PLAYS}",
@@ -652,7 +775,7 @@ def _qualified_video_tier(
     ):
         min_plays = _emerging_low_follower_min_plays(age_hours)
         return TopicEvidenceTier.EMERGING_LOW_FOLLOWER_BREAKOUT, [
-            "TikHub 低粉爆款精选标签",
+            "TikHub 低粉爆款榜",
             "齐家潜力低粉爆款标准",
             f"发布不超过 {LOW_FOLLOWER_MAX_AGE_HOURS} 小时",
             f"作者粉丝不超过 {EMERGING_LOW_FOLLOWER_MAX_FOLLOWERS}",
@@ -671,7 +794,7 @@ def _qualified_video_tier(
         and deep_rate >= BREAKOUT_MIN_DEEP_ENGAGEMENT_RATE
     ):
         return TopicEvidenceTier.HIGH_HEAT_BREAKOUT, [
-            "TikHub 高点赞率精选标签",
+            "TikHub 高点赞率榜",
             f"发布不超过 {HIGH_HEAT_MAX_AGE_HOURS} 小时",
             f"播放不少于 {HIGH_HEAT_MIN_PLAYS}",
             f"赞播比不低于 {HIGH_HEAT_MIN_LIKE_RATE:.0%}",
@@ -691,15 +814,22 @@ def _video_evidence(
     as_of: datetime | None = None,
     low_follower_diagnostics: TopicLowFollowerDiagnostics | None = None,
 ) -> TopicEvidence | None:
-    video_id = str(
-        _deep_value(node, ("aweme_id", "itemId", "item_id")) or ""
-    ).strip()[:64]
-    title = _clean_term(
-        _deep_value(node, ("desc", "itemTitle", "item_title", "caption"))
-    )
-    if not video_id or not title:
+    video_id = str(_deep_value(node, _VIDEO_ID_KEYS) or "").strip()[:64]
+    title = _clean_term(_deep_value(node, _VIDEO_TITLE_KEYS))
+    if not video_id:
         _increment_diagnostic(
             low_follower_diagnostics, "rejected_missing_identity_count"
+        )
+        _increment_diagnostic(
+            low_follower_diagnostics, "rejected_missing_video_id_count"
+        )
+        return None
+    if not title:
+        _increment_diagnostic(
+            low_follower_diagnostics, "rejected_missing_identity_count"
+        )
+        _increment_diagnostic(
+            low_follower_diagnostics, "rejected_missing_title_count"
         )
         return None
     if not _family_relevant(f"{query} {title}"):
@@ -713,19 +843,71 @@ def _video_evidence(
         )
         return None
     play_count = _number(
-        _deep_value(node, ("play_count", "playCount", "itemPlayCnt", "play_cnt"))
+        _deep_value(
+            node,
+            (
+                "play_count",
+                "playCount",
+                "itemPlayCnt",
+                "play_cnt",
+                "itemPlayCount",
+                "videoPlayCount",
+            ),
+        )
     )
     like_count = _number(
-        _deep_value(node, ("digg_count", "like_count", "likeCount", "itemLikeCnt"))
+        _deep_value(
+            node,
+            (
+                "digg_count",
+                "diggCount",
+                "like_count",
+                "like_cnt",
+                "likeCount",
+                "itemLikeCnt",
+                "itemLikeCount",
+            ),
+        )
     )
     comment_count = _number(
-        _deep_value(node, ("comment_count", "commentCount", "itemCommentCnt"))
+        _deep_value(
+            node,
+            (
+                "comment_count",
+                "comment_cnt",
+                "commentCount",
+                "itemCommentCnt",
+                "itemCommentCount",
+            ),
+        )
     )
     share_count = _number(
-        _deep_value(node, ("share_count", "shareCount", "itemShareCnt"))
+        _deep_value(
+            node,
+            (
+                "share_count",
+                "share_cnt",
+                "shareCount",
+                "itemShareCnt",
+                "itemShareCount",
+            ),
+        )
     )
     collect_count = _number(
-        _deep_value(node, ("collect_count", "collectCount", "itemCollectCnt"))
+        _deep_value(
+            node,
+            (
+                "collect_count",
+                "collect_cnt",
+                "favorite_count",
+                "favorite_cnt",
+                "collectCount",
+                "itemCollectCnt",
+                "itemCollectCount",
+                "favoriteCount",
+                "favouriteCount",
+            ),
+        )
     )
     follower_count = _number(
         _deep_value(
@@ -737,6 +919,11 @@ def _video_evidence(
                 "authorFansCnt",
                 "author_follower_count",
                 "itemAuthorFollowerCnt",
+                "itemAuthorFollowerCount",
+                "authorFansCount",
+                "author_fans",
+                "authorFans",
+                "fansCount",
             ),
         )
     )
@@ -749,6 +936,11 @@ def _video_evidence(
                 "publish_time",
                 "publishTime",
                 "itemCreateTime",
+                "itemPublishTime",
+                "itemPublishDate",
+                "publishDate",
+                "publish_date",
+                "releaseTime",
             ),
         ),
         play_count=play_count,
@@ -802,11 +994,30 @@ def _video_evidence(
         video_id=video_id,
         video_url=video_url,
         author_name=str(
-            _deep_value(node, ("nickname", "authorNickName", "author_name")) or ""
+            _deep_value(
+                node,
+                (
+                    "nickname",
+                    "nickName",
+                    "authorNickName",
+                    "author_name",
+                    "authorName",
+                ),
+            )
+            or ""
         )[:200],
         published_at=published_at,
         duration_seconds=_duration_seconds(
-            _deep_value(node, ("duration", "itemDuration"))
+            _deep_value(
+                node,
+                (
+                    "duration",
+                    "itemDuration",
+                    "durationSeconds",
+                    "duration_seconds",
+                    "videoDuration",
+                ),
+            )
         ),
         metrics=metrics,
     )
@@ -872,6 +1083,14 @@ def _video_evidence_list(
         _increment_diagnostic(
             low_follower_diagnostics,
             "empty_or_unrecognized_query_count",
+        )
+        _increment_diagnostic(
+            low_follower_diagnostics,
+            (
+                "empty_query_count"
+                if _payload_is_empty(data)
+                else "unrecognized_query_count"
+            ),
         )
     for rank, node in enumerate(nodes, start=1):
         if signal_type == TopicSignalType.LOW_FOLLOWER_VIDEO:
@@ -967,7 +1186,9 @@ class TikHubDouyinResearchProvider:
             _report(progress, "读取抖音创作指南的数据日期…", "topic_date", 8)
             try:
                 valid_data = await session.request(
-                    "GET", "/api/v1/douyin/index/fetch_content_valid_date"
+                    "GET",
+                    "/api/v1/douyin/index/fetch_content_valid_date",
+                    request_label="创作指南有效日期",
                 )
                 end_date, valid_through = _latest_valid_date(valid_data)
                 valid_date = datetime.strptime(valid_through, "%Y-%m-%d").date()
@@ -1009,6 +1230,7 @@ class TikHubDouyinResearchProvider:
                             "period": "3",
                             "end_date": end_date,
                         },
+                        request_label="母婴垂类近 3 天创作热词",
                     ),
                 ),
                 optional_call(
@@ -1022,6 +1244,7 @@ class TikHubDouyinResearchProvider:
                             "end_date": end_date,
                             "rank_type": "rise",
                         },
+                        request_label="母婴垂类近 3 天飙升话题",
                     ),
                 ),
             )
@@ -1057,8 +1280,8 @@ class TikHubDouyinResearchProvider:
             async def labelled_videos(
                 query: str,
                 *,
-                label_type: int,
-                date_type: int,
+                endpoint: str,
+                date_window: int,
                 signal_type: TopicSignalType,
                 platform_label: str,
             ) -> list[TopicEvidence]:
@@ -1067,16 +1290,17 @@ class TikHubDouyinResearchProvider:
                         f"“{query}”{platform_label}视频不可用",
                         session.request(
                             "POST",
-                            "/api/v1/douyin/index/fetch_item_query",
-                            params={
-                                "query": query,
-                                "category_id": TIKHUB_PARENTING_TAG_ID,
-                                "date_type": date_type,
-                                "label_type": label_type,
-                                # TikHub 的 15-60、60-120、120-180 秒是互斥枚举。
-                                # 使用官方的 0=不限，避免为三个时长档重复付费。
-                                "duration_type": 0,
+                            endpoint,
+                            json_body={
+                                "page": 1,
+                                "page_size": BILLBOARD_PAGE_SIZE,
+                                "date_window": date_window,
+                                "keyword": query,
+                                # 受控家庭教育关键词比母婴大类更精确；空标签避免
+                                # 把母婴商品内容误当成家庭教育证据。
+                                "tags": [],
                             },
+                            request_label=f"{query} · {platform_label}",
                         ),
                     )
                     response_as_of = datetime.now(BEIJING_TZ)
@@ -1104,10 +1328,13 @@ class TikHubDouyinResearchProvider:
             low_follower_groups = await asyncio.gather(*(
                 labelled_videos(
                     query,
-                    label_type=1,
-                    date_type=3,
+                    endpoint=(
+                        "/api/v1/douyin/billboard/"
+                        "fetch_hot_total_low_fan_list"
+                    ),
+                    date_window=72,
                     signal_type=TopicSignalType.LOW_FOLLOWER_VIDEO,
-                    platform_label="TikHub 近 3 天低粉爆款标签",
+                    platform_label="TikHub 近 72 小时低粉爆款榜",
                 )
                 for query in DEFAULT_FAMILY_EDUCATION_QUERIES
             ))
@@ -1166,10 +1393,13 @@ class TikHubDouyinResearchProvider:
             high_heat_groups = await asyncio.gather(*(
                 labelled_videos(
                     query,
-                    label_type=4,
-                    date_type=7,
+                    endpoint=(
+                        "/api/v1/douyin/billboard/"
+                        "fetch_hot_total_high_like_list"
+                    ),
+                    date_window=168,
                     signal_type=TopicSignalType.HIGH_LIKE_VIDEO,
-                    platform_label="TikHub 近 7 天高点赞率标签",
+                    platform_label="TikHub 近 168 小时高点赞率榜",
                 )
                 for query in DEFAULT_FAMILY_EDUCATION_QUERIES
             ))
