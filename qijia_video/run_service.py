@@ -209,6 +209,19 @@ async def flush_task_async(task_id: str) -> None:
         await _persist_snapshot(snapshot)
 
 
+async def update_task_payload_async(task_id: str, payload: dict) -> None:
+    """Bind durable recovery metadata before a newly reserved task starts."""
+
+    task = _tasks.get(task_id)
+    if not task:
+        task = await get_task_async(task_id, refresh=True)
+    if not task or task.get("status") != "running":
+        raise RuntimeError("后台任务已不存在或不再运行")
+    task["job_payload"] = _jsonable(payload or {})
+    _tasks[task_id] = task
+    await _persist_snapshot(task)
+
+
 def update_progress(task_id: str, progress: str | dict) -> None:
     task = _tasks.get(task_id)
     if not task:

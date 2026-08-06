@@ -25,6 +25,7 @@ from qijia_video.contracts import (
 from qijia_video.errors import ProviderUnavailable, QijiaVideoError
 from qijia_video.infrastructure.storage import LocalArtifactStorage
 from qijia_video.runtime import actor_from_user, runtime, start_run
+from qijia_video.topic_runtime import topic_runtime
 from qijia_video.service import RELEASE_ARCHIVE_NAME
 from qijia_video.auth import get_current_user, require_permission
 
@@ -184,6 +185,7 @@ async def capabilities(user: dict = Depends(get_current_user)):
     return ok({
         "version": MODULE_VERSION,
         "actor": actor_from_user(user).model_dump(mode="json"),
+        "topic_research": topic_runtime.capabilities(),
         **runtime.capabilities(),
     })
 

@@ -25,6 +25,14 @@ class QijiaVideoSettings(BaseSettings):
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api"
     QIJIA_VIDEO_SCRIPT_MODEL: str = "openai/gpt-5.6-sol"
 
+    # 家庭教育选题研究：仅使用 TikHub 的抖音读接口。中国大陆默认走 .dev。
+    TIKHUB_API_KEY: str = ""
+    TIKHUB_BASE_URL: str = "https://api.tikhub.dev"
+    QIJIA_TOPIC_RESEARCH_MODEL: str = ""
+    QIJIA_TOPIC_TIKHUB_REQUEST_BUDGET: int = 13
+    # TikHub 文档给出的常见基础价为 $0.001/成功请求；具体端点和折扣以账单为准。
+    QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS: float = 0.001
+
     ARK_API_KEY: str = ""
     QIJIA_VIDEO_SEEDANCE_BASE_URL: str = (
         "https://ark.cn-beijing.volces.com/api/v3"

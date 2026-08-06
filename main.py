@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from qijia_video import MODULE_VERSION, api as qijia_video_api
+from qijia_video import topic_api as qijia_topic_api
 from qijia_video import auth, run_service
 from qijia_video.database import (
     close_database,
@@ -49,7 +50,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="齐家 AI 短视频生产工作台",
+    title="齐家 AI 家庭教育内容工作台",
     version=MODULE_VERSION,
     docs_url=None,
     redoc_url=None,
@@ -180,6 +181,7 @@ async def task_status(task_id: str, request: Request):
 
 
 app.include_router(qijia_video_api.api_router)
+app.include_router(qijia_topic_api.topic_api_router)
 app.include_router(qijia_video_api.page_router)
 app.mount(
     "/qijia-video/assets",

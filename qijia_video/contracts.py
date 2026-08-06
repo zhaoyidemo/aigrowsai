@@ -231,6 +231,9 @@ class QuickSourceCardInput(ContractModel):
     title: str = Field(min_length=1, max_length=300)
     source_material: str = Field(min_length=10, max_length=2000)
     rights_confirmed: Literal[True]
+    # 编辑命题与已核验资料分开保存，避免把“建议角度”误标成来源事实。
+    editorial_brief: str = Field(default="", max_length=600)
+    parent_question: str = Field(default="", max_length=240)
     content_domain: ContentDomain = ContentDomain.PARENT_EDUCATION
     content_format: ContentFormat = ContentFormat.CONCEPT
     source_type: Literal["book", "paper", "article", "official", "other"] = "other"
@@ -281,7 +284,7 @@ class QuickSourceCardInput(ContractModel):
             subject_type = "book"
         else:
             subject_type = "concept"
-        parent_question = (
+        parent_question = self.parent_question or (
             self.title
             if self.title.endswith(("？", "?"))
             else f"关于“{self.title}”，家长最需要理解什么？"
@@ -294,7 +297,7 @@ class QuickSourceCardInput(ContractModel):
             content_format=self.content_format,
             subject={"type": subject_type, "name": self.title},
             title=self.title,
-            core_idea=fact_text,
+            core_idea=self.editorial_brief or fact_text,
             parent_question=parent_question,
             sources=[{
                 "id": "source_01",

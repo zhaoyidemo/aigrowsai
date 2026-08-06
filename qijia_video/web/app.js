@@ -21,12 +21,62 @@ const state = {
   referenceImageFile: null,
   referenceImagePreviewUrl: '',
   scriptEditorDraft: null,
+  workspaceTab: 'topics',
+  topicRuns: [],
+  selectedTopicRun: null,
+  activeTopicTask: null,
+  topicPollingTaskId: '',
+  topicPollPromise: null,
+  topicPollGeneration: 0,
+  topicHandoffCandidate: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;',
 }[char]));
+
+function formatCount(value) {
+  const count = Number(value || 0);
+  if (!Number.isFinite(count) || count <= 0) return '0';
+  if (count >= 100000000) return `${(count / 100000000).toFixed(count >= 1000000000 ? 0 : 1)}亿`;
+  if (count >= 10000) return `${(count / 10000).toFixed(count >= 100000 ? 0 : 1)}万`;
+  return new Intl.NumberFormat('zh-CN').format(Math.round(count));
+}
+
+function formatUsd(value, fallback = '金额待账单') {
+  if (value === null || value === undefined || value === '') return fallback;
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0) return fallback;
+  return `$${amount.toFixed(6).replace(/0+$/, '').replace(/\.$/, '') || '0'}`;
+}
+
+function formatPercent(value) {
+  const ratio = Number(value);
+  if (!Number.isFinite(ratio) || ratio < 0) return '';
+  return `${(ratio * 100).toFixed(ratio >= 0.1 ? 1 : 2)}%`;
+}
+
+function formatDateTime(value) {
+  const parsed = Date.parse(String(value || ''));
+  if (!Number.isFinite(parsed)) return String(value || '');
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  }).format(new Date(parsed));
+}
+
+function switchWorkspace(tab) {
+  state.workspaceTab = tab === 'production' ? 'production' : 'topics';
+  const topicsActive = state.workspaceTab === 'topics';
+  $('#topic-workspace').hidden = !topicsActive;
+  $('#production-workspace').hidden = topicsActive;
+  document.querySelectorAll('[data-workspace-tab]').forEach((button) => {
+    const active = button.dataset.workspaceTab === state.workspaceTab;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
+}
 
 function narrationCharacterCount(value) {
   return Array.from(String(value || '').replace(/\s+/g, '')).length;
@@ -161,7 +211,10 @@ async function api(method, path, body) {
   let payload;
   try { payload = await response.json(); } catch { payload = {}; }
   if (!response.ok || payload.code !== 0) {
-    throw new Error(payload.message || payload.detail || `请求失败（HTTP ${response.status}）`);
+    const detail = Array.isArray(payload.detail)
+      ? payload.detail.map((item) => item.msg).filter(Boolean).join('；')
+      : payload.detail;
+    throw new Error(payload.message || detail || `请求失败（HTTP ${response.status}）`);
   }
   return payload.data;
 }
@@ -228,7 +281,11 @@ function notify(message, error = false) {
 function setBusy(busy) {
   state.busy = busy;
   document.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
-  if (!busy) updateScriptLengthStatus();
+  if (!busy) {
+    updateScriptLengthStatus();
+    renderTopicControls();
+    renderTopicDetail();
+  }
 }
 
 const stateLabels = {
@@ -267,21 +324,237 @@ const domainLabels = {
   parent_child_relationship: '亲子关系', parent_growth: '家长成长',
 };
 
+const topicStateLabels = {
+  running: '研究中', ready: '待选择', failed: '失败',
+};
+
+function topicTaskForRun(run) {
+  if (!run?.last_run_task_id || state.activeTopicTask?.task_id !== run.last_run_task_id) return null;
+  return state.activeTopicTask;
+}
+
+function renderTopicControls() {
+  const capability = state.capabilities?.topic_research;
+  const ready = !!capability?.ready;
+  const hasRunning = state.topicRuns.some((run) => run.status === 'running');
+  const button = $('#topic-start-button');
+  button.disabled = state.busy || !ready || hasRunning;
+  if (!ready) {
+    button.textContent = '选题研究尚未配置';
+    $('#topic-start-hint').textContent = `缺少：${(capability?.missing_configuration || []).join('、') || 'TikHub 或模型配置'}`;
+  } else if (hasRunning) {
+    button.textContent = '本轮研究进行中';
+    $('#topic-start-hint').textContent = '同一时间只运行一轮，避免重复产生费用。';
+  } else {
+    button.textContent = '开始研究今日选题';
+    $('#topic-start-hint').textContent = '点击即确认本轮可能产生 API 费用；不会自动发布或自动生成视频。';
+  }
+  const plannedCalls = Number(capability?.planned_max_calls || 13);
+  const requestBudget = Number(capability?.request_budget || 0);
+  const unitPrice = Number(capability?.estimated_usd_per_success);
+  const maxEstimate = Number.isFinite(unitPrice) && unitPrice > 0
+    ? `，TikHub 规划上限约 ${formatUsd(plannedCalls * unitPrice)}`
+    : '';
+  $('#topic-cost-guard').innerHTML = `
+    <strong>本轮成本保护</strong>
+    <span>计划最多 ${plannedCalls} 次 TikHub 请求${requestBudget ? `，硬上限 ${requestBudget} 次` : ''} + 1 次编辑模型调用${escapeHtml(maxEstimate)}</span>`;
+}
+
+function renderTopicRuns() {
+  const node = $('#topic-run-list');
+  if (!state.topicRuns.length) {
+    node.innerHTML = '<p class="empty">还没有选题研究记录。</p>';
+    return;
+  }
+  node.innerHTML = state.topicRuns.map((run) => {
+    const selected = state.selectedTopicRun?.id === run.id;
+    const date = run.valid_through || formatDateTime(run.created_at) || '日期待确认';
+    const candidateCount = (run.candidates || []).length;
+    return `<button class="topic-run-card ${selected ? 'selected' : ''}" type="button" data-topic-run-id="${escapeHtml(run.id)}">
+      <strong>家庭教育 · ${escapeHtml(date)}</strong>
+      <span>${escapeHtml(topicStateLabels[run.status] || run.status)}${candidateCount ? ` · ${candidateCount} 个候选` : ''}${run.selected_candidate_id ? ' · 已采用' : ''}</span>
+    </button>`;
+  }).join('');
+}
+
+function topicMetricPills(evidence) {
+  const metrics = evidence?.metrics;
+  if (!metrics) return '';
+  const values = [];
+  if (metrics.play_count) values.push(`播放 ${formatCount(metrics.play_count)}`);
+  if (metrics.like_rate !== null && metrics.like_rate !== undefined) values.push(`赞播比 ${formatPercent(metrics.like_rate)}`);
+  if (metrics.comment_count) values.push(`评论 ${formatCount(metrics.comment_count)}`);
+  if (metrics.share_count) values.push(`分享 ${formatCount(metrics.share_count)}`);
+  if (metrics.follower_count) values.push(`作者粉丝 ${formatCount(metrics.follower_count)}`);
+  const playFollowerRatio = Number(metrics.play_follower_ratio);
+  if (Number.isFinite(playFollowerRatio) && playFollowerRatio > 0) {
+    const precision = playFollowerRatio >= 100 ? 0 : (playFollowerRatio >= 10 ? 1 : 2);
+    values.push(`播粉比 ${playFollowerRatio.toFixed(precision)}`);
+  }
+  return values.map((value) => `<span>${escapeHtml(value)}</span>`).join('');
+}
+
+function topicEvidenceRow(evidence) {
+  const labels = (evidence.platform_labels || []).join(' · ');
+  const queries = (evidence.queries || []).join(' / ');
+  const publishedAt = evidence.published_at ? formatDateTime(evidence.published_at) : '';
+  const duration = Number(evidence.duration_seconds);
+  const subline = [
+    evidence.author_name || '',
+    publishedAt ? `发布 ${publishedAt}` : '',
+    Number.isFinite(duration) && duration > 0 ? `${Math.round(duration)} 秒` : '',
+    labels,
+    queries ? `检索：${queries}` : '',
+  ].filter(Boolean).join(' · ');
+  const title = evidence.video_url
+    ? `<a href="${escapeHtml(evidence.video_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(evidence.title)} ↗</a>`
+    : `<strong>${escapeHtml(evidence.title)}</strong>`;
+  return `<div class="topic-evidence-row">
+    <div class="topic-evidence-copy">${title}<span>${escapeHtml(subline)}</span></div>
+    <div class="topic-metrics">${topicMetricPills(evidence)}</div>
+  </div>`;
+}
+
+function renderTopicCost(run) {
+  const cost = run?.cost || {};
+  const model = cost.model_usage || null;
+  const calls = cost.tikhub_calls || [];
+  const tikhubCost = cost.estimated_tikhub_cost_usd === null || cost.estimated_tikhub_cost_usd === undefined
+    ? '金额待账单'
+    : `约 ${formatUsd(cost.estimated_tikhub_cost_usd)}`;
+  const modelState = model?.request_count
+    ? (model.succeeded ? '成功' : (run?.status === 'running' ? '已调用，结果待确认' : '失败或中断'))
+    : '等待调用';
+  const modelTokens = model?.total_tokens ? ` · ${formatCount(model.total_tokens)} tokens` : '';
+  const modelCost = model?.request_count
+    ? `${modelState} · ${formatUsd(model.reported_cost_usd)}${modelTokens}`
+    : modelState;
+  const totalCost = formatUsd(cost.estimated_total_cost_usd, '待供应商返回完整金额');
+  const unitCost = cost.estimated_cost_per_candidate_usd === null || cost.estimated_cost_per_candidate_usd === undefined
+    ? ''
+    : ` · 每个候选约 ${formatUsd(cost.estimated_cost_per_candidate_usd)}`;
+  const callDetails = calls.length ? `<details class="topic-cost-details">
+    <summary>查看 ${calls.length} 次 TikHub 调用明细</summary>
+    <div>${calls.map((call, index) => {
+      const endpoint = String(call.endpoint || '').split('/').filter(Boolean).pop() || call.endpoint || 'unknown';
+      const requestId = call.request_id ? ` · ${call.request_id}` : '';
+      const responseCode = call.response_code === null || call.response_code === undefined ? 'code —' : `code ${call.response_code}`;
+      return `<p><span>${index + 1}. ${escapeHtml(endpoint)}</span><strong>${call.succeeded ? '成功' : '失败'} · ${escapeHtml(responseCode)} · ${Number(call.elapsed_ms || 0)} ms${escapeHtml(requestId)}</strong></p>`;
+    }).join('')}</div>
+  </details>` : '';
+  const modelTokenDetail = model?.request_count
+    ? `输入 ${formatCount(model.input_tokens)} / 输出 ${formatCount(model.output_tokens)}`
+    : '';
+  const modelDetails = model?.request_count ? `<details class="topic-cost-details">
+    <summary>查看编辑模型调用明细</summary>
+    <div><p><span>${escapeHtml(`${model.model || '模型待确认'} · ${modelTokenDetail}`)}</span><strong>${model.http_status_code ? `HTTP ${Number(model.http_status_code)}` : '网络状态未知'}${model.request_id ? ` · ${escapeHtml(model.request_id)}` : ''}</strong></p></div>
+  </details>` : '';
+  $('#topic-cost-summary').innerHTML = `
+    <div class="topic-cost-item"><span>TikHub 调用</span><strong>${Number(cost.tikhub_success_count || 0)} 成功 / ${Number(cost.tikhub_request_count || 0)} 已发 / ${Number(cost.tikhub_request_budget || 0)} 上限</strong></div>
+    <div class="topic-cost-item"><span>TikHub 规划成本</span><strong>${escapeHtml(tikhubCost)}</strong></div>
+    <div class="topic-cost-item"><span>编辑模型</span><strong>${escapeHtml(modelCost)}</strong></div>
+    <div class="topic-cost-item"><span>本轮总成本</span><strong>${escapeHtml(totalCost + unitCost)}</strong></div>
+    <p class="topic-cost-basis">${escapeHtml(cost.tikhub_cost_basis || '调用后记录成本依据；实际账单以供应商为准。')}</p>
+    ${callDetails}
+    ${modelDetails}`;
+}
+
+function renderTopicDetail() {
+  const run = state.selectedTopicRun;
+  $('#topic-empty').hidden = !!run;
+  $('#topic-detail').hidden = !run;
+  if (!run) {
+    renderTopicControls();
+    return;
+  }
+  $('#topic-detail-title').textContent = run.status === 'running'
+    ? '正在研究家庭教育选题'
+    : (run.status === 'failed' ? '本轮研究未完成' : '家庭教育候选选题');
+  $('#topic-run-state').textContent = topicStateLabels[run.status] || run.status;
+  const meta = [
+    '仅抖音',
+    run.valid_through ? `数据截至 ${run.valid_through}` : '数据日期读取中',
+    run.data_window_note || '',
+  ].filter(Boolean);
+  $('#topic-run-meta').innerHTML = meta.map((item) => `<span>${escapeHtml(item)}</span>`).join('');
+  renderTopicCost(run);
+  const warnings = run.warnings || [];
+  const warningNode = $('#topic-warning-list');
+  warningNode.hidden = !warnings.length;
+  warningNode.innerHTML = warnings.map((item) => `<p>${escapeHtml(item)}</p>`).join('');
+  const errorNode = $('#topic-run-error');
+  errorNode.hidden = !run.error;
+  errorNode.textContent = run.error || '';
+
+  const task = topicTaskForRun(run);
+  const progressNode = $('#topic-progress');
+  const isRunning = run.status === 'running';
+  progressNode.hidden = !isRunning;
+  if (isRunning) {
+    const percent = Math.max(3, Math.min(100, Number(task?.progress_meta?.percent || 5)));
+    $('#topic-progress-text').textContent = task?.progress || '正在等待后台任务…';
+    $('#topic-progress-bar').style.width = `${percent}%`;
+    $('#topic-progress-meter').setAttribute('aria-valuenow', String(Math.round(percent)));
+  }
+
+  const evidenceById = new Map((run.evidence || []).map((item) => [item.id, item]));
+  const candidates = run.candidates || [];
+  if (!candidates.length) {
+    $('#topic-candidate-list').innerHTML = isRunning
+      ? '<p class="empty">系统正在收集和整理抖音样本。完成前不会展示半成品候选。</p>'
+      : '<p class="empty">本轮没有形成可用候选。</p>';
+    renderTopicControls();
+    return;
+  }
+  $('#topic-candidate-list').innerHTML = candidates.map((candidate) => {
+    const selected = run.selected_candidate_id === candidate.id;
+    const evidence = candidate.evidence_refs.map((id) => evidenceById.get(id)).filter(Boolean);
+    return `<article class="topic-candidate ${selected ? 'selected' : ''}">
+      <header class="topic-candidate-header">
+        <span class="topic-rank">${String(candidate.rank).padStart(2, '0')}</span>
+        <div class="topic-candidate-title"><h3>${escapeHtml(candidate.title)}</h3><p>${escapeHtml(candidate.parent_question)}</p></div>
+        <span class="topic-pillar">${escapeHtml(candidate.content_pillar)}</span>
+      </header>
+      <div class="topic-candidate-body">
+        <div class="topic-copy-block"><span>建议切入角度</span><p>${escapeHtml(candidate.editorial_angle)}</p></div>
+        <div class="topic-copy-block"><span>开场钩子</span><p class="topic-hook">${escapeHtml(candidate.opening_hook)}</p></div>
+        <div class="topic-copy-block full"><span>为什么现在值得讲</span><p>${escapeHtml(candidate.why_now)}</p></div>
+        <div class="topic-copy-block full"><span>内容边界</span><p class="topic-risk">${escapeHtml(candidate.risk_note)}</p></div>
+        <details class="topic-evidence"><summary>查看 ${evidence.length} 条抖音研究依据</summary><div class="topic-evidence-list">${evidence.map(topicEvidenceRow).join('')}</div></details>
+        <div class="topic-candidate-actions">
+          <span>采用后仍需补充独立可靠资料，趋势数据不会进入脚本来源。</span>
+          <button class="button ${selected ? 'secondary' : 'primary'}" type="button" data-adopt-topic="${escapeHtml(candidate.id)}" ${state.busy ? 'disabled' : ''}>${selected ? '继续补充来源' : '采用并补充来源'}</button>
+        </div>
+      </div>
+    </article>`;
+  }).join('');
+  renderTopicControls();
+}
+
 function renderCapabilities() {
   const node = $('#system-status');
   const data = state.capabilities;
   if (!data) return;
-  const ready = !!data.real_generation_ready;
+  const videoReady = !!data.real_generation_ready;
+  const topicReady = !!data.topic_research?.ready;
+  const ready = videoReady && topicReady;
   node.classList.toggle('ready', ready);
   node.classList.toggle('warning', !ready);
-  node.querySelector('span:last-child').textContent = ready
-    ? `真实生产链路已就绪 · OpenRouter · 豆包 TTS · Seedream · Seedance 2.0 · Remotion · ${data.storage} 存储`
-    : `真实生产链路尚未就绪：${(data.missing_configuration || []).join('、') || data.renderer?.detail || '配置不完整'}`;
+  const parts = [
+    topicReady
+      ? '家庭教育选题研究已就绪'
+      : `选题研究待配置：${(data.topic_research?.missing_configuration || []).join('、') || '配置不完整'}`,
+    videoReady
+      ? `视频生产已就绪 · ${data.storage} 存储`
+      : `视频生产待配置：${(data.missing_configuration || []).join('、') || data.renderer?.detail || '配置不完整'}`,
+  ];
+  node.querySelector('span:last-child').textContent = parts.join(' ｜ ');
+  renderTopicControls();
 }
 
 function renderCards() {
   const node = $('#source-card-list');
-  if (!state.cards.length) { node.innerHTML = '<p class="empty">还没有创作过人物观点。</p>'; return; }
+  if (!state.cards.length) { node.innerHTML = '<p class="empty">还没有保存过创作资料。</p>'; return; }
   node.innerHTML = state.cards.map((card) => `
     <article class="list-card">
       <h3>${escapeHtml(card.title)}</h3>
@@ -1117,6 +1390,81 @@ async function loadAll({selectJobId = ''} = {}) {
   renderCards(); renderJobs(); renderDetail();
 }
 
+function updateVisibleTopicRun(run) {
+  const index = state.topicRuns.findIndex((item) => item.id === run.id);
+  if (index >= 0) state.topicRuns[index] = run;
+  else state.topicRuns.unshift(run);
+  if (state.selectedTopicRun?.id === run.id) state.selectedTopicRun = run;
+  renderTopicRuns();
+  renderTopicDetail();
+}
+
+async function loadTopicRuns({selectRunId = ''} = {}) {
+  const runs = await api('GET', '/topic-research/runs');
+  state.topicRuns = runs;
+  const targetId = selectRunId || state.selectedTopicRun?.id || runs[0]?.id || '';
+  state.selectedTopicRun = runs.find((item) => item.id === targetId) || runs[0] || null;
+  if (state.activeTopicTask?.task_id !== state.selectedTopicRun?.last_run_task_id) {
+    state.activeTopicTask = null;
+  }
+  renderTopicRuns();
+  renderTopicDetail();
+}
+
+function stopTopicPolling() {
+  state.topicPollGeneration += 1;
+  state.topicPollingTaskId = '';
+  state.topicPollPromise = null;
+}
+
+async function pollTopicTask(taskId, runId) {
+  if (state.topicPollingTaskId === taskId && state.topicPollPromise) return state.topicPollPromise;
+  const generation = state.topicPollGeneration + 1;
+  state.topicPollGeneration = generation;
+  state.topicPollingTaskId = taskId;
+  const promise = (async () => {
+    for (let attempt = 0; attempt < 900; attempt += 1) {
+      const task = await fetchTask(taskId);
+      if (generation !== state.topicPollGeneration) return null;
+      state.activeTopicTask = task;
+      const run = await api('GET', `/topic-research/runs/${encodeURIComponent(runId)}`);
+      if (generation !== state.topicPollGeneration) return null;
+      updateVisibleTopicRun(run);
+      if (task.status === 'done' || task.status === 'failed') {
+        const selectedRunId = state.selectedTopicRun?.id || runId;
+        await loadTopicRuns({selectRunId: selectedRunId});
+        state.activeTopicTask = task;
+        renderTopicDetail();
+        if (task.status === 'failed') throw new Error(task.error || '选题研究失败');
+        return task;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    throw new Error('选题研究等待超时');
+  })();
+  state.topicPollPromise = promise;
+  try {
+    return await promise;
+  } finally {
+    if (generation === state.topicPollGeneration) {
+      state.topicPollingTaskId = '';
+      state.topicPollPromise = null;
+    }
+  }
+}
+
+async function resumeTopicTask(run = state.selectedTopicRun) {
+  if (!run?.last_run_task_id || run.status !== 'running') return;
+  if (state.topicPollingTaskId && state.topicPollingTaskId !== run.last_run_task_id) stopTopicPolling();
+  const task = await fetchTask(run.last_run_task_id);
+  state.activeTopicTask = task;
+  if (state.selectedTopicRun?.id === run.id) renderTopicDetail();
+  if (!['done', 'failed'].includes(task.status)) {
+    return pollTopicTask(task.task_id, run.id);
+  }
+  await loadTopicRuns({selectRunId: run.id});
+}
+
 async function fetchTask(taskId) {
   const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {credentials: 'same-origin'});
   let payload;
@@ -1187,6 +1535,141 @@ async function resumeSelectedTask() {
     return pollTask(task.task_id, job.id);
   }
 }
+
+function openTopicHandoff(candidate) {
+  state.topicHandoffCandidate = candidate;
+  const form = $('#topic-source-form');
+  form.reset();
+  $('#topic-source-title').value = candidate.title || '';
+  $('#topic-handoff-title').textContent = candidate.title || '';
+  $('#topic-handoff-angle').textContent = candidate.editorial_angle || '';
+  $('#topic-handoff').hidden = false;
+  $('#manual-intake-intro').hidden = true;
+  $('#source-card-form').hidden = true;
+  switchWorkspace('production');
+  $('#topic-handoff').scrollIntoView({behavior: 'smooth', block: 'start'});
+  form.elements.source_material.focus();
+}
+
+function closeTopicHandoff() {
+  state.topicHandoffCandidate = null;
+  $('#topic-source-form').reset();
+  $('#topic-handoff').hidden = true;
+  $('#manual-intake-intro').hidden = false;
+  $('#source-card-form').hidden = false;
+}
+
+document.querySelector('.workspace-tabs').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-workspace-tab]');
+  if (!button || state.busy) return;
+  switchWorkspace(button.dataset.workspaceTab);
+});
+document.querySelector('.workspace-tabs').addEventListener('keydown', (event) => {
+  if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+  event.preventDefault();
+  const tab = state.workspaceTab === 'topics' ? 'production' : 'topics';
+  switchWorkspace(tab);
+  document.querySelector(`[data-workspace-tab="${tab}"]`)?.focus();
+});
+
+$('#topic-start-button').addEventListener('click', async () => {
+  notify(''); setBusy(true);
+  try {
+    const result = await api('POST', '/topic-research/runs', {confirm_cost: true});
+    updateVisibleTopicRun(result.run);
+    state.selectedTopicRun = result.run;
+    renderTopicRuns();
+    renderTopicDetail();
+    setBusy(false);
+    await pollTopicTask(result.task_id, result.run.id);
+    notify('本轮已形成 5 个候选，请选择最值得继续验证的方向。');
+  }
+  catch (error) { notify(error.message, true); }
+  finally { setBusy(false); }
+});
+
+$('#topic-run-list').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-topic-run-id]');
+  if (!button) return;
+  const run = state.topicRuns.find((item) => item.id === button.dataset.topicRunId);
+  if (!run) return;
+  state.selectedTopicRun = run;
+  if (state.activeTopicTask?.task_id !== run.last_run_task_id) state.activeTopicTask = null;
+  renderTopicRuns();
+  renderTopicDetail();
+  resumeTopicTask(run).catch((error) => notify(error.message, true));
+});
+
+$('#topic-candidate-list').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-adopt-topic]');
+  const run = state.selectedTopicRun;
+  if (!button || !run || state.busy) return;
+  const candidate = (run.candidates || []).find((item) => item.id === button.dataset.adoptTopic);
+  if (!candidate) return;
+  if (run.selected_candidate_id === candidate.id) {
+    openTopicHandoff(candidate);
+    return;
+  }
+  notify(''); setBusy(true);
+  try {
+    const updated = await api('POST', `/topic-research/runs/${encodeURIComponent(run.id)}/actions/select`, {
+      candidate_id: candidate.id,
+      expected_revision: run.revision,
+    });
+    updateVisibleTopicRun(updated);
+    openTopicHandoff(candidate);
+    notify('选题已采用。请补充独立可靠资料，再进入脚本生成。');
+  }
+  catch (error) { notify(error.message, true); }
+  finally { setBusy(false); }
+});
+
+$('#cancel-topic-handoff').addEventListener('click', () => {
+  if (!state.busy) closeTopicHandoff();
+});
+
+$('#topic-source-form').addEventListener('submit', async (event) => {
+  event.preventDefault(); notify(''); setBusy(true);
+  const form = new FormData(event.currentTarget);
+  try {
+    if (form.get('rights_confirmed') !== 'on') throw new Error('请先确认资料已经核对且可以引用');
+    const generationSettings = generationSettingsPayload();
+    const card = await api('POST', '/source-cards/quick', {
+      schema_version: '1.0',
+      title: String(form.get('title') || '').trim(),
+      source_material: String(form.get('source_material') || '').trim(),
+      rights_confirmed: true,
+      editorial_brief: state.topicHandoffCandidate?.editorial_angle || '',
+      parent_question: state.topicHandoffCandidate?.parent_question || '',
+      content_domain: 'parent_education',
+      content_format: 'concept_explainer',
+      source_type: form.get('source_url') ? 'article' : 'other',
+      source_url: String(form.get('source_url') || '').trim(),
+      boundary: [
+        '抖音趋势仅作为选题线索；脚本只可使用本来源卡中的已核对资料，不得把播放量、平台标签或视频标题表述为家庭教育事实。',
+        state.topicHandoffCandidate?.risk_note || '',
+      ].filter(Boolean).join(' '),
+    });
+    let result;
+    try {
+      result = await api('POST', '/jobs', {
+        source_card_id: card.id,
+        generation_settings: generationSettings,
+      });
+    } catch (error) {
+      await loadAll();
+      closeTopicHandoff();
+      throw new Error(`资料已保存，但视频任务未启动：${error.message}`);
+    }
+    closeTopicHandoff();
+    await loadAll({selectJobId: result.job.id});
+    setBusy(false);
+    await pollTask(result.task_id, result.job.id);
+    notify('脚本已生成，请人工确认。');
+  }
+  catch (error) { notify(error.message, true); }
+  finally { setBusy(false); }
+});
 
 $('#source-card-form').addEventListener('submit', async (event) => {
   event.preventDefault(); notify(''); setBusy(true);
@@ -1554,15 +2037,23 @@ $('#reference-dropzone').addEventListener('drop', (event) => {
 $('#remove-reference-image').addEventListener('click', () => {
   if (!state.busy) clearReferenceImage();
 });
-$('#new-card-button').addEventListener('click', () => { resetSourceForm(); $('#source-card-form').scrollIntoView({behavior: 'smooth'}); $('#source-card-form').elements.person_name.focus(); });
+$('#new-card-button').addEventListener('click', () => {
+  closeTopicHandoff();
+  resetSourceForm();
+  $('#source-card-form').scrollIntoView({behavior: 'smooth'});
+  $('#source-card-form').elements.person_name.focus();
+});
 
 async function init() {
   try {
+    switchWorkspace('topics');
     state.capabilities = await api('GET', '/capabilities');
     renderCapabilities();
     initializePromptFields();
-    await loadAll();
+    await Promise.all([loadAll(), loadTopicRuns()]);
     resumeSelectedTask().catch((error) => notify(error.message, true));
+    const runningTopic = state.topicRuns.find((run) => run.status === 'running');
+    if (runningTopic) resumeTopicTask(runningTopic).catch((error) => notify(error.message, true));
   }
   catch (error) { notify(error.message, true); $('#system-status').classList.add('warning'); }
 }

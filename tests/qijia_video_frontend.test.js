@@ -13,7 +13,8 @@ const renderEntry = fs.readFileSync(path.join(root, 'video_renderer', 'render.mj
 const login = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'login.html'), 'utf8');
 
 test('qijia video uses an independent page and API namespace', () => {
-  assert.match(page, /齐家 AI 短视频生产工作台/);
+  assert.match(page, /齐家 AI 家庭教育内容工作台/);
+  assert.match(login, /家庭教育内容工作台/);
   assert.match(app, /const API = '\/api\/qijia-video'/);
   assert.match(host, /RedirectResponse\("\/qijia-video"/);
   assert.match(page, /action="\/logout"/);
@@ -30,18 +31,44 @@ test('final approval binds the whole review bundle', () => {
 });
 
 test('generated video UI does not expose an automatic publish action', () => {
-  assert.doesNotMatch(page, /自动发布|发布到抖音/);
+  assert.doesNotMatch(page, /<button[^>]*>[^<]*(?:自动发布|发布到抖音)/);
+  assert.match(page, /不会自动发布或自动生成视频/);
   assert.match(page, /生成发布版本/);
 });
 
 test('creation intake asks only for one person and one viewpoint', () => {
+  const manualStart = page.indexOf('id="source-card-form"');
+  const manualEnd = page.indexOf('id="generation-prompt-settings"');
+  const manualForm = page.slice(manualStart, manualEnd);
   assert.match(page, /name="person_name"/);
   assert.match(page, /name="viewpoint"/);
   assert.match(page, /冲突、反直觉与现实意义/);
-  assert.doesNotMatch(page, /name="source_material"|name="rights_confirmed"|补充出处|专业模式/);
+  assert.doesNotMatch(manualForm, /name="source_material"|name="rights_confirmed"|补充出处|专业模式/);
   assert.doesNotMatch(page, /name="parent_question"|name="core_idea"|name="fact_text"|name="subject_name"/);
   assert.match(app, /\/source-cards\/idea/);
   assert.ok(page.indexOf('id="generation-prompt-settings"') > page.indexOf('id="source-submit-button"'));
+});
+
+test('topic research is Douyin-only, cost-bounded, and human-gated', () => {
+  assert.match(page, /data-workspace-tab="topics"[^>]*>今日选题/);
+  assert.match(page, /主题<\/dt><dd>家庭教育/);
+  assert.match(page, /数据<\/dt><dd>抖音 · TikHub/);
+  assert.match(page, /5 个可供人工判断的内容角度/);
+  assert.match(page, /本轮成本保护/);
+  assert.match(app, /\/topic-research\/runs', \{confirm_cost: true\}/);
+  assert.match(app, /estimated_usd_per_success/);
+  assert.match(app, /tikhub_success_count/);
+  assert.match(app, /TikHub 调用明细/);
+  assert.match(app, /estimated_total_cost_usd/);
+  assert.match(app, /reported_cost_usd/);
+  assert.match(app, /data-adopt-topic/);
+  assert.match(page, /name="source_material"/);
+  assert.match(page, /name="rights_confirmed"/);
+  assert.match(app, /抖音趋势仅作为选题线索/);
+  assert.match(app, /editorial_brief: state\.topicHandoffCandidate/);
+  assert.match(app, /parent_question: state\.topicHandoffCandidate/);
+  assert.match(app, /\/source-cards\/quick/);
+  assert.doesNotMatch(app, /topic-research[\s\S]{0,240}自动发布/);
 });
 
 test('creation intake offers one optional global reference image without extra fields', () => {
