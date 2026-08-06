@@ -44,10 +44,24 @@ def ok(data=None, message: str = "") -> dict:
     return {"code": 0, "data": data, "message": message}
 
 
-def public_job_payload(job) -> dict:
+def can_edit_resource(resource, user: dict) -> bool:
+    return bool(
+        user.get("role") == "admin"
+        or str(getattr(resource, "created_by", "") or "")
+        == str(user.get("username") or "")
+    )
+
+
+def public_resource_payload(resource, user: dict) -> dict:
+    payload = resource.model_dump(mode="json")
+    payload["can_edit"] = can_edit_resource(resource, user)
+    return payload
+
+
+def public_job_payload(job, user: dict) -> dict:
     """Keep provider download URLs inside the persisted aggregate."""
 
-    payload = job.model_dump(mode="json")
+    payload = public_resource_payload(job, user)
     for candidate in payload.get("first_frame_candidates") or []:
         candidate.pop("source_url", None)
     return payload
@@ -259,14 +273,14 @@ async def list_source_cards(
     user: dict = Depends(get_current_user),
 ):
     rows = await runtime.service.list_source_cards(actor_from_user(user), limit=limit)
-    return ok([item.model_dump(mode="json") for item in rows])
+    return ok([public_resource_payload(item, user) for item in rows])
 
 
 @api_router.get("/source-cards/{card_id}")
 @boundary
 async def get_source_card(card_id: str, user: dict = Depends(get_current_user)):
-    card = await runtime.service.get_source_card(card_id, actor_from_user(user))
-    return ok(card.model_dump(mode="json"))
+    card = await runtime.service.view_source_card(card_id, actor_from_user(user))
+    return ok(public_resource_payload(card, user))
 
 
 @api_router.put("/source-cards/{card_id}")
@@ -333,7 +347,9 @@ async def create_job(body: CreateJobRequest, user: dict = Depends(get_current_us
     )
     run = await start_run("generate_script", job.id, actor)
     return ok({
-        "job": public_job_payload(await runtime.service.get_job(job.id, actor)),
+        "job": public_job_payload(
+            await runtime.service.get_job(job.id, actor), user
+        ),
         "task_id": run.task_id,
         "reused": run.reused,
     }, "视频任务已创建")
@@ -346,14 +362,14 @@ async def list_jobs(
     user: dict = Depends(get_current_user),
 ):
     rows = await runtime.service.list_jobs(actor_from_user(user), limit=limit)
-    return ok([public_job_payload(item) for item in rows])
+    return ok([public_job_payload(item, user) for item in rows])
 
 
 @api_router.get("/jobs/{job_id}")
 @boundary
 async def get_job(job_id: str, user: dict = Depends(get_current_user)):
-    job = await runtime.service.get_job(job_id, actor_from_user(user))
-    return ok(public_job_payload(job))
+    job = await runtime.service.view_job(job_id, actor_from_user(user))
+    return ok(public_job_payload(job, user))
 
 
 @api_router.get("/jobs/{job_id}/reference-image")
@@ -362,7 +378,7 @@ async def preview_reference_image(
     job_id: str,
     user: dict = Depends(get_current_user),
 ):
-    job = await runtime.service.get_job(job_id, actor_from_user(user))
+    job = await runtime.service.view_job(job_id, actor_from_user(user))
     assets = job.source_card_snapshot.get("reference_assets") or []
     if not assets:
         raise HTTPException(status_code=404, detail="该任务没有全局参考图")
@@ -392,7 +408,7 @@ async def update_script(
         actor_from_user(user),
         seedance_prompt=body.seedance_prompt,
     )
-    return ok(public_job_payload(job), "脚本已保存，原确认已失效")
+    return ok(public_job_payload(job, user), "脚本已保存，原确认已失效")
 
 
 @api_router.post("/jobs/{job_id}/actions/approve-script")
@@ -408,7 +424,9 @@ async def approve_script(
     )
     run = await start_run("produce", job.id, actor)
     return ok({
-        "job": public_job_payload(await runtime.service.get_job(job.id, actor)),
+        "job": public_job_payload(
+            await runtime.service.get_job(job.id, actor), user
+        ),
         "task_id": run.task_id,
         "reused": run.reused,
         "requires_review": False,
@@ -427,7 +445,7 @@ async def retry_job(job_id: str, user: dict = Depends(get_current_user)):
             actor,
         )
         return ok({
-            "job": public_job_payload(reopened),
+            "job": public_job_payload(reopened, user),
             "task_id": "",
             "reused": False,
             "requires_review": True,
@@ -457,7 +475,7 @@ async def revise_script_after_narration_failure(
         actor_from_user(user),
     )
     return ok(
-        public_job_payload(job),
+        public_job_payload(job, user),
         (
             "已返回脚本修改；已生成的 AI 画面将继续复用"
             if job.visual_requests
@@ -483,7 +501,9 @@ async def approve_final(
     )
     run = await start_run("package", job.id, actor)
     return ok({
-        "job": public_job_payload(await runtime.service.get_job(job.id, actor)),
+        "job": public_job_payload(
+            await runtime.service.get_job(job.id, actor), user
+        ),
         "task_id": run.task_id,
         "reused": run.reused,
     }, "成片已确认，开始生成发布包")
@@ -518,7 +538,7 @@ async def regenerate_shot(
     )
     return ok({
         "job": public_job_payload(
-            await runtime.service.get_job(job_id, actor)
+            await runtime.service.get_job(job_id, actor), user
         ),
         "task_id": run.task_id,
         "reused": run.reused,
@@ -556,7 +576,7 @@ async def select_shot_version(
     )
     return ok({
         "job": public_job_payload(
-            await runtime.service.get_job(job_id, actor)
+            await runtime.service.get_job(job_id, actor), user
         ),
         "task_id": run.task_id,
         "reused": run.reused,
@@ -570,7 +590,7 @@ async def preview_selected_shot(
     shot_id: str,
     user: dict = Depends(get_current_user),
 ):
-    job = await runtime.service.get_job(job_id, actor_from_user(user))
+    job = await runtime.service.view_job(job_id, actor_from_user(user))
     asset = runtime.service.visual_asset_for_shot(job, shot_id)
     if not asset:
         raise HTTPException(status_code=404, detail="镜头预览尚未就绪")
@@ -587,7 +607,7 @@ async def preview_first_frame_candidate(
     candidate_id: str,
     user: dict = Depends(get_current_user),
 ):
-    job = await runtime.service.get_job(job_id, actor_from_user(user))
+    job = await runtime.service.view_job(job_id, actor_from_user(user))
     asset = runtime.service.first_frame_asset_for_shot(
         job, shot_id, candidate_id
     )
@@ -613,7 +633,7 @@ async def preview_shot_version(
     version_id: str,
     user: dict = Depends(get_current_user),
 ):
-    job = await runtime.service.get_job(job_id, actor_from_user(user))
+    job = await runtime.service.view_job(job_id, actor_from_user(user))
     asset = runtime.service.visual_asset_for_shot(
         job, shot_id, version_id=version_id
     )
@@ -630,7 +650,7 @@ async def download_artifact(
     download: bool = Query(False),
     user: dict = Depends(get_current_user),
 ):
-    job = await runtime.service.get_job(job_id, actor_from_user(user))
+    job = await runtime.service.view_job(job_id, actor_from_user(user))
     artifact = next((item for item in job.artifacts if item.name == artifact_name), None)
     if not artifact:
         raise HTTPException(status_code=404, detail="产物不存在")
@@ -657,6 +677,7 @@ async def download_release_package(
             job_id,
             actor_from_user(user),
             archive,
+            shared_read=True,
         )
     except Exception:
         shutil.rmtree(workspace, ignore_errors=True)

@@ -24,6 +24,15 @@ def ok(data=None, message: str = "") -> dict:
     return {"code": 0, "data": data, "message": message}
 
 
+def public_run_payload(run, user: dict) -> dict:
+    payload = run.model_dump(mode="json")
+    payload["can_edit"] = bool(
+        user.get("role") == "admin"
+        or run.created_by == str(user.get("username") or "")
+    )
+    return payload
+
+
 def boundary(func):
     @wraps(func)
     async def wrapped(*args, **kwargs):
@@ -73,7 +82,7 @@ async def create_topic_research_run(
         )
     started = await start_topic_research(actor_from_user(user))
     return ok({
-        "run": started.run.model_dump(mode="json"),
+        "run": public_run_payload(started.run, user),
         "task_id": started.task_id,
         "reused": started.reused,
     }, "选题研究已开始")
@@ -88,7 +97,7 @@ async def list_topic_research_runs(
     rows = await topic_runtime.list_runs(
         actor_from_user(user), limit=limit
     )
-    return ok([item.model_dump(mode="json") for item in rows])
+    return ok([public_run_payload(item, user) for item in rows])
 
 
 @topic_api_router.get("/runs/{run_id}")
@@ -98,7 +107,7 @@ async def get_topic_research_run(
     user: dict = Depends(get_current_user),
 ):
     run = await topic_runtime.get_run(run_id, actor_from_user(user))
-    return ok(run.model_dump(mode="json"))
+    return ok(public_run_payload(run, user))
 
 
 @topic_api_router.post("/runs/{run_id}/actions/select")
@@ -114,4 +123,4 @@ async def select_topic_candidate(
         body.expected_revision,
         actor_from_user(user),
     )
-    return ok(run.model_dump(mode="json"), "选题已采用，请补充可靠来源")
+    return ok(public_run_payload(run, user), "选题已采用，请补充可靠来源")

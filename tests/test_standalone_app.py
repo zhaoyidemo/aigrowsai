@@ -9,7 +9,7 @@ from sqlalchemy.schema import CreateIndex, CreateTable
 
 from main import app
 from qijia_video import auth, run_service
-from qijia_video.db_models import VideoResource, VideoRun
+from qijia_video.db_models import VideoResource, VideoRun, WorkbenchUser
 from qijia_video.settings import settings
 
 
@@ -55,6 +55,10 @@ class StandaloneAuthenticationTests(unittest.TestCase):
         self.assertIn("Secure", cookie)
         self.assertIn("SameSite=lax", cookie)
         self.assertEqual(self.client.get("/qijia-video").status_code, 200)
+        self.assertEqual(
+            self.client.get("/qijia-video/accounts").status_code,
+            200,
+        )
 
     def test_wrong_password_fails_without_a_session(self):
         response = self.client.post(
@@ -128,9 +132,10 @@ class StandaloneRunServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("job_payload", public)
         self.assertNotIn("owner_user_id", public)
 
-    def test_database_schema_has_separate_resource_and_run_tables(self):
+    def test_database_schema_has_resource_run_and_user_tables(self):
         self.assertEqual(VideoResource.__tablename__, "video_resources")
         self.assertEqual(VideoRun.__tablename__, "video_runs")
+        self.assertEqual(WorkbenchUser.__tablename__, "qijia_users")
         self.assertIn("ux_video_runs_active_name_owner", {
             index.name for index in VideoRun.__table__.indexes
         })
@@ -143,6 +148,9 @@ class StandaloneRunServiceTests(unittest.IsolatedAsyncioTestCase):
         resource_ddl = str(CreateTable(VideoResource.__table__).compile(
             dialect=dialect
         ))
+        user_ddl = str(CreateTable(WorkbenchUser.__table__).compile(
+            dialect=dialect
+        ))
         active_index = next(
             index
             for index in VideoRun.__table__.indexes
@@ -150,6 +158,8 @@ class StandaloneRunServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         active_index_ddl = str(CreateIndex(active_index).compile(dialect=dialect))
         self.assertIn("JSONB", resource_ddl)
+        self.assertIn("password_hash", user_ddl)
+        self.assertNotIn("password VARCHAR", user_ddl)
         self.assertIn("WHERE status = 'running'", active_index_ddl)
 
     def test_standalone_package_has_no_host_service_imports(self):

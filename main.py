@@ -12,7 +12,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from qijia_video import MODULE_VERSION, api as qijia_video_api
+from qijia_video import MODULE_VERSION, account_api, api as qijia_video_api
 from qijia_video import topic_api as qijia_topic_api
 from qijia_video import auth, run_service
 from qijia_video.database import (
@@ -72,7 +72,7 @@ async def authentication_middleware(request: Request, call_next):
     public_paths = {"/health", "/login", "/favicon.ico"}
     if request.url.path in public_paths:
         return await call_next(request)
-    user = auth.user_from_request(request)
+    user = await auth.user_from_request(request)
     if not user:
         if request.url.path.startswith("/api/"):
             return JSONResponse(
@@ -98,6 +98,8 @@ def _safe_next(value: str) -> str:
     if (
         candidate == "/qijia-video"
         or candidate.startswith("/qijia-video?")
+        or candidate == "/qijia-video/accounts"
+        or candidate.startswith("/qijia-video/accounts?")
     ) and "\\" not in candidate:
         return candidate
     return "/qijia-video"
@@ -117,7 +119,7 @@ def _login_html(*, next_path: str, failed: bool = False) -> str:
 
 @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
 async def login_page(request: Request, next: str = "/qijia-video"):
-    if auth.user_from_request(request):
+    if await auth.user_from_request(request):
         return RedirectResponse(_safe_next(next), status_code=303)
     return HTMLResponse(
         _login_html(next_path=next),
@@ -131,7 +133,8 @@ async def login(
     password: str = Form(...),
     next: str = Form("/qijia-video"),
 ):
-    if not auth.verify_credentials(username, password):
+    user = await auth.authenticate(username, password)
+    if not user:
         return HTMLResponse(
             _login_html(next_path=next, failed=True),
             status_code=401,
@@ -140,7 +143,7 @@ async def login(
     response = RedirectResponse(_safe_next(next), status_code=303)
     response.set_cookie(
         auth.AUTH_COOKIE,
-        auth.create_session_token(),
+        auth.create_session_token(user),
         max_age=auth.SESSION_MAX_AGE_SECONDS,
         httponly=True,
         secure=settings.AUTH_COOKIE_SECURE,
@@ -182,7 +185,9 @@ async def task_status(task_id: str, request: Request):
 
 app.include_router(qijia_video_api.api_router)
 app.include_router(qijia_topic_api.topic_api_router)
+app.include_router(account_api.account_api_router)
 app.include_router(qijia_video_api.page_router)
+app.include_router(account_api.account_page_router)
 app.mount(
     "/qijia-video/assets",
     StaticFiles(directory=WEB_DIR),

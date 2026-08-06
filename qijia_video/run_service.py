@@ -108,11 +108,10 @@ def public_task(task: dict, *, viewer: dict | None = None) -> dict:
 
 
 def can_read_task(user: dict, task: dict) -> bool:
+    del task
     if (user or {}).get("role") == "admin":
         return True
-    return str((user or {}).get("id")) == str(
-        (task or {}).get("owner_user_id")
-    )
+    return "qijia_video" in ((user or {}).get("permissions") or [])
 
 
 def _new_snapshot(

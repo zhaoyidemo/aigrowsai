@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>账号管理 · 齐家 AI 内容工作台</title>
+  <link rel="stylesheet" href="/qijia-video/assets/app.css">
+</head>
+<body>
+  <a class="skip-link" href="#account-workspace">跳到账号管理</a>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">管理员设置</p>
+      <h1>同事账号与使用权限</h1>
+      <p class="subtitle">账号由管理员创建 · 权限可随时收回</p>
+    </div>
+    <div class="topbar-actions">
+      <a class="back-link" href="/qijia-video">返回工作台</a>
+      <form action="/logout" method="post">
+        <button class="back-link" type="submit">退出登录</button>
+      </form>
+    </div>
+  </header>
+
+  <main id="account-workspace" class="shell account-shell" tabindex="-1">
+    <section class="status-card ready" aria-live="polite">
+      <span class="status-dot"></span>
+      <span id="account-status">正在读取账号…</span>
+    </section>
+    <div id="account-notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+    <div class="account-layout">
+      <section class="panel account-create-panel">
+        <div class="panel-heading">
+          <div><p class="step">新增同事</p><h2>创建登录账号</h2></div>
+        </div>
+        <p class="panel-note">管理员设置初始密码后，通过安全渠道单独告知同事。页面不会再次显示密码。</p>
+        <form id="account-create-form" class="form-stack">
+          <label>账号名
+            <input name="username" required minlength="2" maxlength="64" autocomplete="off" placeholder="例如：xiaojia">
+            <span class="field-hint">支持中文、字母、数字、点、短横线和下划线。</span>
+          </label>
+          <label>初始密码
+            <input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password">
+            <span class="field-hint">至少 12 个字符；仅保存安全哈希。</span>
+          </label>
+          <label class="confirmation-check">
+            <input name="can_use_workbench" type="checkbox" checked>
+            <span>允许使用齐家内容工作台</span>
+          </label>
+          <label class="confirmation-check">
+            <input name="is_active" type="checkbox" checked>
+            <span>账号立即启用</span>
+          </label>
+          <button class="button primary" type="submit">创建同事账号</button>
+        </form>
+      </section>
+
+      <section class="panel account-list-panel">
+        <div class="panel-heading">
+          <div><p class="step">使用权限</p><h2>同事账号</h2></div>
+          <button id="account-refresh-button" class="button secondary" type="button">刷新</button>
+        </div>
+        <p class="panel-note account-sharing-note">同事可以查看团队创建的全部选题、来源卡和视频，只能修改或继续执行自己创建的内容；管理员可以管理全部内容。</p>
+        <div id="account-list" class="account-list"><p class="empty">正在加载…</p></div>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="/qijia-video/assets/accounts.js"></script>
+</body>
+</html>

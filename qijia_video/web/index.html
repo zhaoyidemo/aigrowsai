@@ -15,9 +15,12 @@
       <h1>齐家 AI 家庭教育内容工作台</h1>
       <p class="subtitle">抖音选题研究 · 来源核验 · 视频生产</p>
     </div>
-    <form action="/logout" method="post">
-      <button class="back-link" type="submit">退出登录</button>
-    </form>
+    <div class="topbar-actions">
+      <a id="account-management-link" class="back-link" href="/qijia-video/accounts" hidden>账号管理</a>
+      <form action="/logout" method="post">
+        <button class="back-link" type="submit">退出登录</button>
+      </form>
+    </div>
   </header>
 
   <main id="workspace" class="shell" tabindex="-1">
@@ -192,6 +195,7 @@
             <div><p class="step">当前任务</p><h2 id="job-title">视频详情</h2></div>
             <span id="job-state" class="state-pill"></span>
           </div>
+          <p id="job-access-note" class="resource-access-note" hidden></p>
           <section id="job-reference-image" class="job-reference-image" hidden>
             <img id="job-reference-preview" alt="本任务的全局参考图">
             <div><strong>全局参考图已应用</strong><span>优先统一 5 个镜头的画风、色彩与人物造型</span></div>

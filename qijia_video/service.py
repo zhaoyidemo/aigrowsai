@@ -328,12 +328,19 @@ class QijiaVideoService:
     async def list_source_cards(self, actor: Actor, *, limit: int = 100) -> list[SourceCard]:
         return [
             SourceCard.model_validate(item)
-            for item in await self.repository.list("source_card", actor, limit=limit)
+            for item in await self.repository.list_visible(
+                "source_card", actor, limit=limit
+            )
         ]
 
     async def get_source_card(self, card_id: str, actor: Actor) -> SourceCard:
         return SourceCard.model_validate(
             await self.repository.get("source_card", card_id, actor)
+        )
+
+    async def view_source_card(self, card_id: str, actor: Actor) -> SourceCard:
+        return SourceCard.model_validate(
+            await self.repository.get_visible("source_card", card_id, actor)
         )
 
     async def update_source_card(
@@ -415,12 +422,19 @@ class QijiaVideoService:
     async def list_jobs(self, actor: Actor, *, limit: int = 100) -> list[VideoJob]:
         return [
             VideoJob.model_validate(item)
-            for item in await self.repository.list("job", actor, limit=limit)
+            for item in await self.repository.list_visible(
+                "job", actor, limit=limit
+            )
         ]
 
     async def get_job(self, job_id: str, actor: Actor) -> VideoJob:
         return VideoJob.model_validate(
             await self.repository.get("job", job_id, actor)
+        )
+
+    async def view_job(self, job_id: str, actor: Actor) -> VideoJob:
+        return VideoJob.model_validate(
+            await self.repository.get_visible("job", job_id, actor)
         )
 
     async def _save_job(self, job: VideoJob, actor: Actor) -> VideoJob:
@@ -3093,13 +3107,19 @@ class QijiaVideoService:
         job_id: str,
         actor: Actor,
         destination: Path,
+        *,
+        shared_read: bool = False,
     ) -> Path:
         """Build the human-facing release ZIP from a completed package.
 
         The archive is generated on demand so jobs packaged before this feature
         was added receive the same download experience without a migration.
         """
-        job = await self.get_job(job_id, actor)
+        job = await (
+            self.view_job(job_id, actor)
+            if shared_read
+            else self.get_job(job_id, actor)
+        )
         if job.state != JobState.PACKAGED:
             raise InvalidTransition("发布包尚未完成")
         artifacts = {item.name: item for item in job.artifacts}

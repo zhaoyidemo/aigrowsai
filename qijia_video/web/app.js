@@ -36,6 +36,10 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => 
   '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;',
 }[char]));
 
+function canEditResource(resource) {
+  return resource?.can_edit !== false;
+}
+
 function formatCount(value) {
   const count = Number(value || 0);
   if (!Number.isFinite(count) || count <= 0) return '0';
@@ -285,6 +289,7 @@ function setBusy(busy) {
     updateScriptLengthStatus();
     renderTopicControls();
     renderTopicDetail();
+    applyJobReadOnly(state.selectedJob);
   }
 }
 
@@ -336,7 +341,10 @@ function topicTaskForRun(run) {
 function renderTopicControls() {
   const capability = state.capabilities?.topic_research;
   const ready = !!capability?.ready;
-  const hasRunning = state.topicRuns.some((run) => run.status === 'running');
+  const actorUsername = state.capabilities?.actor?.username || '';
+  const hasRunning = state.topicRuns.some(
+    (run) => run.status === 'running' && run.created_by === actorUsername,
+  );
   const button = $('#topic-start-button');
   button.disabled = state.busy || !ready || hasRunning;
   if (!ready) {
@@ -370,9 +378,10 @@ function renderTopicRuns() {
     const selected = state.selectedTopicRun?.id === run.id;
     const date = run.valid_through || formatDateTime(run.created_at) || '日期待确认';
     const candidateCount = (run.candidates || []).length;
+    const access = canEditResource(run) ? '' : ' · 团队内容，只读';
     return `<button class="topic-run-card ${selected ? 'selected' : ''}" type="button" data-topic-run-id="${escapeHtml(run.id)}">
       <strong>家庭教育 · ${escapeHtml(date)}</strong>
-      <span>${escapeHtml(topicStateLabels[run.status] || run.status)}${candidateCount ? ` · ${candidateCount} 个候选` : ''}${run.selected_candidate_id ? ' · 已采用' : ''}</span>
+      <span>${escapeHtml(topicStateLabels[run.status] || run.status)}${candidateCount ? ` · ${candidateCount} 个候选` : ''}${run.selected_candidate_id ? ' · 已采用' : ''} · ${escapeHtml(run.created_by || '创建者未知')}${access}</span>
     </button>`;
   }).join('');
 }
@@ -473,6 +482,8 @@ function renderTopicDetail() {
   $('#topic-run-state').textContent = topicStateLabels[run.status] || run.status;
   const meta = [
     '仅抖音',
+    `创建者 ${run.created_by || '未知'}`,
+    canEditResource(run) ? '' : '团队内容 · 只读',
     run.valid_through ? `数据截至 ${run.valid_through}` : '数据日期读取中',
     run.data_window_note || '',
   ].filter(Boolean);
@@ -508,6 +519,11 @@ function renderTopicDetail() {
   }
   $('#topic-candidate-list').innerHTML = candidates.map((candidate) => {
     const selected = run.selected_candidate_id === candidate.id;
+    const editable = canEditResource(run);
+    const actionDisabled = state.busy || (!editable && !selected);
+    const actionLabel = selected
+      ? (editable ? '继续补充来源' : '用这个选题创作')
+      : (editable ? '采用并补充来源' : '创建者尚未采用');
     const evidence = candidate.evidence_refs.map((id) => evidenceById.get(id)).filter(Boolean);
     return `<article class="topic-candidate ${selected ? 'selected' : ''}">
       <header class="topic-candidate-header">
@@ -523,7 +539,7 @@ function renderTopicDetail() {
         <details class="topic-evidence"><summary>查看 ${evidence.length} 条抖音研究依据</summary><div class="topic-evidence-list">${evidence.map(topicEvidenceRow).join('')}</div></details>
         <div class="topic-candidate-actions">
           <span>采用后仍需补充独立可靠资料，趋势数据不会进入脚本来源。</span>
-          <button class="button ${selected ? 'secondary' : 'primary'}" type="button" data-adopt-topic="${escapeHtml(candidate.id)}" ${state.busy ? 'disabled' : ''}>${selected ? '继续补充来源' : '采用并补充来源'}</button>
+          <button class="button ${selected ? 'secondary' : 'primary'}" type="button" data-adopt-topic="${escapeHtml(candidate.id)}" ${actionDisabled ? 'disabled' : ''}>${actionLabel}</button>
         </div>
       </div>
     </article>`;
@@ -535,6 +551,7 @@ function renderCapabilities() {
   const node = $('#system-status');
   const data = state.capabilities;
   if (!data) return;
+  $('#account-management-link').hidden = data.actor?.role !== 'admin';
   const videoReady = !!data.real_generation_ready;
   const topicReady = !!data.topic_research?.ready;
   const ready = videoReady && topicReady;
@@ -558,10 +575,10 @@ function renderCards() {
   node.innerHTML = state.cards.map((card) => `
     <article class="list-card">
       <h3>${escapeHtml(card.title)}</h3>
-      <div class="meta"><span>${escapeHtml(domainLabels[card.content_domain] || card.content_domain)}</span><span>v${card.revision}</span><span>${card.status === 'verified' ? '已核验' : '草稿'}</span></div>
-      ${card.status === 'verified'
+      <div class="meta"><span>${escapeHtml(domainLabels[card.content_domain] || card.content_domain)}</span><span>v${card.revision}</span><span>${card.status === 'verified' ? '已核验' : '草稿'}</span><span>${escapeHtml(card.created_by || '创建者未知')}</span>${canEditResource(card) ? '' : '<span>团队内容 · 只读</span>'}</div>
+      ${card.status === 'verified' && canEditResource(card)
         ? `<div class="list-actions"><button class="button primary" data-create-job="${escapeHtml(card.id)}">用这个观点再生成一版</button></div>`
-        : '<div class="meta legacy-card-note">旧版来源草稿，仅保留记录</div>'}
+        : `<div class="meta legacy-card-note">${card.status === 'verified' ? '可查看，只有创建者可以继续生成' : '旧版来源草稿，仅保留记录'}</div>`}
     </article>`).join('');
 }
 
@@ -572,7 +589,7 @@ function renderJobs() {
     const title = job.source_card_snapshot?.title || job.id;
     return `<article class="job-card ${state.selectedJob?.id === job.id ? 'selected' : ''}" data-job-id="${escapeHtml(job.id)}" tabindex="0">
       <h3>${escapeHtml(title)}</h3>
-      <div class="meta"><span>${escapeHtml(stateLabels[job.state] || job.state)}</span><span>v${job.revision}</span><span>${escapeHtml(job.updated_at || '')}</span></div>
+      <div class="meta"><span>${escapeHtml(stateLabels[job.state] || job.state)}</span><span>v${job.revision}</span><span>${escapeHtml(job.created_by || '创建者未知')}</span><span>${escapeHtml(job.updated_at || '')}</span>${canEditResource(job) ? '' : '<span>只读</span>'}</div>
     </article>`;
   }).join('');
 }
@@ -931,6 +948,7 @@ function renderShotInspector(job) {
     && chosenFrame.asset?.asset_id === request.first_frame_asset_id;
   const taskRunning = activeJobTaskRunning(job);
   const canEdit = !isImage
+    && canEditResource(job)
     && job.state === 'final_review_required'
     && !taskRunning
     && !state.busy;
@@ -1278,6 +1296,34 @@ function focusFirstNarration() {
   document.querySelector('[data-script-field="narration"]')?.focus();
 }
 
+function applyJobReadOnly(job) {
+  if (!job) return;
+  const readOnly = !canEditResource(job);
+  document.querySelectorAll([
+    '#script-review input',
+    '#script-review textarea',
+    '#shot-inspector input',
+    '#shot-inspector textarea',
+  ].join(',')).forEach((node) => { node.readOnly = readOnly; });
+  document.querySelectorAll('#shot-inspector select').forEach((node) => {
+    node.disabled = readOnly || state.busy;
+  });
+  document.querySelectorAll([
+    '#save-script-button',
+    '#approve-script-button',
+    '#retry-button',
+    '#revise-script-button',
+  ].join(',')).forEach((node) => {
+    node.disabled = readOnly || state.busy;
+  });
+  if (!readOnly) return;
+  document.querySelectorAll([
+    '[data-regenerate-shot]',
+    '[data-select-version]',
+    '#approve-final-button',
+  ].join(',')).forEach((node) => { node.disabled = true; });
+}
+
 function renderDetail() {
   const job = state.selectedJob;
   const detail = $('#job-detail');
@@ -1285,6 +1331,11 @@ function renderDetail() {
   if (!job) return;
   $('#job-title').textContent = job.source_card_snapshot?.title || '视频详情';
   $('#job-state').textContent = stateLabels[job.state] || job.state;
+  const accessNote = $('#job-access-note');
+  accessNote.hidden = canEditResource(job);
+  accessNote.textContent = canEditResource(job)
+    ? ''
+    : `这是 ${job.created_by || '其他同事'} 创建的团队内容，你可以查看和下载，但不能修改、重试或继续产生费用。`;
   const hasReferenceImage = (job.source_card_snapshot?.reference_assets || []).length > 0;
   const referenceNode = $('#job-reference-image');
   const referencePreview = $('#job-reference-preview');
@@ -1370,6 +1421,7 @@ function renderDetail() {
   } else {
     $('#artifact-list').innerHTML = '';
   }
+  applyJobReadOnly(job);
 }
 
 async function loadAll({selectJobId = ''} = {}) {
@@ -1610,6 +1662,10 @@ $('#topic-candidate-list').addEventListener('click', async (event) => {
     openTopicHandoff(candidate);
     return;
   }
+  if (!canEditResource(run)) {
+    notify('只有创建者可以采用这个候选。', true);
+    return;
+  }
   notify(''); setBusy(true);
   try {
     const updated = await api('POST', `/topic-research/runs/${encodeURIComponent(run.id)}/actions/select`, {
@@ -1716,6 +1772,11 @@ $('#source-card-form').addEventListener('submit', async (event) => {
 $('#source-card-list').addEventListener('click', async (event) => {
   const create = event.target.closest('[data-create-job]');
   if (!create) return;
+  const card = state.cards.find((item) => item.id === create.dataset.createJob);
+  if (!canEditResource(card)) {
+    notify('只有创建者可以继续使用这份来源卡。', true);
+    return;
+  }
   notify(''); setBusy(true);
   try {
     const result = await api('POST', '/jobs', {
@@ -2052,7 +2113,10 @@ async function init() {
     initializePromptFields();
     await Promise.all([loadAll(), loadTopicRuns()]);
     resumeSelectedTask().catch((error) => notify(error.message, true));
-    const runningTopic = state.topicRuns.find((run) => run.status === 'running');
+    const runningTopic = state.topicRuns.find(
+      (run) => run.status === 'running'
+        && run.created_by === state.capabilities?.actor?.username,
+    );
     if (runningTopic) resumeTopicTask(runningTopic).catch((error) => notify(error.message, true));
   }
   catch (error) { notify(error.message, true); $('#system-status').classList.add('warning'); }

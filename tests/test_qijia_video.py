@@ -2168,11 +2168,21 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 card.id, card.revision, self.actor
             )
 
-    async def test_resources_are_private_to_the_owner(self):
+    async def test_team_can_read_but_only_owner_can_mutate_resources(self):
         card = await self.service.create_source_card(valid_card(), self.actor)
         stranger = Actor(user_id=8, username="stranger", role="member")
         with self.assertRaises(AccessDenied):
             await self.service.get_source_card(card.id, stranger)
+        with self.assertRaises(AccessDenied):
+            await self.service.update_source_card(
+                card.id, valid_card(), card.revision, stranger
+            )
+        shared = await self.service.view_source_card(card.id, stranger)
+        self.assertEqual(shared.id, card.id)
+        self.assertEqual(
+            [item.id for item in await self.service.list_source_cards(stranger)],
+            [card.id],
+        )
 
 
 class QijiaVideoPermissionTests(unittest.TestCase):

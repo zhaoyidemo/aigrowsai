@@ -100,7 +100,7 @@ class TopicResearchService:
     ) -> list[TopicResearchRun]:
         return [
             TopicResearchRun.model_validate(item)
-            for item in await self.repository.list(
+            for item in await self.repository.list_visible(
                 TOPIC_RESOURCE_KIND, actor, limit=limit
             )
         ]
@@ -108,6 +108,13 @@ class TopicResearchService:
     async def get_run(self, run_id: str, actor: Actor) -> TopicResearchRun:
         return TopicResearchRun.model_validate(
             await self.repository.get(TOPIC_RESOURCE_KIND, run_id, actor)
+        )
+
+    async def view_run(self, run_id: str, actor: Actor) -> TopicResearchRun:
+        return TopicResearchRun.model_validate(
+            await self.repository.get_visible(
+                TOPIC_RESOURCE_KIND, run_id, actor
+            )
         )
 
     async def _save(

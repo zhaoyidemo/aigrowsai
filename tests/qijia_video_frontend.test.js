@@ -11,6 +11,8 @@ const host = fs.readFileSync(path.join(root, 'main.py'), 'utf8');
 const renderer = fs.readFileSync(path.join(root, 'video_renderer', 'src', 'KnowledgeVideoV1.tsx'), 'utf8');
 const renderEntry = fs.readFileSync(path.join(root, 'video_renderer', 'render.mjs'), 'utf8');
 const login = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'login.html'), 'utf8');
+const accountsPage = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'accounts.html'), 'utf8');
+const accountsApp = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'accounts.js'), 'utf8');
 
 test('qijia video uses an independent page and API namespace', () => {
   assert.match(page, /齐家 AI 家庭教育内容工作台/);
@@ -22,6 +24,16 @@ test('qijia video uses an independent page and API namespace', () => {
   assert.doesNotMatch(page, /x-data=|Alpine/);
   assert.match(login, /action="\/login"/);
   assert.match(login, /autocomplete="current-password"/);
+});
+
+test('administrator can manage bounded colleague access without exposing passwords', () => {
+  assert.match(page, /id="account-management-link"/);
+  assert.match(accountsPage, /同事账号与使用权限/);
+  assert.match(accountsPage, /只能修改或继续执行自己创建的内容/);
+  assert.match(accountsPage, /autocomplete="new-password"/);
+  assert.match(accountsApp, /\/actions\/reset-password/);
+  assert.match(accountsApp, /can_use_workbench/);
+  assert.doesNotMatch(accountsApp, /localStorage|sessionStorage/);
 });
 
 test('final approval binds the whole review bundle', () => {

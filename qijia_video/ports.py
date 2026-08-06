@@ -27,7 +27,15 @@ class AggregateRepository(Protocol):
 
     async def get(self, kind: str, resource_id: str, actor: Actor) -> dict: ...
 
+    async def get_visible(
+        self, kind: str, resource_id: str, actor: Actor
+    ) -> dict: ...
+
     async def list(
+        self, kind: str, actor: Actor, *, limit: int = 100
+    ) -> list[dict]: ...
+
+    async def list_visible(
         self, kind: str, actor: Actor, *, limit: int = 100
     ) -> list[dict]: ...
 

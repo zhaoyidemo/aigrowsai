@@ -96,6 +96,8 @@ class TopicResearchRuntime:
     ) -> TopicResearchRun:
         if run.status != TopicResearchStatus.RUNNING:
             return run
+        if not actor.is_admin and run.created_by != actor.username:
+            return run
         if not run.last_run_task_id:
             return await self.service.fail_if_interrupted(run.id, actor)
         task = await task_service.get_task_async(
@@ -115,7 +117,7 @@ class TopicResearchRuntime:
         self, run_id: str, actor: Actor
     ) -> TopicResearchRun:
         return await self.reconcile_run(
-            await self.service.get_run(run_id, actor), actor
+            await self.service.view_run(run_id, actor), actor
         )
 
 

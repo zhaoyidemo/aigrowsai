@@ -27,7 +27,12 @@ class PostgresAggregateRepository:
 
     @staticmethod
     def _authorize(row: VideoResource, actor: Actor) -> None:
-        if not actor.is_admin and row.owner_user_id != int(actor.user_id or 0):
+        if actor.is_admin:
+            return
+        if (
+            row.owner_user_id != int(actor.user_id or 0)
+            or row.owner_username != str(actor.username or "")
+        ):
             raise AccessDenied("无权访问该资源")
 
     @staticmethod
@@ -67,6 +72,17 @@ class PostgresAggregateRepository:
             self._authorize(row, actor)
             return self._copy(row.document)
 
+    async def get_visible(
+        self, kind: str, resource_id: str, actor: Actor
+    ) -> dict:
+        del actor
+        session_factory = self._require_session()
+        async with session_factory() as session:
+            row = await session.get(VideoResource, resource_id)
+            if not row or row.kind != kind:
+                raise ResourceNotFound("资源不存在")
+            return self._copy(row.document)
+
     async def list(
         self, kind: str, actor: Actor, *, limit: int = 100
     ) -> list[dict]:
@@ -75,10 +91,27 @@ class PostgresAggregateRepository:
         statement = select(VideoResource).where(VideoResource.kind == kind)
         if not actor.is_admin:
             statement = statement.where(
-                VideoResource.owner_user_id == self._owner_id(actor)
+                VideoResource.owner_user_id == self._owner_id(actor),
+                VideoResource.owner_username == str(actor.username or ""),
             )
         statement = statement.order_by(VideoResource.created_at.desc()).limit(
             safe_limit
+        )
+        async with session_factory() as session:
+            rows = (await session.execute(statement)).scalars().all()
+            return [self._copy(row.document) for row in rows]
+
+    async def list_visible(
+        self, kind: str, actor: Actor, *, limit: int = 100
+    ) -> list[dict]:
+        del actor
+        session_factory = self._require_session()
+        safe_limit = max(1, min(500, int(limit or 100)))
+        statement = (
+            select(VideoResource)
+            .where(VideoResource.kind == kind)
+            .order_by(VideoResource.created_at.desc())
+            .limit(safe_limit)
         )
         async with session_factory() as session:
             rows = (await session.execute(statement)).scalars().all()

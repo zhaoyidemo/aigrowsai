@@ -2,6 +2,8 @@
 
 面向齐家 AI 家庭教练抖音账号的内容研究与短视频生产服务。工作台先通过 TikHub 研究抖音家庭教育选题，人工采用候选并补充可靠来源后，再生成脚本、旁白、五章分镜和可下载的发布包。
 
+环境变量中的管理员账号可以创建、启停同事账号，授予或收回工作台使用权限，并重置密码。同事可以查看团队创建的全部内容，只能修改和继续执行自己创建的内容；管理员可以管理全部内容。
+
 ## 当前真实链路
 
 ```text
@@ -48,11 +50,12 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 
 - `qijia_video/`：领域契约、工作流、Provider、API、鉴权和 Web 页面。
 - `qijia_video/infrastructure/postgres_repository.py`：来源卡与视频任务聚合仓储。
+- `qijia_video/accounts.py`、`qijia_video/account_api.py`：同事账号、密码哈希、会话失效与管理员 API。
 - `qijia_video/run_service.py`：后台任务进度、互斥和重启恢复。
 - `qijia_video/topic_*`：选题契约、确定性研究流程、任务执行与 API。
 - `qijia_video/infrastructure/tikhub.py`：TikHub 抖音读接口与请求预算。
 - `video_renderer/`：独立 Remotion 渲染包，只消费 Render Manifest。
-- PostgreSQL：保存业务聚合与后台运行状态。
+- PostgreSQL：保存业务聚合、后台运行状态与同事账号；密码只保存带随机盐的 `scrypt` 哈希。
 - 火山 TOS：保存参考图、音频、首帧、视频和发布包。
 
 服务不依赖“继续追问”的代码、数据库表、登录系统或 Railway 项目。
@@ -88,7 +91,7 @@ DATABASE_URL=${{Postgres.DATABASE_URL}}
 
 其余变量按 `.env.example` 配置。`ADMIN_PASSWORD` 至少 12 个字符，`SESSION_SECRET` 至少 32 个随机字符。真实 Secret 只保存在 Railway，不进入 Git。
 
-`railway.json` 已固定 Dockerfile 构建、`/health` 部署健康检查和失败重启策略。应用启动时会在全新的 PostgreSQL 中幂等创建 `video_resources` 与 `video_runs` 两张专用表。
+`railway.json` 已固定 Dockerfile 构建、`/health` 部署健康检查和失败重启策略。应用启动时会在 PostgreSQL 中幂等创建 `video_resources`、`video_runs` 与 `qijia_users` 三张专用表；已有业务表不会被重写。
 
 不需要 Railway Volume：可恢复状态在 PostgreSQL，长期媒体在 TOS，本地工作目录只是可丢弃的渲染缓存。
 生产环境先保持一个 App Service 副本和 `REMOTION_CONCURRENCY=1`；需要水平扩容时再把 Worker 拆成独立服务。
@@ -114,10 +117,18 @@ QIJIA_VIDEO_STORAGE=tos
 Seedream 与 Seedance 复用 `ARK_API_KEY`。豆包 TTS 默认复用 `VOLCENGINE_SPEECH_API_KEY`。
 中国大陆的 TikHub 默认地址为 `https://api.tikhub.dev`。`QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS` 默认采用 TikHub 文档公开的常见基础价 `$0.001/成功请求` 做规划估算；配合默认的 100 次请求硬上限，单轮 TikHub 规划上限为 `$0.10`。当前固定流程仍只计划 13 次请求；具体端点价格、每日阶梯折扣和最终费用始终以 TikHub 账单为准：<https://docs.tikhub.io/4579905m0>。
 
+## 账号与团队共享
+
+- `ADMIN_USERNAME` / `ADMIN_PASSWORD` 是唯一管理员，不写入数据库，也不能在账号管理页被停用。
+- 管理员登录后从工作台右上角进入“账号管理”，创建同事账号并设置至少 12 个字符的初始密码。
+- 停用账号、收回使用权限或重置密码会递增服务端会话版本，使该账号已有 Cookie 立即失效。
+- 同事账号拥有团队内容的只读视图，但付费调用、修改、重试和审批仍只允许内容创建者；管理员不受此限制。
+- 账号不提供删除操作，避免历史内容失去创建者标识。
+
 ## 验证
 
 ```powershell
-python -m pytest tests/test_qijia_video.py tests/test_standalone_app.py tests/test_topic_research.py -q
+python -m pytest tests/test_qijia_video.py tests/test_standalone_app.py tests/test_topic_research.py tests/test_accounts.py -q
 node --test tests/qijia_video_frontend.test.js
 npm.cmd run typecheck --prefix video_renderer
 ```
