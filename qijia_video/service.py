@@ -138,7 +138,7 @@ class QijiaVideoService:
         seedance_price_per_million_tokens: float = 8.0,
         seedance_model_prices_per_million_tokens: dict[str, float] | None = None,
         tts_price_per_10000_characters: float = 5.0,
-        tikhub_price_per_success_usd: float = 0.001,
+        tikhub_price_per_success_usd: float = 0.002,
     ):
         self.repository = repository
         self.script_provider = script_provider
@@ -720,6 +720,19 @@ class QijiaVideoService:
             )
             else None
         )
+        previous_latest = (
+            previous.snapshots[-1]
+            if previous and previous.snapshots
+            else None
+        )
+        if (
+            previous_latest
+            and metrics.play_count < previous_latest.play_count
+        ):
+            raise ProviderUnavailable(
+                "TikHub 返回的累计播放量低于已有快照；本次结果未保存，"
+                "旧数据已保留"
+            )
         snapshots = [
             *(previous.snapshots if previous else []),
             DouyinPlaybackSnapshot(

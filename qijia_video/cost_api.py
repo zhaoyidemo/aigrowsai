@@ -101,6 +101,9 @@ async def cost_analysis(
         tikhub_price_per_success_usd=(
             settings.QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS
         ),
+        tikhub_performance_price_per_success_usd=(
+            settings.QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS
+        ),
         source_limit=SOURCE_LIMIT,
     )
     jobs_by_id = {job.id: job for job in jobs}

@@ -162,6 +162,12 @@ class CostAnalysisTests(unittest.TestCase):
         self.assertTrue(all(
             row["currency"] == "CNY" for row in result["pricing"]
         ))
+        pricing = {row["provider"]: row["rate"] for row in result["pricing"]}
+        self.assertEqual(
+            pricing["TikHub（选题研究 / 短链解析）"],
+            "¥0.0067/成功请求",
+        )
+        self.assertEqual(pricing["TikHub（抖音效果回流）"], "¥0.0134/成功请求")
         self.assertTrue(all("$" not in row["note"] for row in result["events"]))
         self.assertEqual({row["key"] for row in result["by_provider"]}, {
             "openrouter", "tikhub", "volcengine-seedream",

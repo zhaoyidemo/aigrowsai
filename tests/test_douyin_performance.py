@@ -114,29 +114,30 @@ class DouyinLinkTests(unittest.TestCase):
 
 
 class TikHubDouyinPerformanceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_standard_link_uses_batch_detail_and_records_usage(self):
+    async def test_standard_link_uses_xingtu_metrics_and_records_usage(self):
         captured = {}
 
         async def handler(request: httpx.Request) -> httpx.Response:
             captured["method"] = request.method
             captured["path"] = request.url.path
-            captured["body"] = json.loads(request.content)
+            captured["query"] = dict(request.url.params)
             return httpx.Response(200, json={
                 "code": 200,
                 "request_id": "douyin-request-1",
                 "data": {
-                    "aweme_list": [{
-                        "aweme_id": VIDEO_ID,
-                        "desc": "孩子情绪失控时，父母先稳定自己",
+                    "exist": True,
+                    "watch_cnt": 20007,
+                    "stats": {
+                        "digg_count": 1200,
+                        "comment_count": 89,
+                        "share_count": 34,
+                        "collect_count": 218,
+                    },
+                    "item": {
+                        "item_id": VIDEO_ID,
+                        "title": "孩子情绪失控时，父母先稳定自己",
                         "author": {"nickname": "齐家 AI 家庭教练"},
-                        "statistics": {
-                            "play_count": 20007,
-                            "digg_count": 1200,
-                            "comment_count": 89,
-                            "share_count": 34,
-                            "collect_count": 218,
-                        },
-                    }],
+                    },
                 },
             })
 
@@ -155,11 +156,13 @@ class TikHubDouyinPerformanceTests(unittest.IsolatedAsyncioTestCase):
             on_usage=remember,
         )
 
-        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["method"], "GET")
         self.assertEqual(
-            captured["path"], "/api/v1/douyin/web/fetch_multi_video"
+            captured["path"], "/api/v1/douyin/xingtu_v2/get_item_play_count"
         )
-        self.assertEqual(captured["body"], [VIDEO_ID])
+        self.assertEqual(captured["query"]["item_id"], VIDEO_ID)
+        self.assertEqual(captured["query"]["platform_source"], "1")
+        self.assertEqual(captured["query"]["need_cover_url"], "false")
         self.assertEqual(result.play_count, 20007)
         self.assertEqual(result.like_count, 1200)
         self.assertEqual(result.comment_count, 89)
@@ -169,22 +172,47 @@ class TikHubDouyinPerformanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(usages), 1)
         self.assertTrue(usages[0].succeeded)
         self.assertEqual(usages[0].operation, "douyin_performance")
+        self.assertEqual(usages[0].estimated_cost, 0.002)
+        self.assertEqual(usages[0].estimated_currency, "USD")
+        self.assertEqual(
+            usages[0].model_id,
+            "/api/v1/douyin/xingtu_v2/get_item_play_count",
+        )
 
-    async def test_short_link_uses_official_share_url_endpoint(self):
-        captured = {}
+    async def test_short_link_resolves_id_then_reads_xingtu_metrics(self):
+        captured = []
 
         async def handler(request: httpx.Request) -> httpx.Response:
-            captured["method"] = request.method
-            captured["path"] = request.url.path
-            captured["share_url"] = request.url.params["share_url"]
+            captured.append({
+                "method": request.method,
+                "path": request.url.path,
+                "query": dict(request.url.params),
+            })
+            if request.url.path.endswith("/fetch_one_video_by_share_url"):
+                return httpx.Response(200, json={
+                    "code": 200,
+                    "request_id": "douyin-resolve-2",
+                    "data": {
+                        "aweme_detail": {
+                            "aweme_id": VIDEO_ID,
+                            "desc": "短链标题",
+                            "author": {"nickname": "齐家 AI 家庭教练"},
+                        },
+                    },
+                })
             return httpx.Response(200, json={
                 "code": 200,
                 "request_id": "douyin-request-2",
                 "data": {
-                    "aweme_detail": {
-                        "aweme_id": VIDEO_ID,
-                        "statistics": {"play_count": 88},
+                    "exist": True,
+                    "watch_cnt": 88,
+                    "stats": {
+                        "digg_count": 9,
+                        "comment_count": 3,
+                        "share_count": 2,
+                        "collect_count": 4,
                     },
+                    "item": {"item_id": VIDEO_ID},
                 },
             })
 
@@ -193,30 +221,46 @@ class TikHubDouyinPerformanceTests(unittest.IsolatedAsyncioTestCase):
             base_url="https://api.tikhub.dev",
             transport=httpx.MockTransport(handler),
         )
+        usages = []
+
+        async def remember(usage):
+            usages.append(usage)
+
         result = await provider.fetch_by_share_url(
-            "复制打开抖音 https://v.douyin.com/e3x2fjE/"
+            "复制打开抖音 https://v.douyin.com/e3x2fjE/",
+            on_usage=remember,
         )
 
-        self.assertEqual(captured["method"], "GET")
+        self.assertEqual([item["method"] for item in captured], ["GET", "GET"])
         self.assertEqual(
-            captured["path"],
-            "/api/v1/douyin/web/fetch_one_video_by_share_url",
+            [item["path"] for item in captured],
+            [
+                "/api/v1/douyin/web/fetch_one_video_by_share_url",
+                "/api/v1/douyin/xingtu_v2/get_item_play_count",
+            ],
         )
         self.assertEqual(
-            captured["share_url"], "https://v.douyin.com/e3x2fjE/"
+            captured[0]["query"]["share_url"],
+            "https://v.douyin.com/e3x2fjE/",
         )
         self.assertEqual(result.video_id, VIDEO_ID)
-        self.assertIsNone(result.like_count)
-        self.assertIsNone(result.comment_count)
-        self.assertIsNone(result.share_count)
-        self.assertIsNone(result.collect_count)
+        self.assertEqual(result.play_count, 88)
+        self.assertEqual(result.like_count, 9)
+        self.assertEqual(result.comment_count, 3)
+        self.assertEqual(result.share_count, 2)
+        self.assertEqual(result.collect_count, 4)
+        self.assertEqual(result.video_title, "短链标题")
+        self.assertEqual([item.estimated_cost for item in usages], [0.001, 0.002])
 
     async def test_paid_response_without_play_count_is_not_saved_as_zero(self):
         async def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={
                 "code": 200,
                 "request_id": "douyin-request-3",
-                "data": {"aweme_detail": {"aweme_id": VIDEO_ID}},
+                "data": {
+                    "exist": True,
+                    "item": {"item_id": VIDEO_ID},
+                },
             })
 
         provider = TikHubDouyinPerformanceProvider(
@@ -235,6 +279,7 @@ class TikHubDouyinPerformanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(usages), 1)
         self.assertTrue(usages[0].succeeded)
         self.assertEqual(usages[0].request_id, "douyin-request-3")
+        self.assertEqual(usages[0].estimated_cost, 0.002)
 
 
 class DouyinPerformanceServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -264,7 +309,7 @@ class DouyinPerformanceServiceTests(unittest.IsolatedAsyncioTestCase):
                 media_packager=object(),
                 work_root=Path(directory),
                 douyin_performance_provider=provider,
-                tikhub_price_per_success_usd=0.001,
+                tikhub_price_per_success_usd=0.002,
             )
             actor = Actor(user_id=7, username="editor", role="member")
             bound = await service.bind_douyin_performance(
@@ -281,7 +326,7 @@ class DouyinPerformanceServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(bound.revision, 3)
         self.assertEqual(bound.usage_records[0].estimated_currency, "CNY")
-        self.assertEqual(bound.usage_records[0].estimated_cost, 0.0067)
+        self.assertEqual(bound.usage_records[0].estimated_cost, 0.0134)
         self.assertEqual(bound.douyin_performance.snapshots[0].play_count, 1000)
         self.assertEqual(bound.douyin_performance.snapshots[0].like_count, 100)
         self.assertEqual(refreshed.revision, 5)
@@ -304,6 +349,61 @@ class DouyinPerformanceServiceTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(len(refreshed.usage_records), 2)
+
+    async def test_refresh_rejects_cumulative_play_regression_and_keeps_usage(self):
+        job = VideoJob(
+            id="job_regression",
+            revision=1,
+            state=JobState.PACKAGED,
+            source_card_id="card_regression",
+            source_card_revision=1,
+            source_card_snapshot={"title": "累计播放回退保护"},
+            created_by="editor",
+        )
+        repository = MemoryJobRepository(job)
+        provider = FixedDouyinPerformanceProvider()
+        with tempfile.TemporaryDirectory() as directory:
+            service = QijiaVideoService(
+                repository=repository,
+                script_provider=object(),
+                storyboard_provider=object(),
+                image_provider=object(),
+                tts_provider=object(),
+                video_provider=object(),
+                renderer=object(),
+                storage=object(),
+                quality_checker=object(),
+                media_packager=object(),
+                work_root=Path(directory),
+                douyin_performance_provider=provider,
+                tikhub_price_per_success_usd=0.002,
+            )
+            actor = Actor(user_id=7, username="editor", role="member")
+            bound = await service.bind_douyin_performance(
+                job.id,
+                f"https://www.douyin.com/video/{VIDEO_ID}",
+                1,
+                actor,
+            )
+            provider.calls = -1
+            with self.assertRaisesRegex(
+                ProviderUnavailable,
+                "累计播放量低于已有快照",
+            ):
+                await service.refresh_douyin_performance(
+                    job.id,
+                    bound.revision,
+                    actor,
+                )
+
+        saved = VideoJob.model_validate(repository.document)
+        self.assertEqual(saved.revision, 4)
+        self.assertEqual(len(saved.usage_records), 2)
+        self.assertEqual(saved.usage_records[-1].estimated_cost, 0.0134)
+        self.assertEqual(
+            [item.play_count for item in saved.douyin_performance.snapshots],
+            [1000],
+        )
 
 
 class DouyinRoiTests(unittest.TestCase):

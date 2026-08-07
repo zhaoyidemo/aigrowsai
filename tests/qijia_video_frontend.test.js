@@ -67,6 +67,7 @@ test('team cost and Douyin performance dashboard has explicit audited refresh ac
   assert.match(costsPage, /id="performance-tracked-videos"/);
   assert.match(costsPage, /id="performance-target-meter"/);
   assert.match(costsPage, /id="performance-table-body"/);
+  assert.match(costsPage, /<th>互动<\/th>/);
   assert.match(costsPage, /id="performance-export-button"/);
   assert.match(costsPage, /id="cost-refresh-button"[^>]*>重新载入看板</);
   assert.match(costsPage, /id="performance-refresh-button"/);
@@ -81,6 +82,9 @@ test('team cost and Douyin performance dashboard has explicit audited refresh ac
   assert.match(costsApp, /estimated_cny/);
   assert.match(costsApp, /unpriced_event_count/);
   assert.match(costsApp, /function renderPerformance/);
+  assert.match(costsApp, /function formatOptionalInteger/);
+  assert.match(costsApp, /class="performance-engagement-cell"/);
+  assert.match(costsApp, /点赞.*评论.*分享.*收藏/s);
   assert.match(costsApp, /performance-target-gap/);
   assert.match(costsApp, /class="performance-roi-cell"/);
   assert.match(costsApp, /performance\.period\?\.cohort_basis/);

@@ -875,6 +875,7 @@ def build_team_content_performance(
             ),
             "data_scope": (
                 "只读取已手填绑定的抖音作品最新快照；"
+                "播放量采用 TikHub 星图总播放口径（包含可能的投流播放）；"
                 "不采集小红书、视频号或 APP 下载注册；"
                 "同一抖音作品重复绑定时只按最早绑定任务计入团队合计"
             ),
@@ -920,6 +921,7 @@ def build_cost_analysis(
     seedance_model_prices_per_million_tokens: dict[str, float] | None = None,
     tts_price_per_10000_characters: float = 5.0,
     tikhub_price_per_success_usd: float = 0.001,
+    tikhub_performance_price_per_success_usd: float = 0.002,
     now: datetime | None = None,
     source_limit: int = 500,
 ) -> dict:
@@ -1110,7 +1112,7 @@ def build_cost_analysis(
         },
         "pricing": [
             {
-                "provider": "TikHub",
+                "provider": "TikHub（选题研究 / 短链解析）",
                 "rate": (
                     f"¥{_number(tikhub_price_per_success_usd) * USD_TO_CNY_RATE:g}"
                     "/成功请求"
@@ -1118,6 +1120,16 @@ def build_cost_analysis(
                 "currency": "CNY",
                 "valuation": "estimated",
                 "source": "https://docs.tikhub.io/4579905m0",
+            },
+            {
+                "provider": "TikHub（抖音效果回流）",
+                "rate": (
+                    f"¥{_number(tikhub_performance_price_per_success_usd) * USD_TO_CNY_RATE:g}"
+                    "/成功请求"
+                ),
+                "currency": "CNY",
+                "valuation": "estimated",
+                "source": "https://docs.tikhub.io/493289600e0",
             },
             {
                 "provider": "OpenRouter",

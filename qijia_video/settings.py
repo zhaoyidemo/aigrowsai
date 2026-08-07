@@ -34,6 +34,8 @@ class QijiaVideoSettings(BaseSettings):
     QIJIA_TOPIC_TIKHUB_REQUEST_BUDGET: int = 100
     # TikHub 文档给出的常见基础价为 $0.001/成功请求；具体端点和折扣以账单为准。
     QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS: float = 0.001
+    # 星图 V2 单视频完整指标端点固定价；与选题研究基础价分开计账。
+    QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS: float = 0.002
 
     ARK_API_KEY: str = ""
     QIJIA_VIDEO_SEEDANCE_BASE_URL: str = (

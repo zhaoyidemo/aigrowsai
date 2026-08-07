@@ -2460,6 +2460,24 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             response.json()["data"]["seedream_pricing"]["candidates_per_shot"],
             1,
         )
+        self.assertEqual(
+            response.json()["data"]["douyin_performance"][
+                "estimated_cny_per_success"
+            ],
+            0.0134,
+        )
+        self.assertEqual(
+            response.json()["data"]["douyin_performance"][
+                "short_link_estimated_cny"
+            ],
+            0.0201,
+        )
+        self.assertEqual(
+            response.json()["data"]["douyin_performance"][
+                "requests_per_refresh"
+            ],
+            1,
+        )
         self.assertNotIn("frame_evaluator", response.json()["data"])
         self.assertEqual(allowed.get("/qijia-video").status_code, 200)
 

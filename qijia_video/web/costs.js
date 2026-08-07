@@ -42,6 +42,11 @@ function formatInteger(value) {
   return new Intl.NumberFormat('zh-CN', {maximumFractionDigits: 0}).format(number(value));
 }
 
+function formatOptionalInteger(value) {
+  if (value === null || value === undefined || value === '') return '未返回';
+  return formatInteger(value);
+}
+
 function formatMultiple(value) {
   if (value === null || value === undefined || value === '') return '—';
   const parsed = Number(value);
@@ -297,7 +302,7 @@ function renderPerformance(data) {
     : `${rows.length} 条已回流`;
   const body = $('#performance-table-body');
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="4" class="empty">${
+    body.innerHTML = `<tr><td colspan="5" class="empty">${
       packaged
         ? `当前范围有 ${formatInteger(packaged)} 条已打包视频，但尚未手填绑定抖音链接。`
         : '当前范围内还没有已打包并绑定抖音的视频。'
@@ -337,6 +342,7 @@ function renderPerformance(data) {
           <span class="performance-row-links"><a href="/qijia-video?job=${encodeURIComponent(row.job_id)}">查看任务</a><a href="${escapeHtml(row.video_url)}" target="_blank" rel="noopener noreferrer">打开抖音</a>${refreshAction}</span>
         </td>
         <td><strong>${formatInteger(row.play_count)}</strong><small>${escapeHtml(formatDateTime(row.observed_at))} · ${formatInteger(row.snapshot_count)} 次快照</small></td>
+        <td class="performance-engagement-cell"><strong>点赞 ${formatOptionalInteger(row.like_count)} · 评论 ${formatOptionalInteger(row.comment_count)}</strong><small>分享 ${formatOptionalInteger(row.share_count)} · 收藏 ${formatOptionalInteger(row.collect_count)}</small></td>
         <td><strong>${escapeHtml(formatMoney(row.accounted_cost_cny))}</strong><small>播放价值 ${escapeHtml(formatMoney(row.playback_value_cny))}${row.unpriced_event_count ? ` · ${formatInteger(row.unpriced_event_count)} 笔待对账` : ''}</small></td>
         <td class="performance-roi-cell">
           <strong>${escapeHtml(formatMultiple(row.roi_multiple))}</strong>
@@ -584,7 +590,7 @@ async function refreshPerformanceRow(requestedRow) {
     (candidate) => candidate.job_id === row.job_id,
   );
   setPerformanceRefreshStatus(
-    `更新成功：播放量 ${formatInteger(latest?.play_count)} · 数据时间 ${formatDateTime(latest?.observed_at)}。`,
+    `更新成功：播放 ${formatInteger(latest?.play_count)} · 点赞 ${formatOptionalInteger(latest?.like_count)} · 评论 ${formatOptionalInteger(latest?.comment_count)} · 分享 ${formatOptionalInteger(latest?.share_count)} · 收藏 ${formatOptionalInteger(latest?.collect_count)} · 数据时间 ${formatDateTime(latest?.observed_at)}。`,
     'success',
   );
 }

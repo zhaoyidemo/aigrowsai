@@ -121,6 +121,12 @@ class QijiaVideoRuntime:
         douyin_performance_provider = TikHubDouyinPerformanceProvider(
             api_key=settings.TIKHUB_API_KEY,
             base_url=settings.TIKHUB_BASE_URL,
+            metadata_price_per_success_usd=(
+                settings.QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS
+            ),
+            metrics_price_per_success_usd=(
+                settings.QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS
+            ),
         )
         self.renderer = renderer
         self.script_provider = script_provider
@@ -165,7 +171,7 @@ class QijiaVideoRuntime:
                 settings.QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS
             ),
             tikhub_price_per_success_usd=(
-                settings.QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS
+                settings.QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS
             ),
         )
 
@@ -222,17 +228,41 @@ class QijiaVideoRuntime:
                     max(
                         0.0,
                         float(
-                            settings.QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS
+                            settings.QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS
                         ),
                     )
                     * USD_TO_CNY_RATE,
                     8,
                 ),
+                "short_link_estimated_cny": round(
+                    (
+                        max(
+                            0.0,
+                            float(
+                                settings.QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS
+                            ),
+                        )
+                        + max(
+                            0.0,
+                            float(
+                                settings.QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS
+                            ),
+                        )
+                    )
+                    * USD_TO_CNY_RATE,
+                    8,
+                ),
+                "requests_per_refresh": 1,
+                "short_link_bind_requests": 2,
+                "metric_scope": "总播放量（含投流）及点赞、评论、分享、收藏",
                 "missing_configuration": (
                     self.douyin_performance_provider.configuration_errors
                 ),
                 "cost_confirmation_required": True,
-                "basis": "TikHub 成功请求规划价；失败响应按 ¥0 估算，账单优先",
+                "basis": (
+                    "TikHub 星图 V2 单视频完整指标端点规划价；"
+                    "失败响应按 ¥0 估算，账单优先"
+                ),
             },
             "seedance_pricing": {
                 "currency": "CNY",

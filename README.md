@@ -31,8 +31,8 @@ TikHub 抖音家庭教育数据
 
 - 本版本只采集抖音作品的播放、点赞、评论、分享和收藏累计数据，明确忽略小红书和视频号，也不采集 APP 下载或注册归因。
 - 视频完成发布包并由人工发布后，在该视频详情中粘贴抖音分享文本、`v.douyin.com` 短链或标准作品链接。系统不会自动发布，也不会要求抖音账号登录授权。
-- 标准作品链接会在本地提取作品 ID 后调用 TikHub Web 批量详情；短链首次使用 TikHub 官方分享链接接口解析。绑定成功后只按已保存的作品 ID 手动刷新，不做定时轮询。
-- 作品数据不会自动更新；视频详情中的“手动刷新作品数据”和团队效果看板每行的“更新此视频”每次都只发起 1 次 TikHub 请求，操作按钮会提前显示人民币规划成本。看板范围内只有 1 条可更新作品时，也可使用顶部的单条更新按钮；有多条时必须在表格中逐条选择，避免一次点击产生多笔费用。成功、明确失败响应和网络结果未知分别按“规划价、¥0、待对账”入账。播放量缺失时不会保存本次快照；TikHub 未返回的互动指标保存为未知并显示“未返回”，不会伪装成 0。
+- 标准作品链接会在本地提取作品 ID 后调用 TikHub 星图 V2 作品指标端点；短链首次先使用 TikHub Web 分享链接接口解析作品 ID，再读取星图指标。绑定成功后只按已保存的作品 ID 手动刷新，不做定时轮询。
+- 作品数据不会自动更新；视频详情中的“手动刷新作品数据”和团队效果看板每行的“更新此视频”每次都只发起 1 次星图指标请求（规划成本 `¥0.0134`）。标准链接首次绑定也是 1 次；无法本地提取 ID 的 `v.douyin.com` 短链首次绑定需要 2 次请求，规划成本最高 `¥0.0201`。看板范围内只有 1 条可更新作品时，也可使用顶部的单条更新按钮；有多条时必须在表格中逐条选择，避免一次点击产生多笔费用。成功、明确失败响应和网络结果未知分别按“规划价、¥0、待对账”入账。播放量缺失或低于已有累计快照时不会保存本次数据；TikHub 未返回的互动指标保存为未知并显示“未返回”，不会伪装成 0。
 - 创建者和管理员可以绑定或刷新；同事可以查看团队全部视频的链接、播放量、成本和 ROI，但不能替别人产生费用。
 - 播放价值固定按 `播放量 ÷ 1000 × ¥10`，当前 ROI 为 `播放价值 ÷ 该视频已核算成本`，10 倍目标播放量为 `向上取整(已核算成本 × 1000)`。每次播放量读取成本也计入该视频；未绑定到该视频的选题研究公摊不计入。存在待对账费用时，成本、ROI 和目标都会明确标为暂估。
 
@@ -48,13 +48,13 @@ TikHub 抖音家庭教育数据
 
 ## TikHub 契约依据
 
-接口边界按 2026-08-06 的 TikHub 官方文档收敛：
+接口边界按 2026-08-07 的 TikHub 官方文档收敛：
 
 - 六组家庭教育关键词分别读取 TikHub 抖音“低粉爆款榜”和“高点赞率榜”：每次取第一页 20 条、不限制视频时长，低粉固定 `date_window=72`，高点赞补充固定 `date_window=168`。两个榜单都由官方声明支持关键词、滚动时间窗口和分页：<https://docs.tikhub.io/252393854e0>、<https://docs.tikhub.io/252393856e0>
 - `date_window` 是榜单查询窗口，不等同于作品发布时间限制。系统优先排序发布 72 小时内的视频，其次是 7 天内；更早作品如仍在当前榜单，会标记为回潮线索而不是直接淘汰。发布时间缺失也不会按 0 或异常样本处理。
 - TikHub 没有公开“低粉爆款”的内部判定公式，因此榜单身份与齐家指标复核分开表达。进入 TikHub 低粉爆款榜且通过数据完整性、家庭教育相关性和去重检查的视频可作为“平台低粉榜样本”；强/潜力阈值只增加“指标已复核”标签，不再决定能否入池。原强复核参考为粉丝不超过 5 万、播放不少于 50 万、播粉比不低于 20、赞播比不低于 5%、深度互动率不低于 0.8%；潜力复核参考为粉丝不超过 10 万、播粉比不低于 10、赞播比不低于 3%、深度互动率不低于 0.3%，并按发布年龄参考 10 万或 20 万播放。深度互动率按 `(评论 + 分享 + 收藏) / 播放` 计算。
 - 榜单归一化后调用抖音 Web 批量视频详情，一次最多支持 50 个作品 ID、固定 `$0.001/次`；详情失败或单项字段缺失时保留榜单样本，缺失值不参与指标复核，也不按 0 淘汰：<https://docs.tikhub.io/244469112e0>
-- 效果回流复用同一批量视频详情端点，从同一次响应读取播放、点赞、评论、分享和收藏累计数据；`v.douyin.com` 短链首次通过 Web 分享链接接口读取单个作品。官方说明分享链接接口的字段少于 APP 接口，因此除播放量外的指标允许缺失：<https://docs.tikhub.io/257556744e0>
+- 效果回流使用星图 V2 作品指标端点，从同一次响应读取 `watch_cnt` 总播放量和点赞、评论、分享、收藏累计数据，固定 `$0.002/次`；该播放量按官方定义包含投流播放。TikHub 已说明多数普通抖音端点不再返回播放量，因此 Web 批量详情不再作为效果回流来源。无法本地提取作品 ID 的 `v.douyin.com` 短链首次仍通过 Web 分享链接端点解析 ID，再发起星图请求：<https://docs.tikhub.io/493289600e0>、<https://docs.tikhub.io/186826221e0>
 - 家庭教育相关性使用“受控检索词 + 视频标题”共同判断，仍会直接排除孕期、奶粉、辅食、纸尿裤等泛母婴内容。每轮保存低粉榜样本整理结果，展示唯一可用数、批量详情补齐数、指标强/潜力复核数、榜单待补数，以及发布时间和粉丝字段缺失等排序观察；只有作品 ID/标题异常、偏离家庭教育和跨检索重复会被移出可用池。
 - 作者粉丝数是采集时快照，不是视频发布前的粉丝数；当前接口也不返回 DOU+ 或其他投流支出，因此系统不会把“低粉爆款”进一步表述成“纯自然流量爆款”。
 - 中国大陆使用官方建议的 `api.tikhub.dev` 加速域名：<https://docs.tikhub.io/4579297m0>
@@ -78,7 +78,7 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 
 报表只显示人民币，“已计成本”统一计算为：`供应商回传金额 + 有计价依据的估算`。所有原始 USD 成本固定按 `1 USD = ¥6.7` 换算，底层账本仍保存供应商原始币种和金额，便于对账。供应商未回传金额、Token 缺失或网络结果未知的调用显示为“待对账”，不会按 0 元伪装成完整成本。页面提供团队效果、10 倍目标进度、视频排行、时间趋势、供应商、生产阶段、创建人、每项内容、最近调用明细，以及成本与效果两份 CSV 导出。
 
-默认估算依据为 TikHub `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、Seedream `¥0.22/张`、Seedance 1.0 Pro Fast 无声视频 `¥4.2/百万 tokens`、Seedance 1.5 Pro 历史无声视频 `¥8/百万 tokens`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。OpenRouter 的供应商响应金额同样按固定汇率换算。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) 和[火山引擎豆包大模型计价](https://www.volcengine.com/product/doubao/)为准。
+默认估算依据为 TikHub 选题研究及短链解析 `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、TikHub 抖音效果回流 `$0.002/成功请求`（`¥0.0134/成功请求`）、Seedream `¥0.22/张`、Seedance 1.0 Pro Fast 无声视频 `¥4.2/百万 tokens`、Seedance 1.5 Pro 历史无声视频 `¥8/百万 tokens`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。OpenRouter 的供应商响应金额同样按固定汇率换算。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) 和[火山引擎豆包大模型计价](https://www.volcengine.com/product/doubao/)为准。
 
 范围刻意只包含模型与数据 API，不包含 Railway、TOS、带宽、人工、税费和购买积分手续费。账本上线前的脚本与分镜没有持久化 OpenRouter `usage`，无法可靠反推；历史图片、视频和语音仅在有保存产物或 Token 时按当前配置补算，并明确标记为历史估算。
 
@@ -152,7 +152,7 @@ QIJIA_VIDEO_STORAGE=tos
 ```
 
 Seedream 与 Seedance 复用 `ARK_API_KEY`。豆包 TTS 默认复用 `VOLCENGINE_SPEECH_API_KEY`。
-中国大陆的 TikHub 默认地址为 `https://api.tikhub.dev`。`QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS` 是底层供应商原币规划价；报表统一按固定汇率换算为 `¥0.0067/成功请求`。配合默认的 100 次请求硬上限，单轮 TikHub 硬上限为 `¥0.67`，当前固定流程只计划 13 次请求（约 `¥0.0871`）；具体端点价格、每日阶梯折扣和最终费用始终以 TikHub 账单为准：<https://docs.tikhub.io/4579905m0>。
+中国大陆的 TikHub 默认地址为 `https://api.tikhub.dev`。`QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS` 是选题研究及短链解析的底层供应商原币规划价；报表统一按固定汇率换算为 `¥0.0067/成功请求`。配合默认的 100 次请求硬上限，单轮选题 TikHub 硬上限为 `¥0.67`，当前固定流程只计划 13 次请求（约 `¥0.0871`）。抖音效果回流由 `QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS` 单独配置，默认 `$0.002`，报表显示 `¥0.0134/成功请求`；具体端点价格、每日阶梯折扣和最终费用始终以 TikHub 账单为准：<https://docs.tikhub.io/4579905m0>。
 
 ## 账号与团队共享
 

@@ -1652,6 +1652,10 @@ function renderDouyinPerformance(job) {
   const costLabel = Number.isFinite(unitCost) && unitCost > 0
     ? formatCny(unitCost)
     : '金额待账单';
+  const shortLinkCost = Number(capability.short_link_estimated_cny);
+  const shortLinkCostLabel = Number.isFinite(shortLinkCost) && shortLinkCost > 0
+    ? formatCny(shortLinkCost)
+    : '金额待账单';
   const form = $('#douyin-performance-form');
   const input = $('#douyin-link-input');
   form.hidden = !!performance;
@@ -1660,18 +1664,20 @@ function renderDouyinPerformance(job) {
     input.value = performance?.video_url || '';
   }
   $('#douyin-bind-button').textContent = performance
-    ? '更新链接并读取作品数据（约 ' + costLabel + '）'
-    : '绑定并读取作品数据（约 ' + costLabel + '）';
+    ? '更新链接并读取作品数据（约 ' + costLabel + ' 起）'
+    : '绑定并读取作品数据（约 ' + costLabel + ' 起）';
   const refreshButton = $('#douyin-refresh-button');
   refreshButton.hidden = !performance;
   refreshButton.dataset.defaultLabel = '手动刷新作品数据（约 ' + costLabel + '）';
   renderDouyinRefreshFeedback(job);
   $('#douyin-refresh-hint').textContent = (
     '播放、点赞、评论、分享和收藏不会自动更新；需要最新数据时请点击按钮。'
-    + '每次刷新会发起 1 次 TikHub 请求，预计成本 ' + costLabel + '。'
+    + '每次刷新会发起 1 次 TikHub 星图请求，预计成本 ' + costLabel + '。'
   );
   $('#douyin-cost-note').textContent = [
-    '每次读取作品数据只发起 1 次 TikHub 请求，成功请求规划成本约 ' + costLabel + '，点击按钮即确认本次费用。',
+    '刷新已绑定作品只发起 1 次 TikHub 请求，成功请求规划成本约 ' + costLabel + '，点击按钮即确认本次费用。',
+    '首次绑定完整作品链接约 ' + costLabel + '；抖音短链接还需 1 次解析请求，最多约 ' + shortLinkCostLabel + '。',
+    '播放量采用星图总播放口径，包含可能的投流播放；互动指标来自同一次完整指标响应。',
     'ROI 按每千次播放 ¥10、目标 10 倍计算；读取费用计入该视频成本。',
     '不含未绑定到本视频的选题研究公摊。',
   ].join(' ');
@@ -2563,6 +2569,10 @@ $('#douyin-refresh-button').addEventListener('click', async () => {
     const successSummary = [
       '刷新成功',
       '播放量 ' + formatInteger(analysis.play_count, '未返回'),
+      '点赞 ' + formatInteger(analysis.like_count, '未返回'),
+      '评论 ' + formatInteger(analysis.comment_count, '未返回'),
+      '分享 ' + formatInteger(analysis.share_count, '未返回'),
+      '收藏 ' + formatInteger(analysis.collect_count, '未返回'),
       analysis.observed_at ? '数据时间 ' + formatDateTime(analysis.observed_at) : '',
       '耗时 ' + elapsedSeconds + ' 秒',
     ].filter(Boolean).join(' · ');
