@@ -15,6 +15,7 @@ const accountsPage = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'acco
 const accountsApp = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'accounts.js'), 'utf8');
 const costsPage = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'costs.html'), 'utf8');
 const costsApp = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'costs.js'), 'utf8');
+const costsApi = fs.readFileSync(path.join(root, 'qijia_video', 'cost_api.py'), 'utf8');
 
 test('qijia video uses an independent page and API namespace', () => {
   assert.match(page, /齐家 AI 家庭教育内容工作台/);
@@ -51,7 +52,7 @@ test('administrator can manage bounded colleague access without exposing passwor
   assert.doesNotMatch(accountsApp, /localStorage|sessionStorage/);
 });
 
-test('team cost and Douyin performance dashboard is read-only and auditable', () => {
+test('team cost and Douyin performance dashboard has explicit audited refresh actions', () => {
   assert.match(page, /href="\/qijia-video\/costs">成本与效果/);
   assert.match(costsPage, /内容成本与效果分析/);
   assert.match(costsPage, /人民币已计成本 = 供应商回传金额 \+ 有计价依据的估算/);
@@ -67,11 +68,15 @@ test('team cost and Douyin performance dashboard is read-only and auditable', ()
   assert.match(costsPage, /id="performance-target-meter"/);
   assert.match(costsPage, /id="performance-table-body"/);
   assert.match(costsPage, /id="performance-export-button"/);
+  assert.match(costsPage, /id="cost-refresh-button"[^>]*>重新载入看板</);
+  assert.match(costsPage, /id="performance-refresh-button"/);
+  assert.match(costsPage, /id="performance-refresh-status"[^>]*aria-live="polite"/);
   assert.match(costsPage, /id="cost-by-provider"/);
   assert.match(costsPage, /id="cost-by-stage"/);
   assert.match(costsPage, /id="cost-by-creator"/);
   assert.match(costsPage, /id="cost-event-body"/);
   assert.match(costsApp, /const API = '\/api\/qijia-video\/costs'/);
+  assert.match(costsApp, /const WORKBENCH_API = '\/api\/qijia-video'/);
   assert.match(costsApp, /reported_cny/);
   assert.match(costsApp, /estimated_cny/);
   assert.match(costsApp, /unpriced_event_count/);
@@ -86,12 +91,20 @@ test('team cost and Douyin performance dashboard is read-only and auditable', ()
   assert.match(costsApp, /'like_count', 'comment_count', 'share_count', 'collect_count'/);
   assert.match(costsApp, /qijia-douyin-performance-/);
   assert.match(costsApp, /\/qijia-video\?job=/);
+  assert.match(costsApp, /function refreshPerformanceRow/);
+  assert.match(costsApp, /douyin-performance\/actions\/refresh/);
+  assert.match(costsApp, /confirm_cost: true/);
+  assert.match(costsApp, /rows\.length !== 1/);
+  assert.match(costsApp, /data-refresh-performance-job/);
+  assert.match(costsApi, /row\["revision"\] = int\(job\.revision\)/);
+  assert.match(costsApi, /row\["can_refresh"\]/);
+  assert.match(costsApi, /runtime\.capabilities\(\)\.get\("douyin_performance"/);
   assert.match(app, /new URLSearchParams\(window\.location\.search\)\.get\('job'\)/);
   assert.match(app, /api\('GET', `\/jobs\/\$\{encodeURIComponent\(selectJobId\)\}`\)/);
   assert.match(costsApp, /exportCsv/);
   assert.match(costsApp, /URL\.createObjectURL/);
   assert.match(costsApp, /\^\[\\t\\r\\n \]\*\[=\+\\-@\]/);
-  assert.doesNotMatch(costsApp, /method:\s*['"](?:POST|PUT|PATCH|DELETE)/);
+  assert.doesNotMatch(costsApp, /method:\s*['"](?:PUT|PATCH|DELETE)/);
   assert.doesNotMatch(costsApp, /reported_usd|estimated_usd|accounted_usd|自动发布/);
 });
 

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>成本与效果分析 · 齐家 AI 内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.13.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.13.3">
 </head>
 <body>
   <a class="skip-link" href="#cost-workspace">跳到成本与效果分析</a>
@@ -46,7 +46,7 @@
             <option value="0">全部记录</option>
           </select>
         </label>
-        <button id="cost-refresh-button" class="button secondary" type="button">刷新</button>
+        <button id="cost-refresh-button" class="button secondary" type="button">重新载入看板</button>
       </div>
     </section>
 
@@ -56,6 +56,11 @@
           <p class="step">核心经营结果</p>
           <h2 id="performance-title">团队抖音内容效果</h2>
           <p id="performance-cohort-note">按首次绑定时间纳入，刷新不会改变视频所属时间范围。</p>
+        </div>
+        <div class="performance-refresh-actions">
+          <button id="performance-refresh-button" class="button primary" type="button" disabled>更新抖音最新数据</button>
+          <small id="performance-refresh-hint">正在计算可更新作品与预计成本…</small>
+          <span id="performance-refresh-status" class="performance-refresh-status" role="status" aria-live="polite" hidden></span>
         </div>
       </div>
 
@@ -249,6 +254,6 @@
       </div>
     </details>
   </main>
-  <script type="module" src="/qijia-video/assets/costs.js?v=1.13.0"></script>
+  <script type="module" src="/qijia-video/assets/costs.js?v=1.13.3"></script>
 </body>
 </html>

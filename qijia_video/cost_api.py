@@ -74,7 +74,7 @@ async def cost_analysis(
         topic_runtime.service.list_runs(actor, limit=SOURCE_LIMIT),
     )
     response.headers["Cache-Control"] = "no-store"
-    return ok(build_cost_analysis(
+    analysis = build_cost_analysis(
         jobs,
         topic_runs,
         days=days,
@@ -102,4 +102,21 @@ async def cost_analysis(
             settings.QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS
         ),
         source_limit=SOURCE_LIMIT,
-    ))
+    )
+    jobs_by_id = {job.id: job for job in jobs}
+    username = str(user.get("username") or "")
+    is_admin = user.get("role") == "admin"
+    performance = analysis.get("performance") or {}
+    for row in performance.get("rows") or []:
+        job = jobs_by_id.get(str(row.get("job_id") or ""))
+        row["revision"] = int(job.revision) if job else 0
+        row["can_refresh"] = bool(
+            job
+            and (is_admin or str(job.created_by or "") == username)
+        )
+    performance["refresh"] = {
+        **runtime.capabilities().get("douyin_performance", {}),
+        "confirmation_required": True,
+    }
+    analysis["performance"] = performance
+    return ok(analysis)

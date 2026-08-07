@@ -1,5 +1,11 @@
 const API = '/api/qijia-video/costs';
-const state = {data: null, busy: false, performanceSort: 'roi'};
+const WORKBENCH_API = '/api/qijia-video';
+const state = {
+  data: null,
+  busy: false,
+  performanceSort: 'roi',
+  performanceRefreshProgress: null,
+};
 
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (character) => ({
@@ -74,8 +80,8 @@ function apiErrorMessage(payload) {
   if (Array.isArray(detail)) {
     return detail.map((item) => item?.msg || item?.message || '参数格式不正确').join('；');
   }
-  if (detail && typeof detail === 'object') return detail.msg || '读取成本失败';
-  return String(detail || '读取成本失败');
+  if (detail && typeof detail === 'object') return detail.msg || '请求失败';
+  return String(detail || '请求失败');
 }
 
 function setBusy(busy) {
@@ -85,6 +91,73 @@ function setBusy(busy) {
   $('#cost-export-button').disabled = busy || !state.data?.content?.length;
   $('#performance-sort-select').disabled = busy;
   $('#performance-export-button').disabled = busy || !state.data?.performance?.rows?.length;
+  document.querySelectorAll('[data-refresh-performance-job]').forEach((button) => {
+    button.disabled = busy;
+  });
+  updatePerformanceRefreshControls();
+}
+
+function performanceRefreshMeta(data = state.data) {
+  return data?.performance?.refresh || {};
+}
+
+function refreshablePerformanceRows(data = state.data) {
+  const rows = data?.performance?.rows || [];
+  const seenVideoIds = new Set();
+  return rows.filter((row) => {
+    const videoId = String(row.video_id || '');
+    if (
+      row.duplicate_binding
+      || row.can_refresh !== true
+      || number(row.revision) < 1
+      || !videoId
+      || seenVideoIds.has(videoId)
+    ) return false;
+    seenVideoIds.add(videoId);
+    return true;
+  });
+}
+
+function setPerformanceRefreshStatus(message, tone = '') {
+  const node = $('#performance-refresh-status');
+  node.hidden = !message;
+  node.textContent = message || '';
+  node.classList.toggle('loading', tone === 'loading');
+  node.classList.toggle('success', tone === 'success');
+  node.classList.toggle('warning', tone === 'warning');
+  node.classList.toggle('error', tone === 'error');
+}
+
+function updatePerformanceRefreshControls(data = state.data) {
+  const button = $('#performance-refresh-button');
+  const hint = $('#performance-refresh-hint');
+  if (!button || !hint) return;
+  const meta = performanceRefreshMeta(data);
+  const rows = refreshablePerformanceRows(data);
+  const progress = state.performanceRefreshProgress;
+  const unitCost = Number(meta.estimated_cny_per_success);
+  const hasUnitCost = Number.isFinite(unitCost) && unitCost > 0;
+  const unitCostLabel = hasUnitCost ? formatMoney(unitCost) : '金额以账单为准';
+
+  button.textContent = progress
+    ? '正在更新这条抖音数据…'
+    : rows.length === 1
+      ? `更新这条抖音数据（约 ${unitCostLabel}）`
+      : rows.length > 1
+        ? '请在下方选择视频'
+        : '更新抖音最新数据';
+  button.disabled = state.busy || meta.ready !== true || rows.length !== 1;
+  if (meta.ready === false) {
+    hint.textContent = `TikHub 暂不可用：${(meta.missing_configuration || []).join('、') || '配置不完整'}`;
+  } else if (!rows.length) {
+    hint.textContent = (data?.performance?.rows || []).length
+      ? '当前账号没有可付费更新的唯一作品；成员只能更新自己创建的内容。'
+      : '当前时间范围内尚无已绑定抖音作品。';
+  } else if (rows.length === 1) {
+    hint.textContent = `当前只有 1 个可更新作品；点击后调用 1 次 TikHub，预计成本 ${unitCostLabel}。`;
+  } else {
+    hint.textContent = `当前有 ${rows.length} 个可更新作品。为控制费用，请在下方逐条点击“更新此视频”；每次只调用 1 次 TikHub，预计 ${unitCostLabel}。`;
+  }
 }
 
 function renderSummary(data) {
@@ -232,6 +305,18 @@ function renderPerformance(data) {
   } else {
     body.innerHTML = rows.map((row) => {
       const status = performanceStatus(row);
+      const refreshMeta = performanceRefreshMeta(data);
+      const unitCost = Number(refreshMeta.estimated_cny_per_success);
+      const inlineCost = Number.isFinite(unitCost) && unitCost > 0
+        ? `（约 ${formatMoney(unitCost)}）`
+        : '';
+      const refreshAction = (
+        row.can_refresh === true
+        && !row.duplicate_binding
+        && number(row.revision) >= 1
+      )
+        ? `<button class="performance-inline-refresh" type="button" data-refresh-performance-job="${escapeHtml(row.job_id)}" ${state.busy ? 'disabled' : ''}>更新此视频${inlineCost}</button>`
+        : '';
       const rowTarget = number(row.target_views);
       const rowPlays = number(row.play_count);
       const rowHasCostBasis = number(row.accounted_cost_cny) > 0;
@@ -249,7 +334,7 @@ function renderPerformance(data) {
         <td>
           <strong>${escapeHtml(row.title)}</strong>
           <small>${escapeHtml(row.creator)}${row.author_name ? ` · 抖音作者 ${escapeHtml(row.author_name)}` : ''}</small>
-          <span class="performance-row-links"><a href="/qijia-video?job=${encodeURIComponent(row.job_id)}">查看任务</a><a href="${escapeHtml(row.video_url)}" target="_blank" rel="noopener noreferrer">打开抖音</a></span>
+          <span class="performance-row-links"><a href="/qijia-video?job=${encodeURIComponent(row.job_id)}">查看任务</a><a href="${escapeHtml(row.video_url)}" target="_blank" rel="noopener noreferrer">打开抖音</a>${refreshAction}</span>
         </td>
         <td><strong>${formatInteger(row.play_count)}</strong><small>${escapeHtml(formatDateTime(row.observed_at))} · ${formatInteger(row.snapshot_count)} 次快照</small></td>
         <td><strong>${escapeHtml(formatMoney(row.accounted_cost_cny))}</strong><small>播放价值 ${escapeHtml(formatMoney(row.playback_value_cny))}${row.unpriced_event_count ? ` · ${formatInteger(row.unpriced_event_count)} 笔待对账` : ''}</small></td>
@@ -262,6 +347,7 @@ function renderPerformance(data) {
       </tr>`;
     }).join('');
   }
+  updatePerformanceRefreshControls(data);
 
   const basis = performance.basis || {};
   const scopeParts = [
@@ -396,7 +482,7 @@ function render(data) {
 }
 
 async function loadCosts() {
-  if (state.busy) return;
+  if (state.busy) return false;
   setBusy(true);
   const days = Number($('#cost-period-select').value || 30);
   const status = $('#cost-status');
@@ -411,6 +497,7 @@ async function loadCosts() {
     try { payload = await response.json(); } catch { payload = {}; }
     if (!response.ok || payload.code !== 0) throw new Error(apiErrorMessage(payload));
     render(payload.data || {});
+    return true;
   } catch (error) {
     status.classList.remove('ready');
     status.classList.add('warning');
@@ -419,9 +506,87 @@ async function loadCosts() {
     notice.hidden = false;
     notice.classList.add('error');
     notice.textContent = '没有触发任何供应商调用，可以稍后安全刷新。';
+    return false;
   } finally {
     setBusy(false);
   }
+}
+
+async function requestPerformanceRefresh(row) {
+  const response = await fetch(
+    `${WORKBENCH_API}/jobs/${encodeURIComponent(row.job_id)}/douyin-performance/actions/refresh`,
+    {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        expected_revision: number(row.revision),
+        confirm_cost: true,
+      }),
+    },
+  );
+  let payload;
+  try { payload = await response.json(); } catch { payload = {}; }
+  if (!response.ok || payload.code !== 0) throw new Error(apiErrorMessage(payload));
+  return payload.data;
+}
+
+async function refreshPerformanceRow(requestedRow) {
+  if (state.busy) return;
+  const row = refreshablePerformanceRows().find(
+    (candidate) => candidate.job_id === requestedRow?.job_id,
+  );
+  if (!row) {
+    setPerformanceRefreshStatus('这条视频当前不可更新；请重新载入看板后再试。', 'error');
+    return;
+  }
+  const meta = performanceRefreshMeta();
+  if (meta.ready !== true) {
+    setPerformanceRefreshStatus(
+      `TikHub 暂不可用：${(meta.missing_configuration || []).join('、') || '配置不完整'}`,
+      'error',
+    );
+    return;
+  }
+
+  let refreshError = null;
+  state.performanceRefreshProgress = {jobId: row.job_id};
+  setBusy(true);
+  setPerformanceRefreshStatus(
+    `正在通过 TikHub 更新：${row.title || row.job_id}。本次只读取 1 个作品，请勿重复点击。`,
+    'loading',
+  );
+  try {
+    await requestPerformanceRefresh(row);
+  } catch (error) {
+    refreshError = error;
+  } finally {
+    state.performanceRefreshProgress = null;
+    setBusy(false);
+  }
+
+  const reloaded = await loadCosts();
+  if (refreshError) {
+    setPerformanceRefreshStatus(
+      `更新失败：${refreshError?.message || '未知错误'}${reloaded ? '' : '；看板重新载入也失败，请稍后重试。'}`,
+      'error',
+    );
+    return;
+  }
+  if (!reloaded) {
+    setPerformanceRefreshStatus(
+      'TikHub 已返回并保存数据，但看板重新载入失败；请点击“重新载入看板”。',
+      'warning',
+    );
+    return;
+  }
+  const latest = (state.data?.performance?.rows || []).find(
+    (candidate) => candidate.job_id === row.job_id,
+  );
+  setPerformanceRefreshStatus(
+    `更新成功：播放量 ${formatInteger(latest?.play_count)} · 数据时间 ${formatDateTime(latest?.observed_at)}。`,
+    'success',
+  );
 }
 
 function csvCell(value) {
@@ -487,6 +652,18 @@ function exportPerformanceCsv() {
 $('#cost-refresh-button').addEventListener('click', loadCosts);
 $('#cost-period-select').addEventListener('change', loadCosts);
 $('#cost-export-button').addEventListener('click', exportCsv);
+$('#performance-refresh-button').addEventListener('click', () => {
+  const rows = refreshablePerformanceRows();
+  if (rows.length === 1) refreshPerformanceRow(rows[0]);
+});
+$('#performance-table-body').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-refresh-performance-job]');
+  if (!button || state.busy) return;
+  const row = (state.data?.performance?.rows || []).find(
+    (candidate) => candidate.job_id === button.dataset.refreshPerformanceJob,
+  );
+  if (row) refreshPerformanceRow(row);
+});
 $('#performance-sort-select').addEventListener('change', (event) => {
   state.performanceSort = event.target.value || 'roi';
   if (state.data) renderPerformance(state.data);
