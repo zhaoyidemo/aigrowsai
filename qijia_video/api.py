@@ -1,10 +1,12 @@
 """FastAPI 边界；未来迁移时领域和应用层无需改动。"""
 from __future__ import annotations
 
+import logging
 import mimetypes
 import secrets
 import shutil
 import tempfile
+import time
 from functools import wraps
 from pathlib import Path
 from typing import Literal
@@ -34,6 +36,7 @@ from qijia_video.auth import get_current_user, require_permission
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
+logger = logging.getLogger(__name__)
 api_router = APIRouter(
     prefix="/api/qijia-video",
     tags=["齐家 AI 短视频"],
@@ -420,10 +423,39 @@ async def refresh_douyin_performance(
     body: DouyinPerformanceRefreshRequest,
     user: dict = Depends(get_current_user),
 ):
-    job = await runtime.service.refresh_douyin_performance(
+    actor = actor_from_user(user)
+    started_at = time.perf_counter()
+    try:
+        job = await runtime.service.refresh_douyin_performance(
+            job_id,
+            body.expected_revision,
+            actor,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Douyin performance refresh failed job=%s actor_id=%s "
+            "elapsed_ms=%s error_type=%s error=%s",
+            job_id,
+            actor.user_id,
+            max(0, round((time.perf_counter() - started_at) * 1000)),
+            type(exc).__name__,
+            str(exc)[:500],
+            exc_info=True,
+        )
+        raise
+    latest_snapshot = (
+        job.douyin_performance.snapshots[-1]
+        if job.douyin_performance and job.douyin_performance.snapshots
+        else None
+    )
+    logger.info(
+        "Douyin performance refresh succeeded job=%s actor_id=%s "
+        "elapsed_ms=%s play_count=%s request_id=%s",
         job_id,
-        body.expected_revision,
-        actor_from_user(user),
+        actor.user_id,
+        max(0, round((time.perf_counter() - started_at) * 1000)),
+        latest_snapshot.play_count if latest_snapshot else None,
+        latest_snapshot.request_id if latest_snapshot else "",
     )
     return ok(
         public_job_payload(job, user),

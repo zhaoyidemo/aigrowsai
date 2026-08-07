@@ -29,6 +29,7 @@ const state = {
   topicPollPromise: null,
   topicPollGeneration: 0,
   topicHandoffCandidate: null,
+  douyinRefreshFeedback: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -399,6 +400,37 @@ function notify(message, error = false) {
   node.hidden = !message;
   node.textContent = message || '';
   node.classList.toggle('error', error);
+}
+
+function renderDouyinRefreshFeedback(job) {
+  const node = $('#douyin-refresh-status');
+  const button = $('#douyin-refresh-button');
+  if (!node || !button) return;
+  const feedback = state.douyinRefreshFeedback;
+  const visible = !!(
+    feedback?.message
+    && feedback.jobId === job?.id
+  );
+  const tone = visible ? feedback.tone : '';
+  const loading = tone === 'loading';
+  node.hidden = !visible;
+  node.textContent = visible ? feedback.message : '';
+  node.classList.toggle('loading', loading);
+  node.classList.toggle('success', tone === 'success');
+  node.classList.toggle('error', tone === 'error');
+  button.textContent = loading
+    ? '正在刷新作品数据…'
+    : (button.dataset.defaultLabel || '手动刷新作品数据');
+  button.setAttribute('aria-busy', String(loading));
+}
+
+function setDouyinRefreshFeedback(jobId, tone, message) {
+  state.douyinRefreshFeedback = {
+    jobId: String(jobId || ''),
+    tone: String(tone || ''),
+    message: String(message || ''),
+  };
+  renderDouyinRefreshFeedback(state.selectedJob);
 }
 
 function setBusy(busy) {
@@ -1632,7 +1664,8 @@ function renderDouyinPerformance(job) {
     : '绑定并读取作品数据（约 ' + costLabel + '）';
   const refreshButton = $('#douyin-refresh-button');
   refreshButton.hidden = !performance;
-  refreshButton.textContent = '手动刷新作品数据（约 ' + costLabel + '）';
+  refreshButton.dataset.defaultLabel = '手动刷新作品数据（约 ' + costLabel + '）';
+  renderDouyinRefreshFeedback(job);
   $('#douyin-refresh-hint').textContent = (
     '播放、点赞、评论、分享和收藏不会自动更新；需要最新数据时请点击按钮。'
     + '每次刷新会发起 1 次 TikHub 请求，预计成本 ' + costLabel + '。'
@@ -2503,7 +2536,14 @@ $('#douyin-refresh-button').addEventListener('click', async () => {
     notify('只有创建者或管理员可以发起付费的作品数据刷新。', true);
     return;
   }
-  setBusy(true); notify('');
+  const startedAt = Date.now();
+  setBusy(true);
+  setDouyinRefreshFeedback(
+    job.id,
+    'loading',
+    '正在连接 TikHub 并读取最新作品数据，请勿重复点击。',
+  );
+  notify('');
   try {
     const updated = await api(
       'POST',
@@ -2511,10 +2551,21 @@ $('#douyin-refresh-button').addEventListener('click', async () => {
       {expected_revision: job.revision, confirm_cost: true},
     );
     updateVisibleJob(updated);
+    const analysis = updated.douyin_performance_analysis || {};
+    const elapsedSeconds = Math.max(1, Math.ceil((Date.now() - startedAt) / 1000));
+    const successSummary = [
+      '刷新成功',
+      '播放量 ' + formatInteger(analysis.play_count, '未返回'),
+      analysis.observed_at ? '数据时间 ' + formatDateTime(analysis.observed_at) : '',
+      '耗时 ' + elapsedSeconds + ' 秒',
+    ].filter(Boolean).join(' · ');
+    setDouyinRefreshFeedback(job.id, 'success', successSummary);
     notify('抖音作品数据已刷新，本次 TikHub 成本已保存。');
   } catch (error) {
     await loadAll({selectJobId: job.id}).catch(() => {});
-    notify(error.message, true);
+    const message = error?.message || '未知错误';
+    setDouyinRefreshFeedback(job.id, 'error', '刷新失败：' + message);
+    notify(message, true);
   } finally {
     setBusy(false);
   }

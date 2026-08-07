@@ -362,6 +362,7 @@ test('packaged jobs expose Douyin-only manual playback feedback and ROI', () => 
   assert.match(page, /id="douyin-link-input"/);
   assert.match(page, /id="douyin-change-link-button"/);
   assert.match(page, /id="douyin-refresh-button"[^>]*>手动刷新作品数据/);
+  assert.match(page, /id="douyin-refresh-status"[^>]*aria-live="polite"/);
   assert.match(page, /id="douyin-play-count"/);
   assert.match(page, /id="douyin-like-count"/);
   assert.match(page, /id="douyin-comment-count"/);
@@ -371,6 +372,10 @@ test('packaged jobs expose Douyin-only manual playback feedback and ROI', () => 
   assert.match(page, /10 倍目标播放/);
   assert.match(app, /douyin-performance\/actions\/refresh/);
   assert.match(app, /refreshButton\.hidden = !performance/);
+  assert.match(app, /setDouyinRefreshFeedback/);
+  assert.match(app, /正在连接 TikHub 并读取最新作品数据/);
+  assert.match(app, /刷新成功/);
+  assert.match(app, /刷新失败：/);
   assert.match(app, /latestSnapshot\[key\]/);
   assert.match(app, /confirm_cost: true/);
   assert.match(app, /每千次播放 ¥10、目标 10 倍/);

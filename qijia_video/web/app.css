@@ -353,6 +353,11 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
 .douyin-refresh-panel strong { color: #2d4740; font-size: 12px; }
 .douyin-refresh-panel span { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .douyin-refresh-panel .button { flex: 0 0 auto; min-height: 38px; }
+.douyin-refresh-status { display: block; margin-top: 4px; border-radius: 6px; padding: 7px 9px; overflow-wrap: anywhere; font-weight: 700; }
+.douyin-refresh-status[hidden] { display: none; }
+.douyin-refresh-status.loading { background: #dfece8; color: #285649; }
+.douyin-refresh-status.success { background: #dff0e8; color: #256047; }
+.douyin-refresh-status.error { background: #fbe4e4; color: #8a3030; }
 .douyin-metric-group-title { margin: 13px 0 0; color: var(--muted); font-size: 9px; font-weight: 750; letter-spacing: .04em; }
 .douyin-platform-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 7px; }
 .douyin-platform-grid > div { min-width: 0; border: 1px solid var(--line); border-radius: 9px; padding: 10px; background: #faf9f5; }
