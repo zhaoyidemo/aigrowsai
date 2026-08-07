@@ -195,14 +195,20 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(card.verified_facts[0].text, idea.viewpoint)
         self.assertIn("不补造人物经历", card.interpretation_boundary[0].text)
 
-    def test_generation_settings_keep_five_shots_and_validate_prompts(self):
+    def test_generation_settings_default_to_ten_images_and_preserve_legacy(self):
         settings = GenerationSettings(
             script_prompt="测试脚本写法",
             seedance_prompt="测试镜头风格",
         )
-        self.assertEqual(settings.shot_count, 5)
+        self.assertEqual(settings.image_count, 10)
+        self.assertEqual(settings.shot_count, 13)
         self.assertEqual(settings.video_resolution, "1080p")
         self.assertEqual(settings.seedance_model, SEEDANCE_EFFICIENT_MODEL)
+        self.assertEqual(
+            settings.tts_voice_id,
+            "zh_female_vv_uranus_bigtts",
+        )
+        self.assertEqual(settings.tts_speed_ratio, 1.2)
         legacy_job = VideoJob.model_validate({
             "id": "legacy-resolution-job",
             "state": "card_verified",
@@ -223,6 +229,9 @@ class QijiaVideoContractTests(unittest.TestCase):
             legacy_job.generation_settings.seedance_model,
             SEEDANCE_FLAGSHIP_MODEL,
         )
+        self.assertEqual(legacy_job.generation_settings.image_count, 2)
+        self.assertEqual(legacy_job.generation_settings.shot_count, 5)
+        self.assertEqual(legacy_job.generation_settings.tts_speed_ratio, 1.0)
         self.assertEqual(
             {
                 GenerationSettings(video_resolution=resolution).video_resolution
@@ -236,6 +245,16 @@ class QijiaVideoContractTests(unittest.TestCase):
             GenerationSettings(video_resolution="2160p")
         with self.assertRaises(ValidationError):
             GenerationSettings(seedance_model="unknown-seedance")
+        with self.assertRaises(ValidationError):
+            GenerationSettings(image_count=1)
+        with self.assertRaises(ValidationError):
+            GenerationSettings(image_count=11)
+        with self.assertRaises(ValidationError):
+            GenerationSettings(image_count=10, shot_count=5)
+        with self.assertRaises(ValidationError):
+            GenerationSettings(tts_speed_ratio=1.3)
+        with self.assertRaises(ValidationError):
+            GenerationSettings(tts_voice_id="unverified-voice")
 
     def test_legacy_visual_request_fingerprint_does_not_change(self):
         payload = {
@@ -1345,8 +1364,13 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         script = await TemplateScriptProvider().generate(card)
         synthesized_texts: list[str] = []
 
-        async def synthesize_segment(text: str, path: Path) -> float:
+        async def synthesize_segment(text: str, path: Path, **options) -> float:
             synthesized_texts.append(text)
+            self.assertEqual(
+                options["voice_id"],
+                "zh_female_vv_uranus_bigtts",
+            )
+            self.assertEqual(options["speed_ratio"], 1.0)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"full-audio")
             return 48.0
@@ -1392,7 +1416,11 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             body = json.loads(request.content)
             self.assertEqual(
                 body["req_params"]["speaker"],
-                "zh_female_vv_uranus_bigtts",
+                "zh_male_ruyayichen_saturn_bigtts",
+            )
+            self.assertEqual(
+                body["req_params"]["audio_params"]["speech_rate"],
+                20,
             )
             return httpx.Response(200, text=(
                 json.dumps({"code": 0, "data": encoded})
@@ -1423,6 +1451,8 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             duration = await provider._synthesize_segment(
                 "这是一句真实接口契约测试。",
                 Path(directory) / "voice.mp3",
+                voice_id="zh_male_ruyayichen_saturn_bigtts",
+                speed_ratio=1.2,
                 on_usage=record_usage,
             )
         self.assertEqual(duration, 1.5)
@@ -1435,6 +1465,39 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(usage_records[0].succeeded)
         self.assertEqual(usage_records[0].operation, "tts_synthesis")
         self.assertEqual(usage_records[0].quantity, len("这是一句真实接口契约测试。"))
+        self.assertIn("语速 1.2x", usage_records[0].note)
+
+    async def test_tts_preview_uses_selected_settings_and_separate_cost_stage(self):
+        provider = VolcengineTtsProvider(
+            endpoint="https://openspeech.bytedance.com/api/v3/tts/unidirectional",
+            resource_id="seed-tts-2.0",
+            voice_id="zh_female_vv_uranus_bigtts",
+            api_key="speech-key",
+        )
+        captured = {}
+
+        async def synthesize_segment(text, path, **options):
+            captured.update(options)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"preview-audio")
+            return 2.5
+
+        provider._synthesize_segment = synthesize_segment
+        with tempfile.TemporaryDirectory() as directory:
+            generated = await provider.synthesize_preview(
+                "这是当前脚本的开场。",
+                Path(directory),
+                voice_id="zh_female_santongyongns_saturn_bigtts",
+                speed_ratio=1.1,
+            )
+            self.assertEqual(generated.path.read_bytes(), b"preview-audio")
+        self.assertEqual(
+            captured["voice_id"],
+            "zh_female_santongyongns_saturn_bigtts",
+        )
+        self.assertEqual(captured["speed_ratio"], 1.1)
+        self.assertEqual(captured["operation"], "tts_preview")
+        self.assertFalse(captured["probe_duration"])
 
     async def test_tts_legacy_credentials_use_app_key_header(self):
         provider = VolcengineTtsProvider(
@@ -1514,7 +1577,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         card = await self.service.verify_source_card(
             card.id, card.revision, self.actor
         )
-        job = await self.service.create_job(card.id, self.actor)
+        job = await self.service.create_job(
+            card.id, self.actor, GenerationSettings(image_count=2)
+        )
         job = await self.service.generate_script(job.id, self.actor)
         extra = job.script.beats[1].model_copy(deep=True)
         extra.id = "n01b"
@@ -1529,6 +1594,37 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [beat.id for group in groups for beat in group],
             [beat.id for beat in job.script.beats],
+        )
+
+    async def test_default_visual_plan_allocates_ten_images_inside_script_beats(self):
+        card = await self.service.create_source_card(valid_card(), self.actor)
+        card = await self.service.verify_source_card(
+            card.id, card.revision, self.actor
+        )
+        job = await self.service.create_job(card.id, self.actor)
+        job = await self.service.generate_script(job.id, self.actor)
+
+        groups = self.service._storyboard_beat_groups(job)
+        visual_types = self.service._storyboard_visual_types(job, groups)
+        flat_ids = [beat.id for group in groups for beat in group]
+        compressed_ids = [
+            beat_id
+            for index, beat_id in enumerate(flat_ids)
+            if index == 0 or beat_id != flat_ids[index - 1]
+        ]
+
+        self.assertEqual(len(groups), 13)
+        self.assertEqual(compressed_ids, [beat.id for beat in job.script.beats])
+        self.assertEqual(visual_types.count("video"), 3)
+        self.assertEqual(visual_types.count("image"), 10)
+        self.assertEqual(visual_types[0], "video")
+        self.assertEqual(
+            sum(
+                beat.id == job.script.beats[0].id
+                for group in groups
+                for beat in group
+            ),
+            1,
         )
 
     async def test_true_overlong_narration_is_rejected_without_hidden_rewrite(self):
@@ -1605,8 +1701,20 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         class OverlongTtsProvider(SilentTtsProvider):
             name = "overlong-tts-test"
 
-            async def synthesize(self, script, workspace):
-                manifest, files = await super().synthesize(script, workspace)
+            async def synthesize(
+                self,
+                script,
+                workspace,
+                *,
+                voice_id=None,
+                speed_ratio=1.0,
+            ):
+                manifest, files = await super().synthesize(
+                    script,
+                    workspace,
+                    voice_id=voice_id,
+                    speed_ratio=speed_ratio,
+                )
                 manifest.provider = self.name
                 manifest.total_duration_seconds = 146.582
                 return manifest, files
@@ -1825,7 +1933,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         job = await self.service.produce(job.id, self.actor)
 
-        self.assertEqual(len(provider.reference_image_urls), 5)
+        self.assertEqual(len(provider.reference_image_urls), 13)
         self.assertEqual(
             set(provider.reference_image_urls),
             {"local://qijia-video/reference-images/test.png"},
@@ -1865,7 +1973,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             side_effect=lambda bits: seed_widths.append(bits) or len(seed_widths),
         ):
             job = await self.service.produce(job.id, self.actor)
-        self.assertEqual(seed_widths, [31] * 5)
+        self.assertEqual(seed_widths, [31] * 13)
         self.assertEqual(job.state, JobState.FINAL_REVIEW_REQUIRED)
         self.assertEqual(len(job.review_bundle_hash), 64)
         self.assertTrue(job.render_manifest.subtitle_cues)
@@ -1887,7 +1995,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(
             cue.text == cue.text.strip() for cue in job.render_manifest.subtitle_cues
         ))
-        self.assertEqual(job.generation_settings.shot_count, 5)
+        self.assertEqual(job.generation_settings.image_count, 10)
+        self.assertEqual(job.generation_settings.shot_count, 13)
         self.assertEqual(len(job.visual_requests), 3)
         self.assertTrue(all(
             request.resolution == "1080p"
@@ -1924,9 +2033,18 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             task.state == ProviderTaskState.SUCCEEDED for task in job.video_tasks
         ))
         self.assertIsNotNone(job.storyboard_plan)
-        self.assertEqual(len(job.storyboard_plan.shots), 5)
+        self.assertEqual(len(job.storyboard_plan.shots), 13)
+        planned_beat_ids = [
+            beat_id
+            for shot in job.storyboard_plan.shots
+            for beat_id in shot.beat_ids
+        ]
         self.assertEqual(
-            [beat_id for shot in job.storyboard_plan.shots for beat_id in shot.beat_ids],
+            [
+                beat_id
+                for index, beat_id in enumerate(planned_beat_ids)
+                if index == 0 or beat_id != planned_beat_ids[index - 1]
+            ],
             [beat.id for beat in job.script.beats],
         )
         self.assertEqual(
@@ -1935,10 +2053,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [shot.visual_type for shot in job.storyboard_plan.shots].count("image"),
-            2,
+            10,
         )
         self.assertEqual(job.storyboard_plan.shots[0].visual_type, "video")
-        self.assertEqual(len(job.first_frame_candidates), 5)
+        self.assertEqual(len(job.first_frame_candidates), 13)
         self.assertTrue(all(
             0 <= candidate.seed <= SEEDREAM_MAX_SEED
             for candidate in job.first_frame_candidates
@@ -1952,6 +2070,14 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             shot.selected_candidate_id == f"frame_{shot.shot_id}_01"
             for shot in job.storyboard_plan.shots
         ))
+        self.assertEqual(len(job.render_manifest.visual_blocks), 13)
+        self.assertEqual(
+            sum(
+                block.duration_in_frames
+                for block in job.render_manifest.visual_blocks
+            ),
+            job.render_manifest.duration_in_frames,
+        )
         public_payload = qijia_api.public_job_payload(job)
         self.assertEqual(public_payload["script"]["schema_version"], "2.0")
         self.assertIn("beats", public_payload["script"])
@@ -1969,7 +2095,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 for shot in job.storyboard_plan.shots
             )
         }
-        self.assertEqual(len(selected_assets), 5)
+        self.assertEqual(len(selected_assets), 13)
         self.assertEqual(
             {request.first_frame_asset_id for request in job.visual_requests},
             {
@@ -1995,7 +2121,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             for request in job.visual_requests
         ))
         blocks = job.render_manifest.visual_blocks
-        self.assertEqual(len(blocks), 5)
+        self.assertEqual(len(blocks), 13)
         self.assertEqual(
             [block.type for block in blocks],
             [
@@ -2241,6 +2367,29 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
         storyboard_provider = RecordingStoryboardProvider()
         self.service.storyboard_provider = storyboard_provider
+        class RecordingTtsProvider(SilentTtsProvider):
+            voice_id = None
+            speed_ratio = None
+
+            async def synthesize(
+                self,
+                script,
+                workspace,
+                *,
+                voice_id=None,
+                speed_ratio=1.0,
+            ):
+                self.voice_id = voice_id
+                self.speed_ratio = speed_ratio
+                return await super().synthesize(
+                    script,
+                    workspace,
+                    voice_id=voice_id,
+                    speed_ratio=speed_ratio,
+                )
+
+        tts_provider = RecordingTtsProvider()
+        self.service.tts_provider = tts_provider
         card = await self.service.create_source_card(valid_card(), self.actor)
         card = await self.service.verify_source_card(
             card.id, card.revision, self.actor
@@ -2249,12 +2398,16 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             script_prompt="用更像真实对话的方式写脚本。",
             seedance_prompt="低饱和纪录片风格，固定机位。",
             video_resolution="1080p",
+            tts_voice_id="zh_male_ruyayichen_saturn_bigtts",
+            tts_speed_ratio=1.1,
         )
         job = await self.service.create_job(
             card.id, self.actor, settings
         )
         job = await self.service.generate_script(job.id, self.actor)
-        self.assertEqual(provider.prompt, settings.script_prompt)
+        self.assertTrue(provider.prompt.startswith(settings.script_prompt))
+        self.assertIn("语速 1.1x", provider.prompt)
+        self.assertIn("245-325 个汉字", provider.prompt)
 
         job = await self.service.update_script(
             job.id,
@@ -2267,6 +2420,12 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.id, job.revision, job.script_hash, self.actor
         )
         job = await self.service.produce(job.id, self.actor)
+        self.assertEqual(
+            tts_provider.voice_id,
+            "zh_male_ruyayichen_saturn_bigtts",
+        )
+        self.assertEqual(tts_provider.speed_ratio, 1.1)
+        self.assertEqual(job.narration_manifest.speed_ratio, 1.1)
         self.assertEqual(
             storyboard_provider.base_style,
             "自然窗光，手持纪录片风格。",
@@ -2435,7 +2594,10 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         self.assertNotIn("mock", response.json()["data"]["tts_provider"])
         self.assertNotIn("mock", response.json()["data"]["video_provider"])
         self.assertEqual(
-            response.json()["data"]["generation_defaults"]["shot_count"], 5
+            response.json()["data"]["generation_defaults"]["image_count"], 10
+        )
+        self.assertEqual(
+            response.json()["data"]["generation_defaults"]["shot_count"], 13
         )
         self.assertEqual(
             response.json()["data"]["generation_defaults"]["video_resolution"],
@@ -2445,6 +2607,27 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             response.json()["data"]["generation_defaults"]["seedance_model"],
             SEEDANCE_EFFICIENT_MODEL,
         )
+        tts_pricing = response.json()["data"]["tts_pricing"]
+        self.assertEqual(
+            [item["id"] for item in tts_pricing["voices"]],
+            [
+                "zh_female_vv_uranus_bigtts",
+                "zh_female_santongyongns_saturn_bigtts",
+                "zh_male_ruyayichen_saturn_bigtts",
+            ],
+        )
+        self.assertEqual(
+            [item["ratio"] for item in tts_pricing["speed_ratios"]],
+            [1.0, 1.1, 1.2],
+        )
+        self.assertEqual(
+            [item["speech_rate"] for item in tts_pricing["speed_ratios"]],
+            [0, 10, 20],
+        )
+        self.assertEqual(tts_pricing["default_speed_ratio"], 1.2)
+        self.assertEqual(tts_pricing["preview_max_characters"], 60)
+        self.assertEqual(tts_pricing["preview_max_estimated_cost_cny"], 0.03)
+        self.assertTrue(tts_pricing["preview_cost_confirmation_required"])
         self.assertEqual(
             response.json()["data"]["seedance_pricing"]["yuan_per_million_tokens"],
             4.2,

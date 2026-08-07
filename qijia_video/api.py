@@ -1,6 +1,7 @@
 """FastAPI 边界；未来迁移时领域和应用层无需改动。"""
 from __future__ import annotations
 
+import base64
 import logging
 import mimetypes
 import secrets
@@ -31,6 +32,7 @@ from qijia_video.infrastructure.storage import LocalArtifactStorage
 from qijia_video.runtime import actor_from_user, runtime, start_run
 from qijia_video.topic_runtime import topic_runtime
 from qijia_video.service import RELEASE_ARCHIVE_NAME
+from qijia_video.tts_options import TtsSpeedRatio, TtsVoiceId
 from qijia_video.auth import get_current_user, require_permission
 
 
@@ -115,6 +117,12 @@ class ScriptUpdateRequest(RevisionRequest):
         min_length=1,
         max_length=3200,
     )
+    tts_voice_id: TtsVoiceId | None = None
+    tts_speed_ratio: TtsSpeedRatio | None = None
+
+
+class NarrationPreviewRequest(RevisionRequest):
+    confirm_cost: Literal[True]
 
 
 class ScriptApprovalRequest(RevisionRequest):
@@ -498,8 +506,46 @@ async def update_script(
         body.expected_revision,
         actor_from_user(user),
         seedance_prompt=body.seedance_prompt,
+        tts_voice_id=body.tts_voice_id,
+        tts_speed_ratio=body.tts_speed_ratio,
     )
     return ok(public_job_payload(job, user), "脚本已保存，原确认已失效")
+
+
+@api_router.post("/jobs/{job_id}/narration-preview")
+@boundary
+async def preview_narration(
+    job_id: str,
+    body: NarrationPreviewRequest,
+    user: dict = Depends(get_current_user),
+):
+    job, audio, media_type, duration, text = (
+        await runtime.service.preview_narration(
+            job_id,
+            body.expected_revision,
+            actor_from_user(user),
+        )
+    )
+    usage = next(
+        (
+            item
+            for item in reversed(job.usage_records)
+            if item.operation == "tts_preview" and item.succeeded
+        ),
+        None,
+    )
+    return ok({
+        "job": public_job_payload(job, user),
+        "audio_base64": base64.b64encode(audio).decode("ascii"),
+        "media_type": media_type,
+        "duration_seconds": round(duration, 3),
+        "preview_text": text,
+        "estimated_cost_cny": (
+            usage.estimated_cost
+            if usage and usage.estimated_currency == "CNY"
+            else None
+        ),
+    }, "配音试听已生成，费用已计入本任务")
 
 
 @api_router.post("/jobs/{job_id}/actions/approve-script")

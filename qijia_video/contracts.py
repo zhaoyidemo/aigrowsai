@@ -12,7 +12,20 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
-from qijia_video.prompts import DEFAULT_SCRIPT_PROMPT, DEFAULT_SEEDANCE_PROMPT
+from qijia_video.prompts import (
+    DEFAULT_IMAGE_CHAPTER_COUNT,
+    DEFAULT_SCRIPT_PROMPT,
+    DEFAULT_SEEDANCE_PROMPT,
+    MAX_IMAGE_CHAPTER_COUNT,
+    MIN_IMAGE_CHAPTER_COUNT,
+)
+from qijia_video.tts_options import (
+    DEFAULT_TTS_SPEED_RATIO,
+    DEFAULT_TTS_VOICE_ID,
+    LEGACY_TTS_SPEED_RATIO,
+    TtsSpeedRatio,
+    TtsVoiceId,
+)
 
 SCHEMA_VERSION = "1.0"
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
@@ -492,10 +505,49 @@ class GenerationSettings(ContractModel):
         max_length=3200,
     )
     video_resolution: Literal["480p", "720p", "1080p"] = "1080p"
+    tts_voice_id: TtsVoiceId = DEFAULT_TTS_VOICE_ID
+    tts_speed_ratio: TtsSpeedRatio = DEFAULT_TTS_SPEED_RATIO
     # 1.0 Pro Fast keeps native 1080P while making the default three-shot
     # workflow materially cheaper. 2.0 remains an explicit per-shot upgrade.
     seedance_model: SeedanceModelId = SEEDANCE_EFFICIENT_MODEL
-    shot_count: Literal[5] = 5
+    image_count: int = Field(
+        default=DEFAULT_IMAGE_CHAPTER_COUNT,
+        ge=MIN_IMAGE_CHAPTER_COUNT,
+        le=MAX_IMAGE_CHAPTER_COUNT,
+    )
+    shot_count: int = Field(
+        default=DEFAULT_IMAGE_CHAPTER_COUNT + 3,
+        ge=MIN_IMAGE_CHAPTER_COUNT + 3,
+        le=MAX_IMAGE_CHAPTER_COUNT + 3,
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def derive_compatible_chapter_counts(cls, value: Any) -> Any:
+        """Infer the missing count while preserving persisted five-shot jobs."""
+
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        has_images = "image_count" in normalized
+        has_shots = "shot_count" in normalized
+        if has_shots and not has_images:
+            try:
+                normalized["image_count"] = int(normalized["shot_count"]) - 3
+            except (TypeError, ValueError):
+                pass
+        elif has_images and not has_shots:
+            try:
+                normalized["shot_count"] = int(normalized["image_count"]) + 3
+            except (TypeError, ValueError):
+                pass
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_chapter_counts(self):
+        if self.shot_count != self.image_count + 3:
+            raise ValueError("总章节数必须等于 3 段视频加动态图片数量")
+        return self
 
 
 class StoryboardShot(ContractModel):
@@ -530,7 +582,7 @@ class StoryboardShot(ContractModel):
 
 class StoryboardPlan(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
-    shots: list[StoryboardShot] = Field(min_length=5, max_length=5)
+    shots: list[StoryboardShot] = Field(min_length=5, max_length=13)
     model_id: str = Field(default="", max_length=256)
     prompt_version: str = Field(default="", max_length=128)
     input_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -539,11 +591,8 @@ class StoryboardPlan(ContractModel):
     @model_validator(mode="after")
     def validate_shots(self):
         shot_ids = [item.shot_id for item in self.shots]
-        beat_ids = [beat_id for item in self.shots for beat_id in item.beat_ids]
         if len(shot_ids) != len(set(shot_ids)):
             raise ValueError("分镜 ID 必须唯一")
-        if len(beat_ids) != len(set(beat_ids)):
-            raise ValueError("五个分镜不能重复消费同一个叙事段")
         return self
 
 
@@ -693,6 +742,7 @@ class NarrationManifest(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     provider: str
     voice_id: str
+    speed_ratio: TtsSpeedRatio = LEGACY_TTS_SPEED_RATIO
     sample_rate: int = Field(default=48000, ge=8000)
     total_duration_seconds: float = Field(gt=0)
     full_audio_asset_id: str
@@ -956,6 +1006,11 @@ class VideoJob(ContractModel):
             additions["video_resolution"] = "480p"
         if "seedance_model" not in settings:
             additions["seedance_model"] = SEEDANCE_FLAGSHIP_MODEL
+        if "tts_voice_id" not in settings:
+            additions["tts_voice_id"] = DEFAULT_TTS_VOICE_ID
+        if "tts_speed_ratio" not in settings:
+            # Existing jobs were synthesized at the provider's normal speed.
+            additions["tts_speed_ratio"] = LEGACY_TTS_SPEED_RATIO
 
         def provider_task_id(item: Any) -> str:
             if isinstance(item, dict):

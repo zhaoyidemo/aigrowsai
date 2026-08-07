@@ -21,11 +21,16 @@ from qijia_video.contracts import (
 )
 from qijia_video.errors import ProviderUnavailable
 from qijia_video.ports import GeneratedFile
+from qijia_video.tts_options import (
+    LEGACY_TTS_SPEED_RATIO,
+    TTS_VOICE_IDS,
+    provider_speech_rate,
+)
 
 
 # The online V3 endpoint documents a 1024-byte UTF-8 ceiling. Keep a small
-# margin for provider-side normalization while allowing a normal 220-300
-# Chinese-character script to remain one request.
+# margin for provider-side normalization while allowing a normal 45-75 second
+# Chinese narration to remain one request.
 TTS_TEXT_MAX_BYTES = 1000
 # Kept for import compatibility with older tests/integrations. New narration
 # synthesis does not insert artificial gaps between approved script beats.
@@ -70,6 +75,22 @@ class VolcengineTtsProvider:
             and self.resource_id
             and self.voice_id
         )
+
+    def _voice_and_rate(
+        self,
+        voice_id: str | None,
+        speed_ratio: float,
+    ) -> tuple[str, float, int]:
+        selected_voice = str(voice_id or self.voice_id or "").strip()
+        if selected_voice not in TTS_VOICE_IDS:
+            raise ProviderUnavailable("配音音色不在已验证的 Seed-TTS 2.0 清单中")
+        try:
+            raw_speed = float(speed_ratio)
+            speech_rate = provider_speech_rate(raw_speed)
+            normalized_speed = round(raw_speed, 1)
+        except (TypeError, ValueError) as exc:
+            raise ProviderUnavailable("配音语速只支持 1.0x、1.1x 或 1.2x") from exc
+        return selected_voice, normalized_speed, speech_rate
 
     def _headers(self, request_id: str) -> dict[str, str]:
         headers = {
@@ -136,13 +157,14 @@ class VolcengineTtsProvider:
         request_id: str,
         text: str,
         succeeded: bool,
+        operation: str = "tts_synthesis",
         note: str = "",
     ) -> None:
         if not recorder:
             return
         usage = ProviderUsageRecord(
             usage_id=f"usage_tts_{request_id.replace('-', '')}",
-            operation="tts_synthesis",
+            operation=operation,
             provider=self.name,
             model_id=self.resource_id,
             request_id=request_id,
@@ -164,19 +186,34 @@ class VolcengineTtsProvider:
         text: str,
         destination: Path,
         *,
+        voice_id: str | None = None,
+        speed_ratio: float = LEGACY_TTS_SPEED_RATIO,
+        operation: str = "tts_synthesis",
+        probe_duration: bool = True,
         on_usage: UsageRecorder | None = None,
     ) -> float:
         if len(text.encode("utf-8")) > TTS_TEXT_MAX_BYTES:
             raise ProviderUnavailable(
                 "单次豆包 TTS 文本超过 1000 UTF-8 字节"
             )
+        selected_voice, normalized_speed, speech_rate = self._voice_and_rate(
+            voice_id,
+            speed_ratio,
+        )
+        usage_note = (
+            f"音色 {selected_voice}；语速 {normalized_speed:.1f}x"
+        )
         request_id = str(uuid.uuid4())
         body = {
             "user": {"uid": "qijia-video"},
             "req_params": {
                 "text": text,
-                "speaker": self.voice_id,
-                "audio_params": {"format": "mp3", "sample_rate": 24000},
+                "speaker": selected_voice,
+                "audio_params": {
+                    "format": "mp3",
+                    "sample_rate": 24000,
+                    "speech_rate": speech_rate,
+                },
             },
         }
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -219,7 +256,10 @@ class VolcengineTtsProvider:
                 request_id=request_id,
                 text=text,
                 succeeded=False,
-                note="TTS 请求失败，是否计费需与供应商账单核对",
+                operation=operation,
+                note=(
+                    f"{usage_note}；TTS 请求失败，是否计费需与供应商账单核对"
+                ),
             )
             raise
         except (httpx.TimeoutException, httpx.RequestError) as exc:
@@ -228,7 +268,10 @@ class VolcengineTtsProvider:
                 request_id=request_id,
                 text=text,
                 succeeded=False,
-                note="TTS 网络异常，是否计费需与供应商账单核对",
+                operation=operation,
+                note=(
+                    f"{usage_note}；TTS 网络异常，是否计费需与供应商账单核对"
+                ),
             )
             raise ProviderUnavailable("豆包 TTS 请求失败") from exc
         # A non-empty audio response is the billable provider outcome. Record
@@ -239,8 +282,12 @@ class VolcengineTtsProvider:
             request_id=request_id,
             text=text,
             succeeded=True,
+            operation=operation,
+            note=usage_note,
         )
         destination.write_bytes(b"".join(chunks))
+        if not probe_duration:
+            return reported_duration
         actual_duration = await self._probe_duration(destination)
         return actual_duration or reported_duration
 
@@ -446,15 +493,61 @@ class VolcengineTtsProvider:
         return destination
 
     async def synthesize(
-        self, script: ScriptDraft, workspace: Path
+        self,
+        script: ScriptDraft,
+        workspace: Path,
+        *,
+        voice_id: str | None = None,
+        speed_ratio: float = LEGACY_TTS_SPEED_RATIO,
     ) -> tuple[NarrationManifest, list[GeneratedFile]]:
-        return await self.synthesize_with_usage(script, workspace)
+        return await self.synthesize_with_usage(
+            script,
+            workspace,
+            voice_id=voice_id,
+            speed_ratio=speed_ratio,
+        )
+
+    async def synthesize_preview(
+        self,
+        text: str,
+        workspace: Path,
+        *,
+        voice_id: str,
+        speed_ratio: float,
+        on_usage: UsageRecorder | None = None,
+    ) -> GeneratedFile:
+        if not self.configured:
+            raise ProviderUnavailable(
+                "真实 TTS 未配置：请设置 VOLCENGINE_TTS_API_KEY，或设置 "
+                "VOLCENGINE_TTS_APP_ID 与 VOLCENGINE_TTS_ACCESS_TOKEN"
+            )
+        prepared = self._prepare_text(text)
+        if not prepared:
+            raise ProviderUnavailable("没有可试听的开场旁白")
+        path = workspace / "audio" / "narration-preview.mp3"
+        duration = await self._synthesize_segment(
+            prepared,
+            path,
+            voice_id=voice_id,
+            speed_ratio=speed_ratio,
+            operation="tts_preview",
+            probe_duration=False,
+            on_usage=on_usage,
+        )
+        return GeneratedFile(
+            asset_id="narration_preview",
+            path=path,
+            media_type="audio/mpeg",
+            duration_seconds=duration,
+        )
 
     async def synthesize_with_usage(
         self,
         script: ScriptDraft,
         workspace: Path,
         *,
+        voice_id: str | None = None,
+        speed_ratio: float = LEGACY_TTS_SPEED_RATIO,
         on_usage: UsageRecorder | None = None,
     ) -> tuple[NarrationManifest, list[GeneratedFile]]:
         if not self.configured:
@@ -462,6 +555,10 @@ class VolcengineTtsProvider:
                 "真实 TTS 未配置：请设置 VOLCENGINE_TTS_API_KEY，或设置 "
                 "VOLCENGINE_TTS_APP_ID 与 VOLCENGINE_TTS_ACCESS_TOKEN"
             )
+        selected_voice, normalized_speed, _ = self._voice_and_rate(
+            voice_id,
+            speed_ratio,
+        )
         audio_dir = workspace / "audio"
         spoken_texts = [self._prepare_text(item.narration) for item in script.beats]
         chunks = self._synthesis_chunks(spoken_texts)
@@ -474,14 +571,12 @@ class VolcengineTtsProvider:
             path = audio_dir / (
                 "narration.mp3" if len(chunks) == 1 else f"chunk_{index:02d}.mp3"
             )
-            duration = (
-                await self._synthesize_segment(
-                    text,
-                    path,
-                    on_usage=on_usage,
-                )
-                if on_usage
-                else await self._synthesize_segment(text, path)
+            duration = await self._synthesize_segment(
+                text,
+                path,
+                voice_id=selected_voice,
+                speed_ratio=normalized_speed,
+                on_usage=on_usage,
             )
             if duration <= 0:
                 raise ProviderUnavailable("完整旁白音频时长无效")
@@ -516,7 +611,8 @@ class VolcengineTtsProvider:
         )]
         return NarrationManifest(
             provider=self.name,
-            voice_id=self.voice_id,
+            voice_id=selected_voice,
+            speed_ratio=normalized_speed,
             sample_rate=sample_rate,
             total_duration_seconds=total_duration,
             full_audio_asset_id="narration_full",

@@ -30,6 +30,9 @@ const state = {
   topicPollGeneration: 0,
   topicHandoffCandidate: null,
   douyinRefreshFeedback: null,
+  ttsPreviewKey: '',
+  ttsPreviewUrl: '',
+  ttsPreviewCache: new Map(),
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -136,20 +139,24 @@ function updateScriptLengthStatus() {
   const status = $('#script-length-status');
   if (!status) return;
   const count = narrationCharacterCount(editorNarrationText());
-  const estimatedSeconds = Math.max(1, Math.round(count / 4.1));
+  const speedRatio = selectedJobTtsSpeedRatio();
+  const [targetMinChars, targetMaxChars] = scriptTargetRange(speedRatio);
+  const estimatedSeconds = Math.max(1, Math.round(count / (4.1 * speedRatio)));
   if (!count) {
     status.textContent = '只统计会被念出的旁白';
   } else if (count > SCRIPT_HARD_MAX_CHARS) {
-    status.textContent = `旁白 ${count} 字 · 预计约 ${estimatedSeconds} 秒 · 已超过技术安全上限`;
-  } else if (count >= SCRIPT_TARGET_MIN_CHARS && count <= SCRIPT_TARGET_MAX_CHARS) {
-    status.textContent = `旁白 ${count} 字 · 预计约 ${estimatedSeconds} 秒 · 节奏合适`;
+    status.textContent = `旁白 ${count} 字 · ${speedRatio.toFixed(1)}x 预计约 ${estimatedSeconds} 秒 · 已超过技术安全上限`;
+  } else if (count >= targetMinChars && count <= targetMaxChars) {
+    status.textContent = `旁白 ${count} 字 · ${speedRatio.toFixed(1)}x 预计约 ${estimatedSeconds} 秒 · 节奏合适`;
   } else {
-    status.textContent = `旁白 ${count} 字 · 预计约 ${estimatedSeconds} 秒 · ${SCRIPT_TARGET_MIN_CHARS}-${SCRIPT_TARGET_MAX_CHARS} 字仅作建议`;
+    status.textContent = `旁白 ${count} 字 · ${speedRatio.toFixed(1)}x 预计约 ${estimatedSeconds} 秒 · ${targetMinChars}-${targetMaxChars} 字仅作建议`;
   }
   const overlong = count > SCRIPT_HARD_MAX_CHARS;
   status.classList.toggle('warning', overlong);
   const approveButton = $('#approve-script-button');
-  if (approveButton) approveButton.disabled = state.busy;
+  if (approveButton) {
+    approveButton.disabled = state.busy || !canEditResource(state.selectedJob);
+  }
 }
 
 function isNarrationRevisionFailure(job) {
@@ -166,12 +173,171 @@ function isNarrationRevisionFailure(job) {
 function generationDefaults() {
   return state.capabilities?.generation_defaults || {
     script_prompt: '', seedance_prompt: '', video_resolution: '1080p',
-    seedance_model: 'doubao-seedance-1-0-pro-fast-251015', shot_count: 5,
+    seedance_model: 'doubao-seedance-1-0-pro-fast-251015',
+    image_count: 10, shot_count: 13,
+    tts_voice_id: 'zh_female_vv_uranus_bigtts', tts_speed_ratio: 1.2,
   };
 }
 
 const SEEDANCE_EFFICIENT_MODEL = 'doubao-seedance-1-0-pro-fast-251015';
 const SEEDANCE_FLAGSHIP_MODEL = 'doubao-seedance-2-0-260128';
+const MIN_IMAGE_CHAPTER_COUNT = 2;
+const MAX_IMAGE_CHAPTER_COUNT = 10;
+const DEFAULT_TTS_VOICE_ID = 'zh_female_vv_uranus_bigtts';
+const DEFAULT_TTS_SPEED_RATIO = 1.2;
+const FALLBACK_TTS_VOICES = [
+  {id: DEFAULT_TTS_VOICE_ID, label: 'Vivi 2.0', description: '亲和自然'},
+  {id: 'zh_female_santongyongns_saturn_bigtts', label: '流畅女声', description: '清晰利落'},
+  {id: 'zh_male_ruyayichen_saturn_bigtts', label: '儒雅逸辰', description: '沉稳克制'},
+];
+const TTS_SPEED_RATIOS = [1.0, 1.1, 1.2];
+
+function ttsVoices() {
+  const configured = state.capabilities?.tts_pricing?.voices;
+  return Array.isArray(configured) && configured.length === 3
+    ? configured
+    : FALLBACK_TTS_VOICES;
+}
+
+function normalizedTtsVoiceId(value) {
+  const voices = ttsVoices();
+  const requested = String(value || '');
+  return voices.some((item) => item.id === requested)
+    ? requested
+    : (state.capabilities?.tts_pricing?.default_voice_id
+      || voices.find((item) => item.default)?.id
+      || DEFAULT_TTS_VOICE_ID);
+}
+
+function normalizedTtsSpeedRatio(value) {
+  const parsed = Number(value);
+  return TTS_SPEED_RATIOS.includes(parsed) ? parsed : DEFAULT_TTS_SPEED_RATIO;
+}
+
+function scriptTargetRange(speedRatio) {
+  return {
+    '1.0': [SCRIPT_TARGET_MIN_CHARS, SCRIPT_TARGET_MAX_CHARS],
+    '1.1': [245, 325],
+    '1.2': [265, 355],
+  }[normalizedTtsSpeedRatio(speedRatio).toFixed(1)];
+}
+
+function ttsVoiceLabel(voiceId) {
+  return ttsVoices().find((item) => item.id === voiceId)?.label || 'Seed-TTS 2.0';
+}
+
+function populateTtsVoiceSelect(select, voiceId) {
+  const selected = normalizedTtsVoiceId(voiceId);
+  select.innerHTML = ttsVoices().map((item) => (
+    `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)} · ${escapeHtml(item.description)}</option>`
+  )).join('');
+  select.value = selected;
+}
+
+function setTtsSettingsFields(settings) {
+  const defaults = generationDefaults();
+  populateTtsVoiceSelect(
+    $('#tts-voice-id'),
+    settings?.tts_voice_id || defaults.tts_voice_id || DEFAULT_TTS_VOICE_ID,
+  );
+  $('#tts-speed-ratio').value = String(normalizedTtsSpeedRatio(
+    settings?.tts_speed_ratio ?? defaults.tts_speed_ratio,
+  ));
+}
+
+function selectedJobTtsSpeedRatio() {
+  const field = $('#job-tts-speed-ratio');
+  if (field && !$('#script-review')?.hidden) {
+    return normalizedTtsSpeedRatio(field.value);
+  }
+  return normalizedTtsSpeedRatio(
+    state.selectedJob?.generation_settings
+      ? state.selectedJob.generation_settings.tts_speed_ratio
+      : 1.0,
+  );
+}
+
+function setJobTtsFields(job) {
+  const settings = job?.generation_settings || {
+    ...generationDefaults(),
+    tts_speed_ratio: 1.0,
+  };
+  populateTtsVoiceSelect(
+    $('#job-tts-voice-id'),
+    settings.tts_voice_id || DEFAULT_TTS_VOICE_ID,
+  );
+  $('#job-tts-speed-ratio').value = String(normalizedTtsSpeedRatio(
+    settings.tts_speed_ratio,
+  ));
+  const maxCost = Number(
+    state.capabilities?.tts_pricing?.preview_max_estimated_cost_cny,
+  );
+  $('#tts-preview-cost').textContent = Number.isFinite(maxCost)
+    ? `每次最多约 ${formatCny(maxCost)}，费用计入本任务`
+    : '试听费用按实际字符数计入本任务';
+}
+
+function clearTtsPreview({resetStatus = true, clearCache = true} = {}) {
+  const audio = $('#tts-preview-audio');
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
+  audio.hidden = true;
+  if (clearCache) {
+    state.ttsPreviewCache.forEach((url) => URL.revokeObjectURL(url));
+    state.ttsPreviewCache.clear();
+  }
+  state.ttsPreviewUrl = '';
+  state.ttsPreviewKey = '';
+  if (resetStatus) {
+    $('#tts-preview-status').textContent = '重复播放同一试听不会重复计费。';
+  }
+}
+
+function ttsPreviewKey(job) {
+  const settings = job?.generation_settings || {};
+  return JSON.stringify([
+    job?.id || '',
+    narrationPreviewText(job?.script),
+    settings.tts_voice_id || '',
+    normalizedTtsSpeedRatio(settings.tts_speed_ratio).toFixed(1),
+  ]);
+}
+
+function audioObjectUrl(base64Value, mediaType) {
+  const binary = atob(String(base64Value || ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return URL.createObjectURL(new Blob([bytes], {type: mediaType || 'audio/mpeg'}));
+}
+
+function narrationPreviewText(script) {
+  const opening = Array.from(
+    String(scriptBeats(script)[0]?.narration || '').replace(/\s+/g, ' ').trim(),
+  );
+  const maxCharacters = 60;
+  let preview = opening;
+  if (opening.length > maxCharacters) {
+    const window = opening.slice(0, maxCharacters);
+    let breakAt = -1;
+    window.forEach((character, index) => {
+      if ('，。！？；,.!?;'.includes(character)) breakAt = index;
+    });
+    preview = breakAt >= Math.floor(maxCharacters / 2)
+      ? window.slice(0, breakAt + 1)
+      : window;
+  }
+  let value = preview.join('').trim();
+  if (
+    Array.from(value).length >= maxCharacters
+    && !/[。！？….!?]$/.test(value)
+  ) {
+    value = Array.from(value).slice(0, maxCharacters - 1).join('').trimEnd();
+  }
+  return value;
+}
 
 function seedanceModels() {
   const configured = state.capabilities?.seedance_pricing?.models;
@@ -252,6 +418,35 @@ function setResolutionField(settings) {
     : '1080p';
 }
 
+function normalizedImageCount(value, fallback = 10) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return fallback;
+  return Math.min(MAX_IMAGE_CHAPTER_COUNT, Math.max(MIN_IMAGE_CHAPTER_COUNT, parsed));
+}
+
+function updateImageCountCost() {
+  const imageCount = normalizedImageCount($('#image-count').value);
+  const totalImages = imageCount + 3;
+  const rate = Math.max(
+    0,
+    Number(state.capabilities?.seedream_pricing?.yuan_per_image) || 0,
+  );
+  $('#image-count-cost').textContent = [
+    imageCount + ' 段动态图片 + 3 张视频首帧 = ' + totalImages + ' 张 Seedream',
+    rate ? '图片刊例价预估约 ¥' + (totalImages * rate).toFixed(2) : '',
+  ].filter(Boolean).join(' · ');
+}
+
+function setImageCountField(settings) {
+  const defaults = generationDefaults();
+  const inferred = settings?.image_count
+    ?? (Number(settings?.shot_count) ? Number(settings.shot_count) - 3 : null)
+    ?? defaults.image_count
+    ?? 10;
+  $('#image-count').value = normalizedImageCount(inferred);
+  updateImageCountCost();
+}
+
 function jobResolution(job) {
   return job?.visual_requests?.[0]?.resolution
     || job?.generation_settings?.video_resolution
@@ -267,6 +462,9 @@ function persistPromptFields() {
 function initializePromptFields() {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(PROMPT_STORAGE_KEY) || 'null'); } catch { saved = null; }
+  const legacyFixedImageCount = !!saved
+    && typeof saved === 'object'
+    && !Number.isInteger(Number(saved.image_count));
   const legacyFixedStructure = saved?.script_prompt?.includes('【五段结构】')
     && saved.script_prompt.includes('n01 / hook');
   const legacySeedanceStyle = saved?.seedance_prompt?.includes('写实电影感')
@@ -282,28 +480,40 @@ function initializePromptFields() {
     && !saved.script_prompt.includes('降低 2 秒流失率、提高 5 秒完播率');
   const legacyPreDirectorPrompt = saved?.script_prompt?.includes('降低 2 秒流失率、提高 5 秒完播率')
     && !saved.script_prompt.includes('贯穿全片的可见变化');
+  const legacyPreTtsSpeedPrompt = saved?.script_prompt?.includes(
+    '口播以 220-300 个汉字为建议区间',
+  );
   if (
     legacyFixedStructure
     || legacyLongScript
     || legacySingleTrackScript
     || legacyPreRetentionHook
     || legacyPreDirectorPrompt
+    || legacyPreTtsSpeedPrompt
   ) {
     saved.script_prompt = generationDefaults().script_prompt;
   }
   if (legacySeedanceStyle || legacyIndependentAnimation) {
     saved.seedance_prompt = generationDefaults().seedance_prompt;
   }
+  if (legacyFixedImageCount) {
+    saved.image_count = generationDefaults().image_count || 10;
+    saved.shot_count = saved.image_count + 3;
+  }
   setPromptFields(saved);
   setResolutionField(saved);
+  setImageCountField(saved);
+  setTtsSettingsFields(saved);
   if (
     legacyFixedStructure
     || legacyLongScript
     || legacySingleTrackScript
     || legacyPreRetentionHook
     || legacyPreDirectorPrompt
+    || legacyPreTtsSpeedPrompt
     || legacySeedanceStyle
     || legacyIndependentAnimation
+    || legacyFixedImageCount
   ) persistPromptFields();
 }
 
@@ -311,17 +521,30 @@ function generationSettingsPayload() {
   const scriptPrompt = $('#script-generation-prompt').value.trim();
   const seedancePrompt = $('#seedance-generation-prompt').value.trim();
   const videoResolution = $('#video-resolution').value;
+  const rawImageCount = Number($('#image-count').value);
+  const ttsVoiceId = normalizedTtsVoiceId($('#tts-voice-id').value);
+  const ttsSpeedRatio = normalizedTtsSpeedRatio($('#tts-speed-ratio').value);
   if (!scriptPrompt) throw new Error('脚本生成提示词不能为空');
   if (!seedancePrompt) throw new Error('全片画面导演设定不能为空');
   if (!['480p', '720p', '1080p'].includes(videoResolution)) {
     throw new Error('请选择有效的视频画质');
+  }
+  if (
+    !Number.isInteger(rawImageCount)
+    || rawImageCount < MIN_IMAGE_CHAPTER_COUNT
+    || rawImageCount > MAX_IMAGE_CHAPTER_COUNT
+  ) {
+    throw new Error('动态图片数量必须是 2–10 之间的整数');
   }
   return {
     script_prompt: scriptPrompt,
     seedance_prompt: seedancePrompt,
     video_resolution: videoResolution,
     seedance_model: defaultSeedanceModel(),
-    shot_count: 5,
+    image_count: rawImageCount,
+    shot_count: rawImageCount + 3,
+    tts_voice_id: ttsVoiceId,
+    tts_speed_ratio: ttsSpeedRatio,
   };
 }
 
@@ -1418,9 +1641,11 @@ function renderShotStoryboard(job) {
   const readyCount = rows.filter((row) => row.currentAsset).length;
   const frameReadyCount = rows.filter((row) => row.currentFrame).length;
   const videoRows = rows.filter((row) => !row.isImage);
+  const imageRows = rows.filter((row) => row.isImage);
   const readyVideos = videoRows.filter((row) => row.currentAsset).length;
   $('#storyboard-summary').textContent = readyCount === requests.length
-    ? `${readyCount} 个章节已就绪 · 3 段视频 + 2 段动态图片`
+    ? readyCount + ' 个章节已就绪 · ' + videoRows.length
+      + ' 段视频 + ' + imageRows.length + ' 段动态图片'
     : frameReadyCount
       ? `${frameReadyCount}/${requests.length} 个首帧已就绪 · ${readyVideos}/${videoRows.length} 段视频可预览`
       : `${readyCount}/${requests.length} 个章节可预览`;
@@ -1476,8 +1701,36 @@ function renderShotStoryboard(job) {
   renderShotInspector(job);
 }
 
+function jobVisualChapterCounts(job) {
+  const shots = job?.storyboard_plan?.shots || [];
+  if (shots.length) {
+    const videoCount = shots.filter((shot) => shot.visual_type === 'video').length;
+    return {
+      videoCount,
+      imageCount: shots.length - videoCount,
+      total: shots.length,
+    };
+  }
+  if ((job?.visual_requests || []).length && !job?.generation_settings) {
+    return {
+      videoCount: job.visual_requests.length,
+      imageCount: 0,
+      total: job.visual_requests.length,
+    };
+  }
+  const imageCount = normalizedImageCount(
+    job?.generation_settings?.image_count
+      ?? (Number(job?.generation_settings?.shot_count)
+        ? Number(job.generation_settings.shot_count) - 3
+        : 2),
+    2,
+  );
+  return {videoCount: 3, imageCount, total: imageCount + 3};
+}
+
 function workflowCopy(job, current) {
   const task = taskForJob(job);
+  const chapterCounts = jobVisualChapterCounts(job);
   if (
     task?.progress_meta?.workflow === 'shot_edit'
     && activeJobTaskRunning(job)
@@ -1495,7 +1748,12 @@ function workflowCopy(job, current) {
     return {current: `${workflowStages[current] || '自动流程'}失败`, next: '检查错误后，从失败阶段重试'};
   }
   if (job.state === 'script_review_required') {
-    return {current: '等待你检查并确认脚本', next: '确认后自动生成旁白、首帧、三段视频和两段动态图片'};
+    return {
+      current: '等待你检查并确认脚本',
+      next: '确认后自动生成旁白、' + chapterCounts.total + ' 张首帧、'
+        + chapterCounts.videoCount + ' 段视频和 '
+        + chapterCounts.imageCount + ' 段动态图片',
+    };
   }
   if (job.state === 'final_review_required') {
     return {current: '等待你预览并确认成片', next: '确认后自动生成可下载的发布包'};
@@ -1505,7 +1763,7 @@ function workflowCopy(job, current) {
   }
   const fallbackCurrent = [
     '人物观点已确认，正在准备脚本任务', '正在生成脚本', '等待你确认脚本', '正在生成旁白',
-    '正在生成分镜与 5 张首帧', '正在生成 AI 视频 1/3', '正在生成 AI 视频 2/3',
+    '正在生成分镜与 ' + chapterCounts.total + ' 张首帧', '正在生成 AI 视频 1/3', '正在生成 AI 视频 2/3',
     '正在生成 AI 视频 3/3', '正在混合图片、视频、旁白与字幕', '等待你确认成片', '正在生成发布包',
   ][current];
   const next = [
@@ -1742,11 +2000,15 @@ function applyJobReadOnly(job) {
   document.querySelectorAll('#shot-inspector select').forEach((node) => {
     node.disabled = readOnly || state.busy;
   });
+  document.querySelectorAll('#script-review select').forEach((node) => {
+    node.disabled = readOnly || state.busy;
+  });
   document.querySelectorAll([
     '#save-script-button',
     '#approve-script-button',
     '#retry-button',
     '#revise-script-button',
+    '#preview-tts-button',
   ].join(',')).forEach((node) => {
     node.disabled = readOnly || state.busy;
   });
@@ -1819,12 +2081,26 @@ function renderDetail() {
   const scriptSection = $('#script-review');
   scriptSection.hidden = job.state !== 'script_review_required';
   if (!scriptSection.hidden && job.script) {
+    setJobTtsFields(job);
     renderScriptDocument(job);
-    $('#script-review-spec').textContent = `本任务 ${jobResolution(job).toUpperCase()} · 确认后开始配音与画面生成`;
+    const ttsSettings = job.generation_settings || {
+      ...generationDefaults(),
+      tts_speed_ratio: 1.0,
+    };
+    $('#script-review-spec').textContent = [
+      `本任务 ${jobResolution(job).toUpperCase()}`,
+      ttsVoiceLabel(ttsSettings.tts_voice_id),
+      `${normalizedTtsSpeedRatio(ttsSettings.tts_speed_ratio).toFixed(1)}x`,
+      '确认后开始配音与画面生成',
+    ].join(' · ');
     $('#job-seedance-prompt').value = job.generation_settings?.seedance_prompt
       || generationDefaults().seedance_prompt
       || '';
   }
+  if (
+    scriptSection.hidden
+    && (state.ttsPreviewUrl || state.ttsPreviewCache.size)
+  ) clearTtsPreview();
 
   const producing = ['script_generating', 'script_approved', 'producing', 'quality_checking', 'final_approved'].includes(job.state);
   $('#production-progress').hidden = !producing;
@@ -1888,6 +2164,7 @@ async function loadAll({selectJobId = ''} = {}) {
   const targetId = selectJobId || state.selectedJob?.id;
   state.selectedJob = targetId ? jobs.find((item) => item.id === targetId) || null : jobs[0] || null;
   if (previousJobId !== (state.selectedJob?.id || '')) {
+    clearTtsPreview();
     state.selectedShotId = '';
     state.previewVersionId = '';
     state.previewFrameCandidateId = '';
@@ -2255,7 +2532,10 @@ $('#job-list').addEventListener('click', async (event) => {
   const card = event.target.closest('[data-job-id]');
   if (!card) return;
   try {
-    if (state.selectedJob?.id !== card.dataset.jobId) stopPolling();
+    if (state.selectedJob?.id !== card.dataset.jobId) {
+      stopPolling();
+      clearTtsPreview();
+    }
     state.selectedShotId = '';
     state.previewVersionId = '';
     state.previewFrameCandidateId = '';
@@ -2285,10 +2565,22 @@ function editedScript(job) {
   if (!script.video_title) throw new Error('视频标题不能为空');
   script.hook = script.beats[0].narration;
   script.closing = script.beats[script.beats.length - 1].narration;
-  script.estimated_duration_seconds = Math.max(
-    45,
-    Math.min(75, Math.round(narrationCharacterCount(script.beats.map((item) => item.narration).join('')) / 4.1)),
-  );
+  const narrationText = script.beats.map((item) => item.narration).join('');
+  const previousNarrationText = scriptBeats(job.script)
+    .map((item) => item.narration)
+    .join('');
+  if (narrationText !== previousNarrationText) {
+    script.estimated_duration_seconds = Math.max(
+      45,
+      Math.min(
+        75,
+        Math.round(
+          narrationCharacterCount(narrationText)
+          / (4.1 * selectedJobTtsSpeedRatio()),
+        ),
+      ),
+    );
+  }
   return script;
 }
 
@@ -2300,15 +2592,27 @@ async function saveScriptEdits(job) {
   }
   const seedancePrompt = $('#job-seedance-prompt').value.trim();
   if (!seedancePrompt) throw new Error('全片画面导演设定不能为空');
+  const ttsVoiceId = normalizedTtsVoiceId($('#job-tts-voice-id').value);
+  const ttsSpeedRatio = normalizedTtsSpeedRatio($('#job-tts-speed-ratio').value);
+  const currentSettings = job.generation_settings || {
+    ...generationDefaults(),
+    tts_speed_ratio: 1.0,
+  };
   const scriptChanged = JSON.stringify(script) !== JSON.stringify(job.script);
   const promptChanged = seedancePrompt !== (
     job.generation_settings?.seedance_prompt || generationDefaults().seedance_prompt
   );
-  if (!scriptChanged && !promptChanged) return {job};
+  const voiceChanged = ttsVoiceId !== currentSettings.tts_voice_id;
+  const speedChanged = ttsSpeedRatio !== normalizedTtsSpeedRatio(
+    currentSettings.tts_speed_ratio,
+  );
+  if (!scriptChanged && !promptChanged && !voiceChanged && !speedChanged) return {job};
   const updated = await api('PUT', `/jobs/${encodeURIComponent(job.id)}/script`, {
     expected_revision: job.revision,
     script,
     seedance_prompt: seedancePrompt,
+    tts_voice_id: ttsVoiceId,
+    tts_speed_ratio: ttsSpeedRatio,
   });
   return {job: updated};
 }
@@ -2326,6 +2630,61 @@ $('#save-script-button').addEventListener('click', async () => {
   finally { setBusy(false); }
 });
 
+$('#preview-tts-button').addEventListener('click', async () => {
+  const originalJob = state.selectedJob;
+  if (!originalJob?.script || !canEditResource(originalJob)) return;
+  setBusy(true);
+  notify('');
+  try {
+    const saved = await saveScriptEdits(originalJob);
+    updateVisibleJob(saved.job);
+    const key = ttsPreviewKey(saved.job);
+    const audio = $('#tts-preview-audio');
+    const cachedUrl = state.ttsPreviewCache.get(key);
+    if (cachedUrl) {
+      state.ttsPreviewKey = key;
+      state.ttsPreviewUrl = cachedUrl;
+      audio.src = cachedUrl;
+      audio.hidden = false;
+      $('#tts-preview-status').textContent = '正在重播本页已生成的试听，不会重复计费。';
+      await audio.play().catch(() => {});
+      return;
+    }
+    const result = await api(
+      'POST',
+      `/jobs/${encodeURIComponent(saved.job.id)}/narration-preview`,
+      {expected_revision: saved.job.revision, confirm_cost: true},
+    );
+    updateVisibleJob(result.job);
+    clearTtsPreview({resetStatus: false, clearCache: false});
+    state.ttsPreviewUrl = audioObjectUrl(
+      result.audio_base64,
+      result.media_type,
+    );
+    state.ttsPreviewKey = ttsPreviewKey(result.job);
+    state.ttsPreviewCache.set(state.ttsPreviewKey, state.ttsPreviewUrl);
+    audio.src = state.ttsPreviewUrl;
+    audio.hidden = false;
+    const cost = formatCny(result.estimated_cost_cny, '金额已记账');
+    const duration = Number(result.duration_seconds);
+    $('#tts-preview-status').textContent = [
+      `已生成：${ttsVoiceLabel(result.job.generation_settings?.tts_voice_id)}`,
+      `${normalizedTtsSpeedRatio(result.job.generation_settings?.tts_speed_ratio).toFixed(1)}x`,
+      Number.isFinite(duration) && duration > 0 ? `${duration.toFixed(1)} 秒` : '',
+      `本次约 ${cost}`,
+      '本页重复播放不再调用',
+    ].filter(Boolean).join(' · ');
+    await audio.play().catch(() => {
+      $('#tts-preview-status').textContent += ' · 请点击播放器开始';
+    });
+  } catch (error) {
+    try { await loadAll({selectJobId: originalJob.id}); } catch { /* 保留原错误。 */ }
+    notify(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+});
+
 $('#approve-script-button').addEventListener('click', async () => {
   const job = state.selectedJob; if (!job?.script_hash) return;
   setBusy(true); notify('');
@@ -2340,7 +2699,24 @@ $('#approve-script-button').addEventListener('click', async () => {
 
 $('#script-beat-editor').addEventListener('input', (event) => {
   if (event.target.matches('textarea')) resizeScriptTextarea(event.target);
-  if (event.target.dataset.scriptField === 'narration') updateScriptLengthStatus();
+  if (event.target.dataset.scriptField === 'narration') {
+    if (state.ttsPreviewKey || state.ttsPreviewUrl) {
+      clearTtsPreview({clearCache: false});
+    }
+    updateScriptLengthStatus();
+  }
+});
+
+$('#job-tts-voice-id').addEventListener('change', () => {
+  if (state.ttsPreviewKey || state.ttsPreviewUrl) {
+    clearTtsPreview({clearCache: false});
+  }
+});
+$('#job-tts-speed-ratio').addEventListener('change', () => {
+  if (state.ttsPreviewKey || state.ttsPreviewUrl) {
+    clearTtsPreview({clearCache: false});
+  }
+  updateScriptLengthStatus();
 });
 
 $('#shot-grid').addEventListener('click', (event) => {
@@ -2633,6 +3009,14 @@ $('#refresh-button').addEventListener('click', async () => {
 $('#script-generation-prompt').addEventListener('change', persistPromptFields);
 $('#seedance-generation-prompt').addEventListener('change', persistPromptFields);
 $('#video-resolution').addEventListener('change', persistPromptFields);
+$('#tts-voice-id').addEventListener('change', persistPromptFields);
+$('#tts-speed-ratio').addEventListener('change', persistPromptFields);
+$('#image-count').addEventListener('input', updateImageCountCost);
+$('#image-count').addEventListener('change', (event) => {
+  event.target.value = normalizedImageCount(event.target.value);
+  updateImageCountCost();
+  persistPromptFields();
+});
 $('#restore-prompt-defaults').addEventListener('click', () => {
   setPromptFields(generationDefaults());
   persistPromptFields();

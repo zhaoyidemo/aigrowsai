@@ -137,7 +137,7 @@ class TemplateScriptProvider:
 
 
 class TemplateStoryboardProvider:
-    """Five deterministic visual metaphors for tests and the local demo."""
+    """Deterministic visual metaphors for tests and the local demo."""
 
     name = "template-storyboard-mock"
 
@@ -148,14 +148,30 @@ class TemplateStoryboardProvider:
         beat_groups: list[list[str]],
         visual_types: list[str],
     ) -> StoryboardPlan:
+        shot_count = len(beat_groups)
+        expected_ids = [item.id for item in script.beats]
+        flat_ids = [beat_id for group in beat_groups for beat_id in group]
+        compressed_ids = [
+            beat_id
+            for index, beat_id in enumerate(flat_ids)
+            if index == 0 or beat_id != flat_ids[index - 1]
+        ]
+        covers_script = (
+            flat_ids == expected_ids
+            or (
+                all(len(group) == 1 for group in beat_groups)
+                and compressed_ids == expected_ids
+            )
+        )
         if (
-            len(beat_groups) != 5
+            not 5 <= shot_count <= 13
             or any(not group for group in beat_groups)
-            or len(visual_types) != 5
+            or not covers_script
+            or len(visual_types) != shot_count
             or visual_types.count("video") != 3
-            or visual_types.count("image") != 2
+            or visual_types.count("image") != shot_count - 3
         ):
-            raise ValueError("模板分镜需要五个非空叙事段组")
+            raise ValueError("模板分镜需要 5-13 个有序非空叙事段组")
         segments = {item.id: item for item in script.beats}
         scenes = [
             (
@@ -180,9 +196,11 @@ class TemplateStoryboardProvider:
             ),
         ]
         shots = []
-        for index, (beat_ids, scene) in enumerate(
-            zip(beat_groups, scenes), 1
-        ):
+        for index, beat_ids in enumerate(beat_groups, 1):
+            scene_index = round(
+                (index - 1) * (len(scenes) - 1) / max(1, shot_count - 1)
+            )
+            scene = scenes[scene_index]
             segment_id = beat_ids[0]
             segment = segments[segment_id]
             shots.append(StoryboardShot(
@@ -191,7 +209,10 @@ class TemplateStoryboardProvider:
                 beat_ids=beat_ids,
                 narration_excerpt="\n".join(segments[item].text for item in beat_ids),
                 visual_type=visual_types[index - 1],
-                visual_intent=f"用一个独立家庭隐喻承载第 {index} 个语义转折",
+                visual_intent=(
+                    f"用连续家庭互动的第 {index} 个画面承载语义推进："
+                    f"{segment.visual_direction}"
+                ),
                 first_frame_prompt=(
                     f"{scene[0]}。竖屏中心构图，底部留出字幕安全区，无文字。"
                 ),
@@ -230,7 +251,12 @@ class SilentTtsProvider:
     name = "silent-mock"
 
     async def synthesize(
-        self, script: ScriptDraft, workspace: Path
+        self,
+        script: ScriptDraft,
+        workspace: Path,
+        *,
+        voice_id: str | None = None,
+        speed_ratio: float = 1.0,
     ) -> tuple[NarrationManifest, list[GeneratedFile]]:
         total_chars = max(1, sum(len(item.narration) for item in script.beats))
         total_duration = float(max(
@@ -263,8 +289,28 @@ class SilentTtsProvider:
         )]
         return NarrationManifest(
             provider=self.name,
-            voice_id="silent-placeholder",
+            voice_id=voice_id or "silent-placeholder",
+            speed_ratio=speed_ratio,
             total_duration_seconds=total_duration,
             full_audio_asset_id="narration_full",
             segments=segments,
         ), files
+
+    async def synthesize_preview(
+        self,
+        text: str,
+        workspace: Path,
+        *,
+        voice_id: str,
+        speed_ratio: float,
+        on_usage=None,
+    ) -> GeneratedFile:
+        preview_duration = max(1.0, len(str(text or "")) / (4.1 * speed_ratio))
+        path = workspace / "audio" / "narration-preview.wav"
+        await asyncio.to_thread(_write_silence, path, preview_duration)
+        return GeneratedFile(
+            "narration_preview",
+            path,
+            "audio/wav",
+            preview_duration,
+        )

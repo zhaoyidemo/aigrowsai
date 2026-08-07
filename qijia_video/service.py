@@ -12,6 +12,7 @@ import tempfile
 import time
 import uuid
 import zipfile
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
@@ -75,10 +76,10 @@ from qijia_video.ports import (
     MediaPackager,
 )
 from qijia_video.prompts import (
-    HYBRID_VISUAL_TYPES,
     SCRIPT_HARD_MAX_CHARS,
     narration_char_count,
 )
+from qijia_video.tts_options import TTS_SCRIPT_CHARACTER_TARGETS
 
 
 FORBIDDEN_PLACEHOLDERS = ("<仅示意", "仅填写已经核验")
@@ -101,7 +102,7 @@ REQUIRED_PACKAGE_NAMES = {
     "provenance.json",
 }
 RELEASE_ARCHIVE_NAME = "qijia-video-release.zip"
-STORYBOARD_SHOT_COUNT = 5
+LEGACY_STORYBOARD_SHOT_COUNT = 5
 SEEDANCE_VIDEO_SHOT_COUNT = 3
 SEEDANCE_SHOT_DURATION_SECONDS = 8
 VIDEO_OUTPUT_DIMENSIONS = {
@@ -112,6 +113,7 @@ VIDEO_OUTPUT_DIMENSIONS = {
 SEEDANCE_MAX_NATURAL_CHAPTER_SECONDS = 10.0
 MIN_VIDEO_DURATION_SECONDS = 45.0
 MAX_VIDEO_DURATION_SECONDS = 75.0
+TTS_PREVIEW_MAX_CHARACTERS = 60
 DOUYIN_SNAPSHOT_RETENTION = 200
 ProgressReporter = Callable[[dict], None]
 
@@ -270,7 +272,7 @@ class QijiaVideoService:
                 if item
             )
         elif (
-            record.operation == "tts_synthesis"
+            record.operation in ("tts_synthesis", "tts_preview")
             and record.provider == "volcengine-seed-tts-2.0"
             and record.succeeded
             and record.estimated_cost is None
@@ -289,7 +291,7 @@ class QijiaVideoService:
                 "/万字符；套餐、赠送额度与供应商账单优先"
             )
         elif (
-            record.operation == "tts_synthesis"
+            record.operation in ("tts_synthesis", "tts_preview")
             and record.provider == "volcengine-seed-tts-2.0"
             and record.succeeded
             and record.estimated_cost is None
@@ -395,7 +397,7 @@ class QijiaVideoService:
     @staticmethod
     def _validate_generated_script_length(script: ScriptDraft):
         char_count = narration_char_count(script.narration_text())
-        if len(script.beats) < STORYBOARD_SHOT_COUNT:
+        if len(script.beats) < LEGACY_STORYBOARD_SHOT_COUNT:
             raise QualityGateFailed(
                 "脚本生成结果少于五个自然叙事段，本次结果未进入人工审核"
             )
@@ -404,6 +406,20 @@ class QijiaVideoService:
                 f"脚本口播共 {char_count} 字，超过技术安全上限 "
                 f"{SCRIPT_HARD_MAX_CHARS} 字；本次结果未进入人工审核"
             )
+
+    @staticmethod
+    def _script_prompt_for_settings(settings: GenerationSettings) -> str:
+        minimum, maximum = TTS_SCRIPT_CHARACTER_TARGETS[
+            settings.tts_speed_ratio
+        ]
+        return (
+            settings.script_prompt.rstrip()
+            + "\n\n【本任务配音节奏】"
+            + f"已选 Seed-TTS 2.0 语速 {settings.tts_speed_ratio:.1f}x。"
+            + f"所有 narration 的纯旁白合计建议 {minimum}-{maximum} 个汉字，"
+            + "以此范围覆盖上文任何不同的字数建议；"
+            + "目标仍为 45-75 秒，表达完整和自然优先。"
+        )
 
     @staticmethod
     def _validate_script(script: ScriptDraft, card: SourceCard):
@@ -838,7 +854,8 @@ class QijiaVideoService:
                 stage="script_generation",
                 percent=14,
             )
-            settings = job.generation_settings or GenerationSettings()
+            settings = self._generation_settings(job)
+            script_prompt = self._script_prompt_for_settings(settings)
             async def persist_script_usage(usage: ProviderUsageRecord) -> None:
                 nonlocal job
                 job = await self._persist_usage_record(job, usage, actor)
@@ -849,13 +866,23 @@ class QijiaVideoService:
             if callable(generate_with_usage):
                 script = await generate_with_usage(
                     card,
-                    settings.script_prompt,
+                    script_prompt,
                     on_usage=persist_script_usage,
                 )
             else:
                 script = await self.script_provider.generate(
-                    card, settings.script_prompt
+                    card, script_prompt
                 )
+            script.estimated_duration_seconds = max(
+                45,
+                min(
+                    75,
+                    round(
+                        narration_char_count(script.narration_text())
+                        / (4.1 * settings.tts_speed_ratio)
+                    ),
+                ),
+            )
             self._validate_generated_script_length(script)
             self._validate_script(script, card)
             self._report(
@@ -897,6 +924,8 @@ class QijiaVideoService:
         expected_revision: int,
         actor: Actor,
         seedance_prompt: str | None = None,
+        tts_voice_id: str | None = None,
+        tts_speed_ratio: float | None = None,
     ) -> VideoJob:
         job = await self.get_job(job_id, actor)
         self._assert_revision(job.revision, expected_revision)
@@ -904,19 +933,48 @@ class QijiaVideoService:
             raise InvalidTransition("只有待确认脚本可以编辑")
         card = SourceCard.model_validate(job.source_card_snapshot)
         self._validate_script(script, card)
-        review = await self.script_provider.review(card, script)
-        if not review.passed or review.blocking_reasons:
-            raise QualityGateFailed("修改后的脚本自动审核未通过")
-        if review.input_hash != content_hash(script):
-            raise QualityGateFailed("脚本审核结果没有绑定修改后的脚本")
-        current_settings = job.generation_settings or GenerationSettings()
+        next_script_hash = content_hash(script)
+        script_changed = next_script_hash != job.script_hash
+        if script_changed:
+            review = await self.script_provider.review(card, script)
+            if not review.passed or review.blocking_reasons:
+                raise QualityGateFailed("修改后的脚本自动审核未通过")
+            if review.input_hash != next_script_hash:
+                raise QualityGateFailed("脚本审核结果没有绑定修改后的脚本")
+        else:
+            review = job.script_review
+            if (
+                not review
+                or not review.passed
+                or review.blocking_reasons
+                or review.input_hash != next_script_hash
+            ):
+                raise QualityGateFailed("当前脚本缺少有效的自动审核结果")
+        current_settings = self._generation_settings(job)
         seedance_prompt_changed = (
             seedance_prompt is not None
             and seedance_prompt != current_settings.seedance_prompt
         )
         if seedance_prompt is not None:
             current_settings.seedance_prompt = seedance_prompt
-            job.generation_settings = current_settings
+        tts_voice_changed = (
+            tts_voice_id is not None
+            and tts_voice_id != current_settings.tts_voice_id
+        )
+        if tts_voice_id is not None:
+            current_settings.tts_voice_id = tts_voice_id
+        tts_speed_changed = (
+            tts_speed_ratio is not None
+            and tts_speed_ratio != current_settings.tts_speed_ratio
+        )
+        if tts_speed_ratio is not None:
+            current_settings.tts_speed_ratio = tts_speed_ratio
+        settings_changed = (
+            seedance_prompt_changed or tts_voice_changed or tts_speed_changed
+        )
+        if not script_changed and not settings_changed:
+            return job
+        job.generation_settings = current_settings
         self._apply_reviewed_script(
             job,
             script,
@@ -924,6 +982,75 @@ class QijiaVideoService:
             allow_visual_reuse=not seedance_prompt_changed,
         )
         return await self._save_job(job, actor)
+
+    @staticmethod
+    def _narration_preview_text(script: ScriptDraft) -> str:
+        opening = re.sub(r"\s+", " ", script.beats[0].narration).strip()
+        if len(opening) <= TTS_PREVIEW_MAX_CHARACTERS:
+            preview = opening
+        else:
+            window = opening[:TTS_PREVIEW_MAX_CHARACTERS]
+            break_at = max(
+                (window.rfind(mark) for mark in "，。！？；,.!?;"),
+                default=-1,
+            )
+            preview = (
+                window[:break_at + 1].strip()
+                if break_at >= TTS_PREVIEW_MAX_CHARACTERS // 2
+                else window.strip()
+            )
+        # The Provider adds a terminal full stop when one is absent. Reserve
+        # that character so the billable request still stays within 60 chars.
+        if (
+            len(preview) >= TTS_PREVIEW_MAX_CHARACTERS
+            and not preview.endswith(("。", "！", "？", "…", ".", "!", "?"))
+        ):
+            preview = preview[:TTS_PREVIEW_MAX_CHARACTERS - 1].rstrip()
+        return preview
+
+    async def preview_narration(
+        self,
+        job_id: str,
+        expected_revision: int,
+        actor: Actor,
+    ) -> tuple[VideoJob, bytes, str, float, str]:
+        job = await self.get_job(job_id, actor)
+        self._assert_revision(job.revision, expected_revision)
+        if job.state != JobState.SCRIPT_REVIEW_REQUIRED or not job.script:
+            raise InvalidTransition("只有待确认脚本可以试听配音")
+        preview = getattr(self.tts_provider, "synthesize_preview", None)
+        if not callable(preview):
+            raise ProviderUnavailable("当前配音 Provider 不支持试听")
+        settings = self._generation_settings(job)
+        text = self._narration_preview_text(job.script)
+        workspace = Path(tempfile.mkdtemp(
+            prefix=f"{job.id}-tts-preview-",
+            dir=self.work_root,
+        ))
+        try:
+            async def persist_tts_usage(usage: ProviderUsageRecord) -> None:
+                nonlocal job
+                job = await self._persist_usage_record(job, usage, actor)
+
+            generated = await preview(
+                text,
+                workspace,
+                voice_id=settings.tts_voice_id,
+                speed_ratio=settings.tts_speed_ratio,
+                on_usage=persist_tts_usage,
+            )
+            audio = await asyncio.to_thread(generated.path.read_bytes)
+            if not audio:
+                raise ProviderUnavailable("配音试听没有生成有效音频")
+            return (
+                job,
+                audio,
+                generated.media_type,
+                float(generated.duration_seconds or 0),
+                text,
+            )
+        finally:
+            await asyncio.to_thread(shutil.rmtree, workspace, True)
 
     async def approve_script(
         self,
@@ -1048,6 +1175,15 @@ class QijiaVideoService:
         return "480p"
 
     @staticmethod
+    def _generation_settings(job: VideoJob) -> GenerationSettings:
+        """Use the former five-shot layout only for jobs predating settings."""
+
+        return job.generation_settings or GenerationSettings(
+            image_count=2,
+            tts_speed_ratio=1.0,
+        )
+
+    @staticmethod
     def _video_dimensions(job: VideoJob) -> tuple[int, int]:
         """Keep an already-rendered legacy size stable across later retries."""
 
@@ -1059,7 +1195,7 @@ class QijiaVideoService:
 
     @staticmethod
     def _visual_target_indices(
-        segment_count: int, shot_count: int = STORYBOARD_SHOT_COUNT
+        segment_count: int, shot_count: int = LEGACY_STORYBOARD_SHOT_COUNT
     ) -> list[int]:
         if segment_count <= 0:
             return []
@@ -1085,7 +1221,7 @@ class QijiaVideoService:
         # 兼容上线前已付费生成的两镜头任务，其旧映射是首段和中段。
         if len(job.visual_requests) == 2 and segment_count:
             return list(dict.fromkeys((0, segment_count // 2)))
-        inferred_count = len(job.visual_requests) or STORYBOARD_SHOT_COUNT
+        inferred_count = len(job.visual_requests) or LEGACY_STORYBOARD_SHOT_COUNT
         return QijiaVideoService._visual_target_indices(
             segment_count, inferred_count
         )
@@ -1105,7 +1241,16 @@ class QijiaVideoService:
             for beat_id in shot.beat_ids
         ]
         if persisted_ids != expected_ids:
-            return None
+            compressed_ids = [
+                beat_id
+                for index, beat_id in enumerate(persisted_ids)
+                if index == 0 or beat_id != persisted_ids[index - 1]
+            ]
+            if (
+                compressed_ids != expected_ids
+                or any(len(shot.beat_ids) != 1 for shot in job.storyboard_plan.shots)
+            ):
+                return None
         by_id = {item.id: item for item in job.script.beats}
         return [
             [by_id[beat_id] for beat_id in shot.beat_ids]
@@ -1129,25 +1274,67 @@ class QijiaVideoService:
     def _visual_types_for_durations(
         durations: list[float],
     ) -> tuple[str, ...]:
-        if len(durations) != STORYBOARD_SHOT_COUNT:
-            return HYBRID_VISUAL_TYPES
-        # The hook remains moving. The two longest later chapters become
-        # Remotion-animated stills, so long explanations absorb time without
-        # slowing generated character motion. Ties retain the familiar 2/3
-        # still-image layout.
-        default_image_priority = {1: 2, 2: 1, 3: 0, 4: -1}
-        image_indices = set(sorted(
-            range(1, STORYBOARD_SHOT_COUNT),
-            key=lambda index: (
-                durations[index],
-                default_image_priority[index],
-            ),
-            reverse=True,
-        )[:2])
-        return tuple(
-            "image" if index in image_indices else "video"
-            for index in range(STORYBOARD_SHOT_COUNT)
+        shot_count = len(durations)
+        if shot_count < SEEDANCE_VIDEO_SHOT_COUNT:
+            return tuple("video" for _ in durations)
+        # Keep the hook moving, then place two more videos near the behavioral
+        # turn and closing. If a nearby chapter is too long for Seedance,
+        # prefer the closest shorter chapter instead.
+        preferred_indices = (
+            0,
+            round((shot_count - 1) * 0.72),
+            shot_count - 1,
         )
+        video_indices = {0}
+        for preferred in preferred_indices[1:]:
+            candidates = [
+                index for index in range(1, shot_count)
+                if index not in video_indices
+            ]
+            selected = min(
+                candidates,
+                key=lambda index: (
+                    max(
+                        0.0,
+                        float(durations[index])
+                        - SEEDANCE_MAX_NATURAL_CHAPTER_SECONDS,
+                    ) ** 2,
+                    abs(index - preferred),
+                    index,
+                ),
+            )
+            video_indices.add(selected)
+        return tuple(
+            "video" if index in video_indices else "image"
+            for index in range(shot_count)
+        )
+
+    @staticmethod
+    def _expanded_storyboard_groups(
+        beats: list[ScriptBeat],
+        weights: list[float],
+        shot_count: int,
+    ) -> list[list[ScriptBeat]]:
+        """Allocate extra image chapters inside longer semantic beats."""
+
+        counts = [1 for _ in beats]
+        # Keep the opening hook as one uninterrupted moving chapter so the
+        # first five seconds are not cut into a video/image hand-off.
+        eligible_indices = list(range(1, len(beats))) or [0]
+        for _ in range(shot_count - len(beats)):
+            index = max(
+                eligible_indices,
+                key=lambda item: (
+                    max(0.001, float(weights[item])) / counts[item],
+                    -item,
+                ),
+            )
+            counts[index] += 1
+        return [
+            [beat]
+            for beat, count in zip(beats, counts)
+            for _ in range(count)
+        ]
 
     @classmethod
     def _duration_aware_groups(
@@ -1187,7 +1374,9 @@ class QijiaVideoService:
             if best is None or score < best[0]:
                 best = (score, groups)
         if not best:
-            raise QualityGateFailed("无法把完整口播规划成五个连续章节")
+            raise QualityGateFailed(
+                f"无法把完整口播规划成 {shot_count} 个连续章节"
+            )
         return best[1]
 
     @classmethod
@@ -1197,11 +1386,18 @@ class QijiaVideoService:
         persisted = cls._persisted_storyboard_groups(job)
         if persisted:
             return persisted
-        settings = job.generation_settings or GenerationSettings()
+        settings = cls._generation_settings(job)
         beats = job.script.beats
-        if len(beats) < settings.shot_count:
-            raise QualityGateFailed("当前脚本不足五个语义段落，不能生成五镜头分镜")
         durations = cls._narration_durations(job)
+        if settings.shot_count >= len(beats):
+            weights = (
+                [durations[item.id] for item in beats]
+                if durations
+                else [max(1, len(item.narration)) for item in beats]
+            )
+            return cls._expanded_storyboard_groups(
+                beats, weights, settings.shot_count
+            )
         if durations:
             return cls._duration_aware_groups(
                 beats, durations, settings.shot_count
@@ -1227,16 +1423,23 @@ class QijiaVideoService:
         groups = groups or cls._storyboard_beat_groups(job)
         durations = cls._narration_durations(job)
         if not durations:
-            return HYBRID_VISUAL_TYPES
+            return cls._visual_types_for_durations([0.0] * len(groups))
+        coverage = Counter(
+            beat.id for group in groups for beat in group
+        )
         return cls._visual_types_for_durations([
-            sum(durations[item.id] for item in group) for group in groups
+            sum(
+                durations[item.id] / max(1, coverage[item.id])
+                for item in group
+            )
+            for group in groups
         ])
 
     @staticmethod
     def _legacy_storyboard_segments(job: VideoJob) -> list[ScriptBeat]:
         if not job.script:
             raise InvalidTransition("缺少已确认脚本")
-        settings = job.generation_settings or GenerationSettings()
+        settings = QijiaVideoService._generation_settings(job)
         indices = QijiaVideoService._visual_target_indices(
             len(job.script.beats), settings.shot_count
         )
@@ -1248,6 +1451,7 @@ class QijiaVideoService:
             job.storyboard_plan
             and job.script
             and job.script.schema_version == "1.0"
+            and len(job.storyboard_plan.shots) == LEGACY_STORYBOARD_SHOT_COUNT
             and all(len(item.beat_ids) == 1 for item in job.storyboard_plan.shots)
         )
 
@@ -1276,7 +1480,7 @@ class QijiaVideoService:
                 "最高优先级。分镜只设计场景、人物动作、空间关系、构图和运镜，不另行规定"
                 "艺术媒介、固定配色或与参考图冲突的造型。"
             )
-        settings = job.generation_settings or GenerationSettings()
+        settings = cls._generation_settings(job)
         return settings.seedance_prompt
 
     @staticmethod
@@ -1337,7 +1541,7 @@ class QijiaVideoService:
                 # Storyboards created before reference-first styling used the
                 # editable global style in their input hash. Accept that exact
                 # persisted plan so an in-flight paid job can resume unchanged.
-                settings = job.generation_settings or GenerationSettings()
+                settings = self._generation_settings(job)
                 accepted_hashes.add(self._storyboard_input_hash_for_style(
                     job, settings.seedance_prompt
                 ))
@@ -1355,7 +1559,7 @@ class QijiaVideoService:
             return job
         self._report(
             progress,
-            message="正在把脚本拆成 5 个连续叙事章节…",
+            message=f"正在把脚本规划成 {len(beat_groups)} 个连续视觉章节…",
             stage="storyboard",
             percent=44,
         )
@@ -1392,7 +1596,10 @@ class QijiaVideoService:
         job = await self._save_job(job, actor)
         self._report(
             progress,
-            message="五章节分镜已就绪，开始生成统一风格首帧…",
+            message=(
+                f"{len(plan.shots)} 章节分镜已就绪，"
+                "开始生成统一风格首帧…"
+            ),
             stage="first_frames",
             percent=46,
         )
@@ -1405,7 +1612,7 @@ class QijiaVideoService:
         *,
         has_reference_image: bool = False,
     ) -> str:
-        settings = job.generation_settings or GenerationSettings()
+        settings = QijiaVideoService._generation_settings(job)
         frame_prompt = shot.first_frame_prompt.strip()[:750]
         style_direction = (
             "【视觉基准】已提供的全局参考图是画风、色彩、光影、材质、人物造型与视觉"
@@ -1474,7 +1681,7 @@ class QijiaVideoService:
         progress: ProgressReporter | None = None,
     ) -> VideoJob:
         if not job.storyboard_plan:
-            raise InvalidTransition("缺少五镜头分镜")
+            raise InvalidTransition("缺少镜头分镜")
         source_card = SourceCard.model_validate(job.source_card_snapshot)
         reference_asset = (
             AssetRef.model_validate(source_card.reference_assets[0])
@@ -1688,7 +1895,7 @@ class QijiaVideoService:
                 "【视觉基准】严格以已提供的首帧为唯一画风、色彩、光影、材质和人物造型"
                 "基准；任何文字描述与首帧冲突时，以首帧为准。"
             )
-        settings = job.generation_settings or GenerationSettings()
+        settings = cls._generation_settings(job)
         return settings.seedance_prompt.strip()[:2000]
 
     @classmethod
@@ -1701,7 +1908,7 @@ class QijiaVideoService:
         # 在升级后重试也不会被改写或再次产生视频生成费用。
         if job.visual_requests:
             return list(job.visual_requests)
-        settings = job.generation_settings or GenerationSettings()
+        settings = cls._generation_settings(job)
         if job.storyboard_plan:
             style_context = cls._seedance_style_context(job)
             candidates_by_id = {
@@ -2106,16 +2313,18 @@ class QijiaVideoService:
         )
         if shot_index is None:
             return max(0.001, float(fallback))
-        starts = [0.0]
-        for shot in shots[1:]:
-            timing = timings.get(shot.beat_ids[0]) if shot.beat_ids else None
-            if not timing:
-                return max(0.001, float(fallback))
-            starts.append(float(timing.start_seconds))
-        starts.append(float(job.narration_manifest.total_duration_seconds))
-        start = starts[shot_index]
-        end = starts[shot_index + 1]
-        return max(0.001, end - start)
+        coverage = Counter(
+            beat_id for shot in shots for beat_id in shot.beat_ids
+        )
+        target = shots[shot_index]
+        if any(beat_id not in timings for beat_id in target.beat_ids):
+            return max(0.001, float(fallback))
+        duration = sum(
+            float(timings[beat_id].duration_seconds)
+            / max(1, coverage[beat_id])
+            for beat_id in target.beat_ids
+        )
+        return max(0.001, duration)
 
     @staticmethod
     def _task_for_request(
@@ -2429,11 +2638,25 @@ class QijiaVideoService:
                 for shot in job.storyboard_plan.shots
                 if all(beat_id in segment_index_by_id for beat_id in shot.beat_ids)
             ]
+            coverage = Counter(
+                beat_id for shot in planned_shots for beat_id in shot.beat_ids
+            )
+            duration_weights = [
+                sum(
+                    float(timing_by_id[beat_id].duration_seconds)
+                    / max(1, coverage[beat_id])
+                    for beat_id in shot.beat_ids
+                )
+                for shot in planned_shots
+            ]
+            total_weight = sum(duration_weights)
             boundaries = [0]
-            for shot in planned_shots[1:]:
-                first_index = segment_index_by_id[shot.beat_ids[0]]
-                start_frame, _ = segment_range(first_index)
-                boundaries.append(start_frame)
+            consumed_weight = 0.0
+            for weight in duration_weights[:-1]:
+                consumed_weight += weight
+                boundaries.append(round(
+                    total_frames * consumed_weight / max(0.001, total_weight)
+                ))
             boundaries.append(total_frames)
             # Rounding must never create a zero-length block.
             for index in range(1, len(boundaries)):
@@ -3415,6 +3638,7 @@ class QijiaVideoService:
         try:
             card = SourceCard.model_validate(job.source_card_snapshot)
             self._validate_script(job.script, card)
+            settings = self._generation_settings(job)
             self._report(
                 progress,
                 message="正在生成旁白…",
@@ -3446,11 +3670,18 @@ class QijiaVideoService:
                     narration, generated_files = await synthesize_with_usage(
                         job.script,
                         workspace,
+                        voice_id=settings.tts_voice_id,
+                        speed_ratio=settings.tts_speed_ratio,
                         on_usage=persist_tts_usage,
                     )
                 else:
                     narration, generated_files = (
-                        await self.tts_provider.synthesize(job.script, workspace)
+                        await self.tts_provider.synthesize(
+                            job.script,
+                            workspace,
+                            voice_id=settings.tts_voice_id,
+                            speed_ratio=settings.tts_speed_ratio,
+                        )
                     )
                 audio_assets = []
                 for generated in generated_files:

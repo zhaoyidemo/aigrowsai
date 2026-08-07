@@ -33,8 +33,19 @@ from qijia_video.infrastructure.script_providers import (
 from qijia_video.infrastructure.storage import storage_from_settings
 from qijia_video.infrastructure.tts_providers import VolcengineTtsProvider
 from qijia_video.infrastructure.video_providers import SeedanceVideoProvider
+from qijia_video.prompts import (
+    MAX_IMAGE_CHAPTER_COUNT,
+    MIN_IMAGE_CHAPTER_COUNT,
+)
 from qijia_video.settings import settings
-from qijia_video.service import QijiaVideoService
+from qijia_video.service import QijiaVideoService, TTS_PREVIEW_MAX_CHARACTERS
+from qijia_video.tts_options import (
+    DEFAULT_TTS_SPEED_RATIO,
+    DEFAULT_TTS_VOICE_ID,
+    TTS_SPEED_OPTIONS,
+    TTS_SPEED_TO_PROVIDER_RATE,
+    TTS_VOICE_OPTIONS,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -202,6 +213,7 @@ class QijiaVideoRuntime:
         if self.storage.name != "tos":
             missing.append("QIJIA_VIDEO_STORAGE=tos")
         generation_ready = not missing
+        generation_defaults = GenerationSettings()
         return {
             "module": "qijia_video",
             "mode": "minimal-real-workflow",
@@ -219,7 +231,7 @@ class QijiaVideoRuntime:
             "real_generation_ready": generation_ready,
             "production_ready": generation_ready and self.storage.name == "tos",
             "missing_configuration": missing,
-            "generation_defaults": GenerationSettings().model_dump(mode="json"),
+            "generation_defaults": generation_defaults.model_dump(mode="json"),
             "douyin_performance": {
                 "ready": self.douyin_performance_provider.configured,
                 "platform": "douyin",
@@ -315,8 +327,15 @@ class QijiaVideoRuntime:
                     float(settings.QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE),
                 ),
                 "candidates_per_shot": 1,
+                "min_image_chapters": MIN_IMAGE_CHAPTER_COUNT,
+                "max_image_chapters": MAX_IMAGE_CHAPTER_COUNT,
+                "default_image_chapters": generation_defaults.image_count,
+                "default_total_images": generation_defaults.shot_count,
                 "model": settings.QIJIA_VIDEO_SEEDREAM_MODEL,
-                "basis": "按生成图片张数估算，实际账单以火山方舟为准",
+                "basis": (
+                    "每个视觉章节生成 1 张；3 张作为视频首帧，其余直接动态呈现。"
+                    "按成功生成张数估算，实际账单以火山方舟为准"
+                ),
             },
             "tts_pricing": {
                 "currency": "CNY",
@@ -325,11 +344,41 @@ class QijiaVideoRuntime:
                     float(settings.QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS),
                 ),
                 "model": settings.QIJIA_VIDEO_TTS_RESOURCE_ID,
+                "voices": [dict(item) for item in TTS_VOICE_OPTIONS],
+                "speed_ratios": [
+                    {
+                        "ratio": ratio,
+                        "label": f"{ratio:.1f}x",
+                        "speech_rate": TTS_SPEED_TO_PROVIDER_RATE[ratio],
+                        "default": ratio == DEFAULT_TTS_SPEED_RATIO,
+                    }
+                    for ratio in TTS_SPEED_OPTIONS
+                ],
+                "default_voice_id": DEFAULT_TTS_VOICE_ID,
+                "default_speed_ratio": DEFAULT_TTS_SPEED_RATIO,
+                "preview_max_characters": TTS_PREVIEW_MAX_CHARACTERS,
+                "preview_max_estimated_cost_cny": round(
+                    TTS_PREVIEW_MAX_CHARACTERS
+                    * max(
+                        0.0,
+                        float(
+                            settings.QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS
+                        ),
+                    )
+                    / 10000,
+                    8,
+                ),
+                "preview_cost_confirmation_required": True,
                 "basis": "按发送字符数和官网按量刊例价估算，套餐与实际账单优先",
             },
             "notes": [
                 "生产链路不使用 Mock；收费生成 Provider 失败时不会伪造结果或自动换模型",
-                "五个章节各生成一张 Seedream 首帧；其中三张默认驱动 8-10 秒 Seedance 1.0 Pro Fast 无声视频，复杂镜头可单独升级 Seedance 2.0，另外两张由 Remotion 动态呈现",
+                (
+                    f"新任务默认生成 3 段视频和 {generation_defaults.image_count} 段"
+                    f"动态图片，共 {generation_defaults.shot_count} 张 Seedream；"
+                    "3 张驱动 8-10 秒 Seedance 1.0 Pro Fast 无声视频，"
+                    "复杂镜头可单独升级 Seedance 2.0"
+                ),
                 "存在全局参考图时由参考图主导画风；无参考图时使用全片画面导演设定",
                 "最终由 Remotion 按任务所选的 480P、720P 或 1080P 画质合成竖屏成片",
             ],

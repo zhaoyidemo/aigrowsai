@@ -16,6 +16,10 @@ const accountsApp = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'accou
 const costsPage = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'costs.html'), 'utf8');
 const costsApp = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'costs.js'), 'utf8');
 const costsApi = fs.readFileSync(path.join(root, 'qijia_video', 'cost_api.py'), 'utf8');
+const ttsProvider = fs.readFileSync(
+  path.join(root, 'qijia_video', 'infrastructure', 'tts_providers.py'),
+  'utf8',
+);
 
 test('qijia video uses an independent page and API namespace', () => {
   assert.match(page, /齐家 AI 家庭教育内容工作台/);
@@ -191,7 +195,7 @@ test('creation intake offers one optional global reference image without extra f
   assert.match(page, /accept="image\/jpeg,image\/png,image\/webp"/);
   assert.match(page, /上传 1 张参考图（可选）/);
   assert.match(page, /最高优先级视觉基准，但不作为观点依据/);
-  assert.match(page, /优先统一 5 个镜头的画风、色彩与人物造型/);
+  assert.match(page, /优先统一全部视觉章节的画风、色彩与人物造型/);
   assert.doesNotMatch(page, /id="reference-image-input"[^>]*multiple/);
   assert.match(app, /referenceImageFile/);
   assert.match(app, /\/source-cards\/idea-with-reference/);
@@ -199,7 +203,7 @@ test('creation intake offers one optional global reference image without extra f
   assert.match(page, /id="job-reference-image"/);
 });
 
-test('workflow exposes three videos and two image chapters with action context', () => {
+test('workflow exposes three videos and configurable image chapters with action context', () => {
   for (const label of [
     '观点已确认', '生成脚本', '确认脚本', '生成旁白', '分镜与首帧', 'AI 视频 1/3',
     'AI 视频 2/3', 'AI 视频 3/3', '图像与视频合成', '确认成片', '发布包完成',
@@ -207,8 +211,8 @@ test('workflow exposes three videos and two image chapters with action context',
   assert.match(page, /id="current-action"/);
   assert.match(page, /id="stage-elapsed"/);
   assert.match(page, /id="next-action"/);
-  assert.match(page, /3 张生成 8-10 秒、所选画质的 AI 视频/);
-  assert.match(page, /另外 2 张直接进入成片/);
+  assert.match(page, /3 张继续生成 8-10 秒、所选画质的 AI 视频/);
+  assert.match(page, /其余按所选动态图片数量直接进入成片/);
 });
 
 test('video quality is selectable and frozen into each new task', () => {
@@ -221,6 +225,27 @@ test('video quality is selectable and frozen into each new task', () => {
   assert.match(app, /video_resolution: '1080p'/);
   assert.match(app, /video_resolution: videoResolution/);
   assert.match(app, /job\?\.generation_settings\?\.video_resolution/);
+});
+
+test('Seed-TTS uses three verified voices and explicit speed choices with 1.2x default', () => {
+  assert.match(page, /id="tts-voice-id"/);
+  assert.equal((page.match(/zh_female_vv_uranus_bigtts/g) || []).length, 2);
+  assert.equal((page.match(/zh_female_santongyongns_saturn_bigtts/g) || []).length, 2);
+  assert.equal((page.match(/zh_male_ruyayichen_saturn_bigtts/g) || []).length, 2);
+  assert.match(page, /id="tts-speed-ratio"[\s\S]*value="1\.2" selected>1\.2x（默认）/);
+  assert.match(page, /id="job-tts-speed-ratio"/);
+  assert.match(page, /id="preview-tts-button"/);
+  assert.match(page, /费用计入本任务/);
+  assert.match(app, /tts_voice_id: ttsVoiceId/);
+  assert.match(app, /tts_speed_ratio: ttsSpeedRatio/);
+  assert.match(app, /'1\.2': \[265, 355\]/);
+  assert.match(app, /legacyPreTtsSpeedPrompt/);
+  assert.match(app, /confirm_cost: true/);
+  assert.match(app, /ttsPreviewKey/);
+  assert.match(app, /narrationPreviewText/);
+  assert.match(ttsProvider, /"speech_rate": speech_rate/);
+  assert.match(ttsProvider, /speed_ratio=normalized_speed/);
+  assert.match(ttsProvider, /probe_duration=False/);
 });
 
 test('Seedance usage and estimated cost are visible per job', () => {
@@ -243,7 +268,12 @@ test('AI shots are visible storyboard cards with isolated version controls', () 
   assert.match(page, /id="shot-storyboard"/);
   assert.match(page, /id="shot-grid"/);
   assert.match(page, /id="shot-inspector"/);
-  assert.match(page, /3 段视频和 2 段动态图片会在这里逐个出现/);
+  assert.match(page, /3 段视频和 10 段动态图片会在这里逐个出现/);
+  assert.match(page, /id="image-count"[^>]+min="2"[^>]+max="10"[^>]+value="10"/);
+  assert.match(page, /id="image-count-cost"/);
+  assert.match(app, /image_count: rawImageCount/);
+  assert.match(app, /shot_count: rawImageCount \+ 3/);
+  assert.match(app, /updateImageCountCost/);
   assert.match(app, /renderShotStoryboard\(job\)/);
   assert.match(app, /data-regenerate-shot/);
   assert.match(app, /data-frame-candidate/);
@@ -269,7 +299,8 @@ test('final video mixes generated videos and motion images without narration tex
   assert.match(renderer, /generated_image/);
   assert.match(renderer, /<Img/);
   assert.match(app, /visual_type === 'image'/);
-  assert.match(app, /3 段视频 \+ 2 段动态图片/);
+  assert.match(app, /imageRows\.length/);
+  assert.match(app, /jobVisualChapterCounts/);
   assert.match(renderer, /screen_text_cues/);
   assert.match(renderer, /EditorialText/);
   assert.match(renderEntry, /pixelFormat: 'yuv420p'/);
@@ -293,7 +324,7 @@ test('script and Seedance prompts are configurable without exposing transport co
   assert.match(page, /id="seedance-generation-prompt"/);
   assert.match(page, /人物、观点和 JSON 输出结构由系统自动附加/);
   assert.match(page, /上传参考图后，由参考图接管画风与人物造型/);
-  assert.match(page, /5 个章节各生成 1 张首帧/);
+  assert.match(page, /为每个视觉章节生成 1 张画面/);
   assert.match(page, /id="job-seedance-prompt"/);
   assert.match(app, /generation_settings: generationSettings/);
   assert.match(app, /seedance_prompt: seedancePrompt/);

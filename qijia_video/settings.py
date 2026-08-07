@@ -79,8 +79,8 @@ class QijiaVideoSettings(BaseSettings):
     QIJIA_VIDEO_TTS_RESOURCE_ID: str = "seed-tts-2.0"
     # 豆包语音合成官网按量刊例价；套餐、赠送额度与账单优惠不在此估算中。
     QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS: float = 5.0
-    # Vivi 2.0 is a public Seed-TTS 2.0 voice. The previous ``mars`` voice
-    # belongs to the 1.0 resource family and is rejected by seed-tts-2.0.
+    # Provider fallback only. Product requests are restricted to the curated
+    # three-voice Seed-TTS 2.0 catalog in qijia_video.tts_options.
     QIJIA_VIDEO_TTS_VOICE_ID: str = "zh_female_vv_uranus_bigtts"
 
     VOLCENGINE_TOS_ACCESS_KEY_ID: str = ""

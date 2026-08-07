@@ -23,6 +23,7 @@ STAGE_LABELS = {
     "script_generation": "脚本生成",
     "storyboard_generation": "分镜生成",
     "tts_synthesis": "旁白合成",
+    "tts_preview": "配音试听",
     "seedream_image": "首帧与图片",
     "seedance_video": "视频生成",
     "douyin_performance": "抖音效果回流",

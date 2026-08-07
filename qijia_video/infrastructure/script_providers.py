@@ -28,7 +28,7 @@ from qijia_video.prompts import (
 
 
 SCRIPT_PROMPT_VERSION = "qijia_script_v11_reference_normalization"
-STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v6_hook_first"
+STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v7_variable_images"
 UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
 
 
@@ -197,48 +197,58 @@ def _normalize_storyboard_rows(
     raw_shots: Any,
     target_segments: list[Any],
 ) -> list[dict[str, str]]:
-    """Align imperfect model output to five known segments without another API call."""
+    """Align imperfect model output to ordered shots without another API call."""
 
     candidates = (
         [item for item in raw_shots if isinstance(item, dict)]
         if isinstance(raw_shots, list)
         else []
     )
-    expected_ids = {item.id for item in target_segments}
-    exact: dict[str, tuple[int, dict]] = {}
+    exact: dict[str, list[tuple[int, dict]]] = {}
     for position, candidate in enumerate(candidates):
         segment_id = str(candidate.get("segment_id") or "").strip()
-        if segment_id in expected_ids and segment_id not in exact:
-            exact[segment_id] = (position, candidate)
+        if segment_id:
+            exact.setdefault(segment_id, []).append((position, candidate))
 
-    reserved_positions = {position for position, _ in exact.values()}
-    reusable_positions = [
-        position for position in range(len(candidates))
-        if position not in reserved_positions
-    ]
     used_positions: set[int] = set()
     normalized: list[dict[str, str]] = []
     for index, segment in enumerate(target_segments):
-        selected = exact.get(segment.id)
-        if selected:
-            position, raw = selected
-        else:
-            position = (
-                index
-                if index in reusable_positions and index not in used_positions
-                else next(
-                    (
-                        item for item in reusable_positions
-                        if item not in used_positions
-                    ),
-                    -1,
-                )
+        position = -1
+        raw: dict = {}
+        if index < len(candidates):
+            candidate_id = str(
+                candidates[index].get("segment_id") or ""
+            ).strip()
+            if candidate_id in ("", segment.id) and index not in used_positions:
+                position = index
+                raw = candidates[index]
+        if position < 0:
+            selected = next(
+                (
+                    item for item in exact.get(segment.id, [])
+                    if item[0] not in used_positions
+                ),
+                None,
+            )
+            if selected:
+                position, raw = selected
+        if position < 0:
+            position = next(
+                (
+                    item for item in range(len(candidates))
+                    if item not in used_positions
+                ),
+                -1,
             )
             raw = candidates[position] if position >= 0 else {}
         if position >= 0:
             used_positions.add(position)
 
-        fallback = _STORYBOARD_FALLBACKS[index]
+        fallback_index = round(
+            index * (len(_STORYBOARD_FALLBACKS) - 1)
+            / max(1, len(target_segments) - 1)
+        )
+        fallback = _STORYBOARD_FALLBACKS[fallback_index]
         semantic_intent = (
             f"{fallback['role']}：用连续家庭互动承载本段观点的语义转折"
         )
@@ -257,6 +267,23 @@ def _normalize_storyboard_rows(
             ),
         })
     return normalized
+
+
+def _beat_groups_cover_script(
+    beat_groups: list[list[str]],
+    expected_beat_ids: list[str],
+) -> bool:
+    flat_ids = [beat_id for group in beat_groups for beat_id in group]
+    if flat_ids == expected_beat_ids:
+        return True
+    if any(len(group) != 1 for group in beat_groups):
+        return False
+    compressed_ids = [
+        beat_id
+        for index, beat_id in enumerate(flat_ids)
+        if index == 0 or beat_id != flat_ids[index - 1]
+    ]
+    return compressed_ids == expected_beat_ids
 
 
 def _chat_url(base_url: str) -> str:
@@ -813,7 +840,7 @@ class OpenRouterScriptProvider:
 
 
 class OpenRouterStoryboardProvider:
-    """Turn an approved script into exactly five provider-neutral visual shots."""
+    """Turn an approved script into an ordered provider-neutral shot plan."""
 
     name = "openrouter-storyboard"
 
@@ -867,18 +894,18 @@ class OpenRouterStoryboardProvider:
             raise ProviderUnavailable(
                 "真实分镜生成未配置：请设置 OPENROUTER_API_KEY"
             )
-        flat_beat_ids = [beat_id for group in beat_groups for beat_id in group]
         expected_beat_ids = [item.id for item in script.beats]
+        shot_count = len(beat_groups)
         if (
-            len(beat_groups) != 5
+            not 5 <= shot_count <= 13
             or any(not group for group in beat_groups)
-            or flat_beat_ids != expected_beat_ids
-            or len(visual_types) != 5
+            or not _beat_groups_cover_script(beat_groups, expected_beat_ids)
+            or len(visual_types) != shot_count
             or visual_types.count("video") != 3
-            or visual_types.count("image") != 2
+            or visual_types.count("image") != shot_count - 3
         ):
             raise ProviderUnavailable(
-                "五镜头分组和媒介分配必须完整覆盖全部叙事段"
+                "镜头分组和媒介分配必须按顺序完整覆盖全部叙事段"
             )
         beats_by_id = {item.id: item for item in script.beats}
         try:
@@ -908,17 +935,19 @@ class OpenRouterStoryboardProvider:
             ],
         }, ensure_ascii=False)
         prompt = (
-            "把下面的完整脚本设计成一条连续的竖屏家庭微故事。脚本已经被确定性地分成五个"
-            "视觉章节，每章可能承载一个或多个相邻叙事段；不得遗漏任何叙事段。五个章节使用同一组虚构"
+            f"把下面的完整脚本设计成一条连续的竖屏家庭微故事。脚本已经被确定性地分成 {shot_count} 个"
+            "视觉章节，每章可能承载一个或多个相邻叙事段；不得遗漏任何叙事段。所有章节使用同一组虚构"
             "东亚家庭成员，人物外貌、年龄、发型、服装、家庭空间、光线和配色保持一致，"
             "但每个章节仍须单独成立、无需依赖字幕才能看懂。\n\n"
-            "五章的媒介已经根据真实旁白时长确定，不得自行更改："
+            "各章媒介已经根据真实旁白时长确定，不得自行更改："
             + "；".join(
                 f"第 {index} 章为 {visual_type}"
                 for index, visual_type in enumerate(visual_types, 1)
             )
             + "。image 章节要设计有景深、可供缓慢推进或横移的静态构图；video 章节"
             "只安排一个清楚可信的动作和一种克制运镜。\n\n"
+            "同一个叙事段可能连续分配给多个视觉章节；这些章节必须沿时间顺序设计成"
+            "不同动作阶段、景别或视角，彼此承接但不得重复同一构图。\n\n"
             "第一章同时承担抖音开场：首帧就要看见正在发生的冲突、反常识结果或关键选择，"
             "不能先给空镜、人物入场或环境介绍。动作从第一帧立即开始，前 2 秒内让人物关系"
             "和矛盾一眼可懂，前 5 秒内通过动作反应或构图变化再提供一层新信息；画面不能依赖"
@@ -935,7 +964,7 @@ class OpenRouterStoryboardProvider:
             "重排 shots，不得修改 segment_id 或 beat_ids。最终只返回这一个 JSON 对象：\n"
             f"{output_skeleton}\n\n"
             f"【统一基础风格】{base_style}\n"
-            "【五个视觉章节】\n"
+            f"【{shot_count} 个视觉章节】\n"
             + "\n".join(
                 (
                     f"章节 {index}（{visual_types[index - 1]}，"
@@ -965,9 +994,9 @@ class OpenRouterStoryboardProvider:
                 {"role": "user", "content": prompt},
             ],
             label="分镜生成",
-            schema_name="qijia_storyboard_v2",
+            schema_name="qijia_storyboard_v3",
             response_schema=_STORYBOARD_RESPONSE_SCHEMA,
-            max_completion_tokens=4000,
+            max_completion_tokens=8000,
             timeout_seconds=self.timeout_seconds,
             transport=self.transport,
             operation="storyboard_generation",
@@ -1003,5 +1032,5 @@ class OpenRouterStoryboardProvider:
             )
         except (TypeError, ValueError, ValidationError) as exc:
             raise ProviderUnavailable(
-                "分镜模型返回内容不符合五镜头契约，请重试"
+                f"分镜模型返回内容不符合 {shot_count} 镜头契约，请重试"
             ) from exc

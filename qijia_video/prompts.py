@@ -15,12 +15,14 @@ def narration_char_count(text: str) -> int:
 
     return len(re.sub(r"\s+", "", str(text or "")))
 
-HYBRID_VISUAL_TYPES = ("video", "image", "image", "video", "video")
+MIN_IMAGE_CHAPTER_COUNT = 2
+MAX_IMAGE_CHAPTER_COUNT = 10
+DEFAULT_IMAGE_CHAPTER_COUNT = 10
 
 DEFAULT_SCRIPT_PROMPT = """请把输入的人物和核心观点，写成一版面向家长的抖音知识短视频完整脚本，目标时长约 45-60 秒。
 
 【创作目标】
-这不是人物简介，而是对一个观点的深入展开。一条视频只讲清一个核心观点，优先找到它与常见直觉、习惯做法或主流判断之间真实存在的张力。要有冲突感和非共识价值，但不能为了吸引注意故意曲解观点或制造对立。语言自然、具体，有思考感但不说教，整篇口播要像一次自然推进的思考。口播以 220-300 个汉字为建议区间，内容完整和节奏自然优先，不要为了凑字数破坏表达。
+这不是人物简介，而是对一个观点的深入展开。一条视频只讲清一个核心观点，优先找到它与常见直觉、习惯做法或主流判断之间真实存在的张力。要有冲突感和非共识价值，但不能为了吸引注意故意曲解观点或制造对立。语言自然、具体，有思考感但不说教，整篇口播要像一次自然推进的思考。系统会根据本任务所选配音语速追加口播字数建议，内容完整和节奏自然优先，不要为了凑字数破坏表达。
 
 把“降低 2 秒流失率、提高 5 秒完播率”作为开场创作目标，但不要在成稿中谈论指标。前 2 秒要让家长立刻听懂一个与自己有关的冲突、反差或意外判断；前 5 秒要进一步说明这个冲突为什么值得继续听，同时保留一个真实、明确、稍后会被解释的问题。不开场寒暄，不说“今天我们来聊”“你有没有发现”“很多父母都不知道”，不先介绍人物履历，也不用“看到最后”“一定要收藏”等空洞留人话术。
 
@@ -55,7 +57,7 @@ DEFAULT_SCRIPT_PROMPT = """请把输入的人物和核心观点，写成一版�
 DEFAULT_SEEDANCE_PROMPT = (
     "竖屏 9:16，高品质现代编辑插画动画，服务于家庭教育与心理学内容。"
     "统一采用米白纸张背景、低饱和海军蓝与陶土橙配色、干净线条和细腻颗粒纹理，"
-    "整体温暖、克制、有思考感。五个章节讲述同一组虚构东亚家庭成员的一次连续互动，"
+    "整体温暖、克制、有思考感。所有章节讲述同一组虚构东亚家庭成员的一次连续互动，"
     "人物外貌、年龄、发型、服装、家庭空间、光线与配色始终一致。不要逐字图解口播，"
     "要用具体动作、空间关系和少量心理隐喻推进冲突、理解、改变与结果。"
     "人物表情真实含蓄，采用 2D 手绘结合 2.5D 景深与轻微视差；视频镜头只安排一个"
@@ -68,4 +70,4 @@ DEFAULT_SEEDANCE_PROMPT = (
 SCRIPT_OUTPUT_CONTRACT = """【系统输出格式】
 输出严格 JSON，不要 Markdown。字段为 schema_version、video_title、cover_text、hook、closing、caption、hashtags、beats。schema_version 固定为 "2.0"。beats 按语义自然划分为 5-8 段，依次使用 id n01、n02……；第一段 role 为 hook，最后一段为 closing，中间按内容使用 suspense、context、reframe、explanation、example 或 application。每段包含 id、role、narration、visual_direction、on_screen_text、source_refs、quote_ref。
 
-narration 是唯一会送入 TTS 的口播，所有 narration 合计建议 220-300 个汉字；visual_direction 只描述画面中可见的人物、动作、场景与情绪，不包含字幕、文字、Logo 或排版指令；on_screen_text 是由 Remotion 后期叠加的少量强调文字，不会送入 TTS，也不会送给画面模型，不需要时填空字符串。每段 source_refs 至少填写一个明确列出的可用 fact/quote ID，绝不能填写 source ID 或自行创造 ID；没有直接引文时 quote_ref 填 null。hook 与第一段 narration 相同，closing 与最后一段 narration 相同；hashtags 输出 3-5 个不带 # 的词。"""
+narration 是唯一会送入 TTS 的口播，所有 narration 合计字数遵循系统在本任务末尾追加的语速目标；visual_direction 只描述画面中可见的人物、动作、场景与情绪，不包含字幕、文字、Logo 或排版指令；on_screen_text 是由 Remotion 后期叠加的少量强调文字，不会送入 TTS，也不会送给画面模型，不需要时填空字符串。每段 source_refs 至少填写一个明确列出的可用 fact/quote ID，绝不能填写 source ID 或自行创造 ID；没有直接引文时 quote_ref 填 null。hook 与第一段 narration 相同，closing 与最后一段 narration 相同；hashtags 输出 3-5 个不带 # 的词。"""

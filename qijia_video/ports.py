@@ -108,8 +108,23 @@ class TtsProvider(Protocol):
     name: str
 
     async def synthesize(
-        self, script: ScriptDraft, workspace: Path
+        self,
+        script: ScriptDraft,
+        workspace: Path,
+        *,
+        voice_id: str | None = None,
+        speed_ratio: float = 1.0,
     ) -> tuple[NarrationManifest, list[GeneratedFile]]: ...
+
+    async def synthesize_preview(
+        self,
+        text: str,
+        workspace: Path,
+        *,
+        voice_id: str,
+        speed_ratio: float,
+        on_usage=None,
+    ) -> GeneratedFile: ...
 
 
 class VideoProvider(Protocol):

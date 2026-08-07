@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.13.4">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.13.6">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -120,6 +120,36 @@
               <option value="1080p" selected>1080P · 1080×1920（默认）</option>
             </select>
           </label>
+          <label class="video-quality-setting image-count-setting" for="image-count">
+            <span class="video-quality-copy">
+              <strong>动态图片数量</strong>
+              <small>可选 2–10 段，默认 10 段；AI 视频始终保持 3 段。系统会按真实旁白时长安排镜头节奏。</small>
+              <small id="image-count-cost" class="image-count-cost">共需生成 13 张 Seedream（含 3 张视频首帧）</small>
+            </span>
+            <input id="image-count" type="number" min="2" max="10" step="1" value="10" inputmode="numeric" aria-label="动态图片数量">
+          </label>
+          <section class="video-quality-setting tts-creation-setting" aria-label="旁白设置">
+            <span class="video-quality-copy">
+              <strong>旁白设置</strong>
+              <small>只提供 3 个已核验的 Seed-TTS 2.0 音色和 3 档语速；脚本确认时可先试听开场。正式配音后，字幕与镜头会按真实音频时长重新安排。</small>
+            </span>
+            <div class="tts-creation-controls">
+              <label>音色
+                <select id="tts-voice-id" aria-label="旁白音色">
+                  <option value="zh_female_vv_uranus_bigtts" selected>Vivi 2.0 · 亲和自然</option>
+                  <option value="zh_female_santongyongns_saturn_bigtts">流畅女声 · 清晰利落</option>
+                  <option value="zh_male_ruyayichen_saturn_bigtts">儒雅逸辰 · 沉稳克制</option>
+                </select>
+              </label>
+              <label>语速
+                <select id="tts-speed-ratio" aria-label="旁白语速">
+                  <option value="1">1.0x</option>
+                  <option value="1.1">1.1x</option>
+                  <option value="1.2" selected>1.2x（默认）</option>
+                </select>
+              </label>
+            </div>
+          </section>
           <section id="topic-handoff" class="topic-handoff" hidden>
             <div class="topic-handoff-heading">
               <div><span>已采用选题</span><strong id="topic-handoff-title"></strong></div>
@@ -175,7 +205,7 @@
                   <span id="reference-file-name"></span>
                 </div>
               </div>
-              <p class="field-hint">上传后，它会成为 5 个镜头的最高优先级视觉基准，但不作为观点依据。JPG、PNG 或 WebP，最大 10 MB。</p>
+              <p class="field-hint">上传后，它会成为全部视觉章节的最高优先级视觉基准，但不作为观点依据。JPG、PNG 或 WebP，最大 10 MB。</p>
             </section>
             <div class="actions source-form-actions">
               <button id="source-submit-button" class="button primary" type="submit">生成脚本</button>
@@ -183,7 +213,7 @@
           </form>
           <details id="generation-prompt-settings" class="advanced-settings prompt-settings global-prompt-settings">
             <summary>调整 AI 写法和画面风格（实验用）</summary>
-            <p class="field-hint">默认值可以直接使用。修改后会用于下一条新建视频，并保存在当前浏览器中；系统先为 5 个章节各生成 1 张首帧，再用其中 3 张生成 8-10 秒、所选画质的 AI 视频，另外 2 张直接进入成片。</p>
+            <p class="field-hint">默认值可以直接使用。修改后会用于下一条新建视频，并保存在当前浏览器中；系统会为每个视觉章节生成 1 张画面，其中 3 张继续生成 8-10 秒、所选画质的 AI 视频，其余按所选动态图片数量直接进入成片。</p>
             <label>脚本生成提示词
               <textarea id="script-generation-prompt" rows="11" maxlength="8000" spellcheck="false"></textarea>
               <span class="field-hint">人物、观点和 JSON 输出结构由系统自动附加，你只需调整写作方式。</span>
@@ -221,7 +251,7 @@
           <p id="job-access-note" class="resource-access-note" hidden></p>
           <section id="job-reference-image" class="job-reference-image" hidden>
             <img id="job-reference-preview" alt="本任务的全局参考图">
-            <div><strong>全局参考图已应用</strong><span>优先统一 5 个镜头的画风、色彩与人物造型</span></div>
+            <div><strong>全局参考图已应用</strong><span>优先统一全部视觉章节的画风、色彩与人物造型</span></div>
           </section>
           <ol id="stage-track" class="stage-track" aria-label="生产进度"></ol>
           <section class="workflow-summary" aria-live="polite" aria-label="当前链路状态">
@@ -260,6 +290,33 @@
           <div id="job-error" class="error-box" hidden></div>
           <section id="script-review" class="review-section" hidden>
             <div class="section-title"><h3>脚本确认</h3><span id="script-review-spec">确认后开始配音与画面生成</span></div>
+            <section class="tts-review-settings" aria-label="本任务配音设置">
+              <div class="tts-review-heading">
+                <div><strong>配音试听</strong><span>试听当前开场，确认后用于整条视频</span></div>
+                <small id="tts-preview-cost">每次最多约 ¥0.03，费用计入本任务</small>
+              </div>
+              <div class="tts-review-grid">
+                <label class="tts-field">音色
+                  <select id="job-tts-voice-id" aria-label="本任务旁白音色">
+                    <option value="zh_female_vv_uranus_bigtts">Vivi 2.0 · 亲和自然</option>
+                    <option value="zh_female_santongyongns_saturn_bigtts">流畅女声 · 清晰利落</option>
+                    <option value="zh_male_ruyayichen_saturn_bigtts">儒雅逸辰 · 沉稳克制</option>
+                  </select>
+                </label>
+                <label class="tts-field">语速
+                  <select id="job-tts-speed-ratio" aria-label="本任务旁白语速">
+                    <option value="1">1.0x</option>
+                    <option value="1.1">1.1x</option>
+                    <option value="1.2">1.2x（默认）</option>
+                  </select>
+                </label>
+              </div>
+              <div class="tts-preview-row">
+                <button id="preview-tts-button" class="button secondary" type="button">保存并试听开场</button>
+                <audio id="tts-preview-audio" controls preload="none" hidden></audio>
+              </div>
+              <p id="tts-preview-status" class="field-hint" aria-live="polite">重复播放同一试听不会重复计费。</p>
+            </section>
             <section class="script-document" aria-label="完整视频脚本">
               <label class="script-title-field">视频标题
                 <input id="script-video-title" maxlength="200" autocomplete="off">
@@ -275,7 +332,7 @@
               <summary>本任务的全片画面导演设定</summary>
               <label>确认前仍可修改
                 <textarea id="job-seedance-prompt" rows="7" maxlength="3200" spellcheck="false"></textarea>
-                <span class="field-hint">没有参考图时，它会指导五章节分镜、首帧和 3 个所选画质、8-10 秒视频；有参考图时由参考图接管画风与人物造型。口播原句不会作为画面文字。</span>
+                <span class="field-hint">没有参考图时，它会指导本任务的全部分镜、首帧和 3 个所选画质、8-10 秒视频；有参考图时由参考图接管画风与人物造型。口播原句不会作为画面文字。</span>
               </label>
             </details>
             <div class="actions">
@@ -289,7 +346,7 @@
           </section>
           <section id="shot-storyboard" class="review-section storyboard-section" hidden>
             <div class="section-title storyboard-heading">
-              <div><h3>AI 镜头故事板</h3><span id="storyboard-summary">3 段视频和 2 段动态图片会在这里逐个出现</span></div>
+              <div><h3>AI 镜头故事板</h3><span id="storyboard-summary">3 段视频和 10 段动态图片会在这里逐个出现</span></div>
               <span class="storyboard-hint">选中镜头，可查看首帧、提示词和历史版本</span>
             </div>
             <p id="frame-selection-warning" class="frame-selection-warning" hidden></p>
@@ -381,6 +438,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.13.4"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.13.6"></script>
 </body>
 </html>

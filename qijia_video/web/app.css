@@ -150,7 +150,12 @@ button:focus-visible { outline: 3px solid rgba(49,95,86,.2); outline-offset: 2px
 .video-quality-copy { display: grid; gap: 3px; min-width: 0; }
 .video-quality-copy strong { color: var(--ink); font-size: 13px; }
 .video-quality-copy small { color: var(--muted); font-size: 9px; font-weight: 450; line-height: 1.5; }
-.video-quality-setting select { min-height: 38px; padding: 8px 9px; font-size: 11px; font-weight: 700; }
+.video-quality-setting select, .video-quality-setting input { min-height: 38px; padding: 8px 9px; font-size: 11px; font-weight: 700; }
+.tts-creation-setting { grid-template-columns: minmax(0, 1fr) minmax(190px, 220px); }
+.tts-creation-controls { display: grid; gap: 7px; }
+.tts-creation-controls label { display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 6px; color: var(--muted); font-size: 9px; font-weight: 720; }
+.image-count-setting { margin-top: -8px; }
+.video-quality-copy .image-count-cost { color: #8b4a2f; font-weight: 700; }
 .form-stack { display: grid; gap: 13px; }
 .form-stack label { display: grid; gap: 6px; font-size: 12px; color: #525c67; font-weight: 650; }
 #source-card-form { gap: 18px; }
@@ -232,6 +237,19 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .review-section { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 18px; }
 .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
 .section-title span { color: var(--muted); font-size: 12px; }
+.tts-review-settings { display: grid; gap: 12px; margin-bottom: 13px; border: 1px solid #cbd9d4; border-radius: 10px; padding: 13px; background: #f1f6f4; }
+.tts-review-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.tts-review-heading > div { display: grid; gap: 3px; }
+.tts-review-heading strong { color: #315f56; font-size: 13px; }
+.tts-review-heading span, .tts-review-heading small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.tts-review-heading small { text-align: right; }
+.tts-review-grid { display: grid; grid-template-columns: minmax(0, 1fr) 140px; gap: 10px; }
+.tts-field { display: grid; gap: 5px; color: #53635e; font-size: 10px; font-weight: 720; }
+.tts-field select { min-height: 39px; padding: 8px 9px; font-size: 11px; font-weight: 650; }
+.tts-preview-row { display: flex; align-items: center; gap: 10px; }
+.tts-preview-row .button { flex: 0 0 auto; }
+.tts-preview-row audio { width: min(100%, 360px); height: 38px; }
+.tts-review-settings > .field-hint { margin: -3px 0 0; }
 .script-document { overflow: hidden; border: 1px solid #d8d3c8; border-radius: 11px; background: #fbfaf7; }
 .script-title-field { display: grid; gap: 6px; padding: 18px 20px 16px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .06em; }
 .script-title-field input { border: 0; border-bottom: 1px solid #d8d3c8; border-radius: 0; padding: 4px 0 9px; background: transparent; color: var(--ink); font-size: 20px; font-weight: 760; }
@@ -538,6 +556,7 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
 }
 @media (max-width: 560px) {
   .video-quality-setting { grid-template-columns: 1fr; }
+  .tts-creation-controls label { grid-template-columns: 34px minmax(0, 1fr); }
   .workspace-tabs { display: flex; width: 100%; }
   .workspace-tab { flex: 1; min-width: 0; }
   .topic-cost-summary { grid-template-columns: 1fr; }
@@ -597,6 +616,10 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
   .storyboard-layout.inspector-open { grid-template-columns: 1fr; }
   .shot-grid { grid-template-columns: repeat(5, minmax(138px, 42vw)); }
   .script-document-heading { align-items: flex-start; flex-direction: column; }
+  .tts-review-heading, .tts-preview-row { align-items: stretch; flex-direction: column; }
+  .tts-review-heading small { text-align: left; }
+  .tts-review-grid { grid-template-columns: 1fr; }
+  .tts-preview-row .button, .tts-preview-row audio { width: 100%; }
   .script-beat-editor { padding-right: 12px; padding-left: 12px; }
   .script-beat { grid-template-columns: 38px minmax(0, 1fr); gap: 7px; }
   .script-track { grid-template-columns: 1fr; gap: 2px; }
