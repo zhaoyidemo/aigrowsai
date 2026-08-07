@@ -409,7 +409,7 @@ async def bind_douyin_performance(
     )
     return ok(
         public_job_payload(job, user),
-        "抖音作品已绑定，并保存了本次播放量",
+        "抖音作品已绑定，并保存了本次作品数据",
     )
 
 
@@ -427,7 +427,7 @@ async def refresh_douyin_performance(
     )
     return ok(
         public_job_payload(job, user),
-        "抖音播放量已刷新",
+        "抖音作品数据已刷新",
     )
 
 

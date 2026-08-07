@@ -1606,6 +1606,15 @@ function renderDouyinPerformance(job) {
 
   const performance = job.douyin_performance;
   const analysis = job.douyin_performance_analysis || {};
+  const snapshots = Array.isArray(performance?.snapshots)
+    ? performance.snapshots
+    : [];
+  const latestSnapshot = snapshots[snapshots.length - 1] || {};
+  const metricValue = (key) => (
+    analysis[key] !== null && analysis[key] !== undefined
+      ? analysis[key]
+      : latestSnapshot[key]
+  );
   const capability = state.capabilities?.douyin_performance || {};
   const unitCost = Number(capability.estimated_cny_per_success);
   const costLabel = Number.isFinite(unitCost) && unitCost > 0
@@ -1619,17 +1628,17 @@ function renderDouyinPerformance(job) {
     input.value = performance?.video_url || '';
   }
   $('#douyin-bind-button').textContent = performance
-    ? '更新链接并读取（约 ' + costLabel + '）'
-    : '绑定并读取（约 ' + costLabel + '）';
+    ? '更新链接并读取作品数据（约 ' + costLabel + '）'
+    : '绑定并读取作品数据（约 ' + costLabel + '）';
   const refreshButton = $('#douyin-refresh-button');
   refreshButton.hidden = !performance;
-  refreshButton.textContent = '手动刷新播放量（约 ' + costLabel + '）';
+  refreshButton.textContent = '手动刷新作品数据（约 ' + costLabel + '）';
   $('#douyin-refresh-hint').textContent = (
-    '播放量不会自动更新；需要最新数据时请点击按钮。'
+    '播放、点赞、评论、分享和收藏不会自动更新；需要最新数据时请点击按钮。'
     + '每次刷新会发起 1 次 TikHub 请求，预计成本 ' + costLabel + '。'
   );
   $('#douyin-cost-note').textContent = [
-    '每次读取发起 1 次 TikHub 请求，成功请求规划成本约 ' + costLabel + '，点击按钮即确认本次费用。',
+    '每次读取作品数据只发起 1 次 TikHub 请求，成功请求规划成本约 ' + costLabel + '，点击按钮即确认本次费用。',
     'ROI 按每千次播放 ¥10、目标 10 倍计算；读取费用计入该视频成本。',
     '不含未绑定到本视频的选题研究公摊。',
   ].join(' ');
@@ -1642,7 +1651,11 @@ function renderDouyinPerformance(job) {
       ? '作者：' + performance.author_name
       : '作品 ID：' + performance.video_id;
     $('#douyin-video-link').href = performance.video_url;
-    $('#douyin-play-count').textContent = formatInteger(analysis.play_count);
+    $('#douyin-play-count').textContent = formatInteger(metricValue('play_count'));
+    $('#douyin-like-count').textContent = formatInteger(metricValue('like_count'), '未返回');
+    $('#douyin-comment-count').textContent = formatInteger(metricValue('comment_count'), '未返回');
+    $('#douyin-share-count').textContent = formatInteger(metricValue('share_count'), '未返回');
+    $('#douyin-collect-count').textContent = formatInteger(metricValue('collect_count'), '未返回');
     $('#douyin-accounted-cost').textContent = formatCny(analysis.accounted_cost_cny);
     $('#douyin-playback-value').textContent = formatCny(analysis.playback_value_cny);
     $('#douyin-roi').textContent = (
@@ -1658,14 +1671,16 @@ function renderDouyinPerformance(job) {
       ? '已达到 10 倍'
       : formatInteger(analysis.remaining_views);
     remaining.classList.toggle('target-met', !!analysis.target_achieved);
-    $('#douyin-observed-at').textContent = analysis.observed_at
-      ? '更新于 ' + formatDateTime(analysis.observed_at) + ' · 已记录 ' + formatInteger(analysis.snapshot_count, '0') + ' 次'
-      : '尚未读取播放量';
+    const observedAt = analysis.observed_at || latestSnapshot.observed_at;
+    const snapshotCount = analysis.snapshot_count ?? snapshots.length;
+    $('#douyin-observed-at').textContent = observedAt
+      ? '更新于 ' + formatDateTime(observedAt) + ' · 已记录 ' + formatInteger(snapshotCount, '0') + ' 次'
+      : '尚未读取作品数据';
   }
 
   const warnings = [];
   if (capability.ready === false) {
-    warnings.push('播放回流待配置：' + ((capability.missing_configuration || []).join('、') || 'TikHub 配置不完整'));
+    warnings.push('效果回流待配置：' + ((capability.missing_configuration || []).join('、') || 'TikHub 配置不完整'));
   }
   if (analysis.cost_complete === false) {
     warnings.push('当前有 ' + formatInteger(analysis.unpriced_event_count, '0') + ' 笔费用待对账，成本与 10 倍目标为暂估值');
@@ -2472,7 +2487,7 @@ $('#douyin-performance-form').addEventListener('submit', async (event) => {
       },
     );
     updateVisibleJob(updated);
-    notify('抖音作品已绑定并完成首次读取；以后可点击“手动刷新播放量”更新数据。');
+    notify('抖音作品已绑定并完成首次读取；以后可点击“手动刷新作品数据”更新五项指标。');
   } catch (error) {
     await loadAll({selectJobId: job.id}).catch(() => {});
     notify(error.message, true);
@@ -2485,7 +2500,7 @@ $('#douyin-refresh-button').addEventListener('click', async () => {
   const job = state.selectedJob;
   if (!job?.douyin_performance || state.busy) return;
   if (!canEditResource(job)) {
-    notify('只有创建者或管理员可以发起付费的播放量刷新。', true);
+    notify('只有创建者或管理员可以发起付费的作品数据刷新。', true);
     return;
   }
   setBusy(true); notify('');
@@ -2496,7 +2511,7 @@ $('#douyin-refresh-button').addEventListener('click', async () => {
       {expected_revision: job.revision, confirm_cost: true},
     );
     updateVisibleJob(updated);
-    notify('抖音播放量已刷新，本次 TikHub 成本已保存。');
+    notify('抖音作品数据已刷新，本次 TikHub 成本已保存。');
   } catch (error) {
     await loadAll({selectJobId: job.id}).catch(() => {});
     notify(error.message, true);

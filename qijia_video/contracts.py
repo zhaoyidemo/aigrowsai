@@ -602,9 +602,13 @@ class ProviderUsageRecord(ContractModel):
 
 
 class DouyinPlaybackSnapshot(ContractModel):
-    """One paid, point-in-time reading of a Douyin video's play count."""
+    """One paid, point-in-time reading of a Douyin video's public metrics."""
 
     play_count: int = Field(ge=0)
+    like_count: int | None = Field(default=None, ge=0)
+    comment_count: int | None = Field(default=None, ge=0)
+    share_count: int | None = Field(default=None, ge=0)
+    collect_count: int | None = Field(default=None, ge=0)
     observed_at: str = Field(min_length=1, max_length=64)
     request_id: str = Field(default="", max_length=256)
 

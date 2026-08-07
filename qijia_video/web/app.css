@@ -353,6 +353,13 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
 .douyin-refresh-panel strong { color: #2d4740; font-size: 12px; }
 .douyin-refresh-panel span { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .douyin-refresh-panel .button { flex: 0 0 auto; min-height: 38px; }
+.douyin-metric-group-title { margin: 13px 0 0; color: var(--muted); font-size: 9px; font-weight: 750; letter-spacing: .04em; }
+.douyin-platform-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 7px; }
+.douyin-platform-grid > div { min-width: 0; border: 1px solid var(--line); border-radius: 9px; padding: 10px; background: #faf9f5; }
+.douyin-platform-grid > div.primary { border-color: #b9d1ca; background: #edf5f2; }
+.douyin-platform-grid span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 9px; font-weight: 700; }
+.douyin-platform-grid strong { display: block; overflow-wrap: anywhere; color: #2d4740; font-size: 16px; line-height: 1.2; }
+.douyin-metric-group-title + .douyin-performance-grid { margin-top: 7px; }
 .douyin-performance-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 13px; }
 .douyin-performance-grid > div { min-width: 0; border: 1px solid var(--line); border-radius: 9px; padding: 10px; background: #faf9f5; }
 .douyin-performance-grid span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 9px; font-weight: 700; }
@@ -506,6 +513,7 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
   .account-layout { grid-template-columns: 1fr; }
   .cost-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .performance-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .douyin-platform-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .cost-breakdown-grid { grid-template-columns: 1fr; }
   .cost-method-grid { grid-template-columns: 1fr; }
   .topbar { padding: 22px 18px; }
@@ -561,6 +569,7 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
   .douyin-performance-form .button { width: 100%; }
   .douyin-refresh-panel { align-items: stretch; flex-direction: column; }
   .douyin-refresh-panel .button { width: 100%; }
+  .douyin-platform-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .douyin-performance-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .douyin-performance-actions { align-items: stretch; flex-direction: column; }
   .douyin-performance-actions > div { display: grid; grid-template-columns: 1fr; }

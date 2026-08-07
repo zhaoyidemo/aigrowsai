@@ -138,6 +138,10 @@ class DouyinVideoPerformance:
     video_id: str
     video_url: str
     play_count: int
+    like_count: int | None = None
+    comment_count: int | None = None
+    share_count: int | None = None
+    collect_count: int | None = None
     video_title: str = ""
     author_name: str = ""
     request_id: str = ""

@@ -25,7 +25,7 @@ STAGE_LABELS = {
     "tts_synthesis": "旁白合成",
     "seedream_image": "首帧与图片",
     "seedance_video": "视频生成",
-    "douyin_performance": "抖音播放回流",
+    "douyin_performance": "抖音效果回流",
 }
 PROVIDER_LABELS = {
     "tikhub": "TikHub",
@@ -612,6 +612,10 @@ def build_douyin_performance_analysis(
     return {
         "platform": "douyin",
         "play_count": play_count,
+        "like_count": latest.like_count if latest else None,
+        "comment_count": latest.comment_count if latest else None,
+        "share_count": latest.share_count if latest else None,
+        "collect_count": latest.collect_count if latest else None,
         "observed_at": latest.observed_at if latest else "",
         "snapshot_count": len(snapshots),
         "accounted_cost_cny": _round_money(accounted_cost),

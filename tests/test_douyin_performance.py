@@ -70,6 +70,10 @@ class FixedDouyinPerformanceProvider:
             video_id=VIDEO_ID,
             video_url=f"https://www.douyin.com/video/{VIDEO_ID}",
             play_count=1000 * self.calls,
+            like_count=100 * self.calls,
+            comment_count=10 * self.calls,
+            share_count=5 * self.calls,
+            collect_count=20 * self.calls,
             video_title="家庭教育测试视频",
             author_name="齐家 AI 家庭教练",
             request_id=request_id,
@@ -125,7 +129,13 @@ class TikHubDouyinPerformanceTests(unittest.IsolatedAsyncioTestCase):
                         "aweme_id": VIDEO_ID,
                         "desc": "孩子情绪失控时，父母先稳定自己",
                         "author": {"nickname": "齐家 AI 家庭教练"},
-                        "statistics": {"play_count": 20007},
+                        "statistics": {
+                            "play_count": 20007,
+                            "digg_count": 1200,
+                            "comment_count": 89,
+                            "share_count": 34,
+                            "collect_count": 218,
+                        },
                     }],
                 },
             })
@@ -151,6 +161,10 @@ class TikHubDouyinPerformanceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(captured["body"], [VIDEO_ID])
         self.assertEqual(result.play_count, 20007)
+        self.assertEqual(result.like_count, 1200)
+        self.assertEqual(result.comment_count, 89)
+        self.assertEqual(result.share_count, 34)
+        self.assertEqual(result.collect_count, 218)
         self.assertEqual(result.request_id, "douyin-request-1")
         self.assertEqual(len(usages), 1)
         self.assertTrue(usages[0].succeeded)
@@ -192,6 +206,10 @@ class TikHubDouyinPerformanceTests(unittest.IsolatedAsyncioTestCase):
             captured["share_url"], "https://v.douyin.com/e3x2fjE/"
         )
         self.assertEqual(result.video_id, VIDEO_ID)
+        self.assertIsNone(result.like_count)
+        self.assertIsNone(result.comment_count)
+        self.assertIsNone(result.share_count)
+        self.assertIsNone(result.collect_count)
 
     async def test_paid_response_without_play_count_is_not_saved_as_zero(self):
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -265,10 +283,25 @@ class DouyinPerformanceServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bound.usage_records[0].estimated_currency, "CNY")
         self.assertEqual(bound.usage_records[0].estimated_cost, 0.0067)
         self.assertEqual(bound.douyin_performance.snapshots[0].play_count, 1000)
+        self.assertEqual(bound.douyin_performance.snapshots[0].like_count, 100)
         self.assertEqual(refreshed.revision, 5)
         self.assertEqual(
             [item.play_count for item in refreshed.douyin_performance.snapshots],
             [1000, 2000],
+        )
+        self.assertEqual(
+            refreshed.douyin_performance.snapshots[-1].model_dump(
+                include={
+                    "like_count", "comment_count",
+                    "share_count", "collect_count",
+                }
+            ),
+            {
+                "like_count": 200,
+                "comment_count": 20,
+                "share_count": 10,
+                "collect_count": 40,
+            },
         )
         self.assertEqual(len(refreshed.usage_records), 2)
 
@@ -310,6 +343,10 @@ class DouyinRoiTests(unittest.TestCase):
                 snapshots=[
                     DouyinPlaybackSnapshot(
                         play_count=20007,
+                        like_count=1200,
+                        comment_count=89,
+                        share_count=34,
+                        collect_count=218,
                         observed_at=observed_at,
                         request_id="douyin-request-1",
                     ),
@@ -321,6 +358,10 @@ class DouyinRoiTests(unittest.TestCase):
 
         self.assertEqual(result["accounted_cost_cny"], 20.0067)
         self.assertEqual(result["playback_value_cny"], 200.07)
+        self.assertEqual(result["like_count"], 1200)
+        self.assertEqual(result["comment_count"], 89)
+        self.assertEqual(result["share_count"], 34)
+        self.assertEqual(result["collect_count"], 218)
         self.assertEqual(result["target_views"], 20007)
         self.assertEqual(result["remaining_views"], 0)
         self.assertTrue(result["target_achieved"])

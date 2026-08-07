@@ -466,6 +466,7 @@ function exportPerformanceCsv() {
   const header = [
     'job_id', 'content_title', 'creator', 'douyin_video_id', 'douyin_video_url',
     'douyin_author', 'bound_at', 'observed_at', 'snapshot_count', 'play_count',
+    'like_count', 'comment_count', 'share_count', 'collect_count',
     'accounted_cost_cny', 'playback_value_cny', 'roi_multiple', 'target_views',
     'remaining_views', 'target_achieved', 'target_achieved_provisional',
     'duplicate_binding', 'duplicate_of_job_id', 'cost_complete',
@@ -474,7 +475,8 @@ function exportPerformanceCsv() {
   downloadCsv(header, rows.map((row) => [
     row.job_id, row.title, row.creator, row.video_id, row.video_url,
     row.author_name, row.bound_at, row.observed_at, row.snapshot_count,
-    row.play_count, row.accounted_cost_cny, row.playback_value_cny,
+    row.play_count, row.like_count, row.comment_count, row.share_count,
+    row.collect_count, row.accounted_cost_cny, row.playback_value_cny,
     row.roi_multiple, row.target_views, row.remaining_views,
     row.target_achieved, row.target_achieved_provisional,
     row.duplicate_binding, row.duplicate_of_job_id,

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.12.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.13.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -322,14 +322,14 @@
           </section>
           <section id="douyin-performance-section" class="review-section" hidden>
             <div class="section-title">
-              <h3>抖音播放回流</h3>
+              <h3>抖音效果回流</h3>
               <span>本版本仅记录抖音，不采集小红书或视频号</span>
             </div>
             <form id="douyin-performance-form" class="douyin-performance-form">
               <label for="douyin-link-input">发布后粘贴抖音视频链接
                 <textarea id="douyin-link-input" rows="2" maxlength="4000" placeholder="支持抖音分享文本、v.douyin.com 短链或 www.douyin.com/video/... 标准链接" spellcheck="false"></textarea>
               </label>
-              <button id="douyin-bind-button" class="button primary" type="submit">绑定并读取播放量</button>
+              <button id="douyin-bind-button" class="button primary" type="submit">绑定并读取作品数据</button>
             </form>
             <div id="douyin-performance-result" hidden>
               <div class="douyin-performance-heading">
@@ -341,13 +341,21 @@
               </div>
               <div class="douyin-refresh-panel">
                 <div>
-                  <strong>需要最新播放量？</strong>
-                  <span id="douyin-refresh-hint">播放量不会自动更新，请点击按钮手动刷新。</span>
+                  <strong>需要最新作品数据？</strong>
+                  <span id="douyin-refresh-hint">作品数据不会自动更新，请点击按钮手动刷新。</span>
                 </div>
-                <button id="douyin-refresh-button" class="button primary" type="button">手动刷新播放量</button>
+                <button id="douyin-refresh-button" class="button primary" type="button">手动刷新作品数据</button>
               </div>
+              <p class="douyin-metric-group-title">抖音累计数据</p>
+              <div class="douyin-platform-grid">
+                <div class="primary"><span>播放量</span><strong id="douyin-play-count">—</strong></div>
+                <div><span>点赞量</span><strong id="douyin-like-count">—</strong></div>
+                <div><span>评论量</span><strong id="douyin-comment-count">—</strong></div>
+                <div><span>分享量</span><strong id="douyin-share-count">—</strong></div>
+                <div><span>收藏量</span><strong id="douyin-collect-count">—</strong></div>
+              </div>
+              <p class="douyin-metric-group-title">成本与回报</p>
               <div class="douyin-performance-grid">
-                <div><span>当前播放</span><strong id="douyin-play-count">—</strong></div>
                 <div><span>已核算成本</span><strong id="douyin-accounted-cost">—</strong></div>
                 <div><span>播放价值</span><strong id="douyin-playback-value">—</strong></div>
                 <div><span>当前 ROI</span><strong id="douyin-roi">—</strong></div>
@@ -362,6 +370,7 @@
               </div>
             </div>
             <p id="douyin-cost-note" class="cost-note"></p>
+            <p class="cost-note">TikHub 本次未返回的互动指标显示为“未返回”，不会按 0 记录。</p>
             <p id="douyin-cost-warning" class="performance-warning" hidden></p>
           </section>
           <button id="revise-script-button" class="button primary" type="button" hidden>返回修改脚本</button>
@@ -371,6 +380,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.12.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.13.0"></script>
 </body>
 </html>

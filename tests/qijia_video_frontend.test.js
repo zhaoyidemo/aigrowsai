@@ -83,6 +83,7 @@ test('team cost and Douyin performance dashboard is read-only and auditable', ()
   assert.match(costsApp, /target_achieved_provisional/);
   assert.match(costsApp, /duplicate_binding/);
   assert.match(costsApp, /exportPerformanceCsv/);
+  assert.match(costsApp, /'like_count', 'comment_count', 'share_count', 'collect_count'/);
   assert.match(costsApp, /qijia-douyin-performance-/);
   assert.match(costsApp, /\/qijia-video\?job=/);
   assert.match(app, /new URLSearchParams\(window\.location\.search\)\.get\('job'\)/);
@@ -360,11 +361,17 @@ test('packaged jobs expose Douyin-only manual playback feedback and ROI', () => 
   assert.match(page, /本版本仅记录抖音，不采集小红书或视频号/);
   assert.match(page, /id="douyin-link-input"/);
   assert.match(page, /id="douyin-change-link-button"/);
-  assert.match(page, /id="douyin-refresh-button"[^>]*>手动刷新播放量/);
-  assert.match(page, /播放量不会自动更新/);
+  assert.match(page, /id="douyin-refresh-button"[^>]*>手动刷新作品数据/);
+  assert.match(page, /id="douyin-play-count"/);
+  assert.match(page, /id="douyin-like-count"/);
+  assert.match(page, /id="douyin-comment-count"/);
+  assert.match(page, /id="douyin-share-count"/);
+  assert.match(page, /id="douyin-collect-count"/);
+  assert.match(page, /作品数据不会自动更新/);
   assert.match(page, /10 倍目标播放/);
   assert.match(app, /douyin-performance\/actions\/refresh/);
   assert.match(app, /refreshButton\.hidden = !performance/);
+  assert.match(app, /latestSnapshot\[key\]/);
   assert.match(app, /confirm_cost: true/);
   assert.match(app, /每千次播放 ¥10、目标 10 倍/);
   assert.match(app, /canEditResource\(job\)/);

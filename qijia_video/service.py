@@ -671,10 +671,10 @@ class QijiaVideoService:
     ) -> DouyinPerformanceProvider:
         provider = self.douyin_performance_provider
         if provider is None:
-            raise ProviderUnavailable("抖音播放回流 Provider 未装配")
+            raise ProviderUnavailable("抖音效果回流 Provider 未装配")
         if not provider.configured:
             raise ProviderUnavailable(
-                "抖音播放回流未配置："
+                "抖音效果回流未配置："
                 + "、".join(provider.configuration_errors)
             )
         return provider
@@ -724,6 +724,10 @@ class QijiaVideoService:
             *(previous.snapshots if previous else []),
             DouyinPlaybackSnapshot(
                 play_count=metrics.play_count,
+                like_count=metrics.like_count,
+                comment_count=metrics.comment_count,
+                share_count=metrics.share_count,
+                collect_count=metrics.collect_count,
                 observed_at=now,
                 request_id=metrics.request_id,
             ),

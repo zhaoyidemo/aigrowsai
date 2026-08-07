@@ -1123,10 +1123,58 @@ _DOUYIN_URL_PATTERN = re.compile(r"https://[^\s<>]+", re.IGNORECASE)
 _DOUYIN_PLAY_COUNT_KEYS = (
     "play_count",
     "playCount",
+    "playCnt",
     "itemPlayCnt",
     "play_cnt",
     "itemPlayCount",
     "videoPlayCount",
+)
+_DOUYIN_LIKE_COUNT_KEYS = (
+    "digg_count",
+    "diggCount",
+    "digg_cnt",
+    "like_count",
+    "like_cnt",
+    "likeCount",
+    "itemLikeCnt",
+    "itemLikeCount",
+)
+_DOUYIN_COMMENT_COUNT_KEYS = (
+    "comment_count",
+    "comment_cnt",
+    "commentCount",
+    "itemCommentCnt",
+    "itemCommentCount",
+)
+_DOUYIN_SHARE_COUNT_KEYS = (
+    "share_count",
+    "share_cnt",
+    "shareCount",
+    "forward_count",
+    "forwardCount",
+    "itemShareCnt",
+    "itemShareCount",
+)
+_DOUYIN_COLLECT_COUNT_KEYS = (
+    "collect_count",
+    "collect_cnt",
+    "collectCount",
+    "favorite_count",
+    "favorite_cnt",
+    "favoriteCount",
+    "favourite_count",
+    "favourite_cnt",
+    "favouriteCount",
+    "itemCollectCnt",
+    "itemCollectCount",
+)
+_DOUYIN_STATISTICS_KEYS = (
+    "statistics",
+    "statistics_v2",
+    "statisticsV2",
+    "stats",
+    "item_stats",
+    "itemStats",
 )
 _DOUYIN_AUTHOR_KEYS = (
     "nickname",
@@ -1193,18 +1241,53 @@ def _classify_douyin_video_url(
     )
 
 
-def _required_play_count(node: dict[str, Any]) -> int:
-    raw = _deep_value(node, _DOUYIN_PLAY_COUNT_KEYS)
+def _douyin_metric_count(
+    node: dict[str, Any],
+    aliases: tuple[str, ...],
+    *,
+    label: str,
+    required: bool = False,
+) -> int | None:
+    statistics = _direct_value(node, _DOUYIN_STATISTICS_KEYS)
+    raw = (
+        _deep_value(statistics, aliases)
+        if isinstance(statistics, (dict, list))
+        else None
+    )
+    if raw in (None, ""):
+        raw = _deep_value(node, aliases)
     if raw is None or isinstance(raw, bool):
-        raise ProviderUnavailable("TikHub 已返回作品，但响应中缺少可识别的播放量")
+        if required:
+            raise ProviderUnavailable(
+                f"TikHub 已返回作品，但响应中缺少可识别的{label}"
+            )
+        return None
     if isinstance(raw, (int, float)):
         if raw < 0 or (isinstance(raw, float) and not math.isfinite(raw)):
-            raise ProviderUnavailable("TikHub 返回了异常的播放量")
+            if required:
+                raise ProviderUnavailable(f"TikHub 返回了异常的{label}")
+            return None
         return max(0, round(raw))
     text = str(raw).strip().replace(",", "")
     if not re.fullmatch(r"\d+(?:\.\d+)?(?:万|亿|[wWkK])?", text):
-        raise ProviderUnavailable("TikHub 返回了无法解析的播放量")
+        if required:
+            raise ProviderUnavailable(f"TikHub 返回了无法解析的{label}")
+        return None
     return _number(text)
+
+
+def _required_play_count(node: dict[str, Any]) -> int:
+    value = _douyin_metric_count(
+        node,
+        _DOUYIN_PLAY_COUNT_KEYS,
+        label="播放量",
+        required=True,
+    )
+    if value is None:
+        raise ProviderUnavailable(
+            "TikHub 已返回作品，但响应中缺少可识别的播放量"
+        )
+    return value
 
 
 def _douyin_performance_from_data(
@@ -1234,6 +1317,18 @@ def _douyin_performance_from_data(
         video_id=video_id,
         video_url=f"https://www.douyin.com/video/{video_id}",
         play_count=_required_play_count(node),
+        like_count=_douyin_metric_count(
+            node, _DOUYIN_LIKE_COUNT_KEYS, label="点赞量"
+        ),
+        comment_count=_douyin_metric_count(
+            node, _DOUYIN_COMMENT_COUNT_KEYS, label="评论量"
+        ),
+        share_count=_douyin_metric_count(
+            node, _DOUYIN_SHARE_COUNT_KEYS, label="分享量"
+        ),
+        collect_count=_douyin_metric_count(
+            node, _DOUYIN_COLLECT_COUNT_KEYS, label="收藏量"
+        ),
         video_title=_clean_term(_deep_value(node, _VIDEO_TITLE_KEYS)),
         author_name=str(_deep_value(node, _DOUYIN_AUTHOR_KEYS) or "").strip()[:200],
         request_id=request_id,
@@ -1241,7 +1336,7 @@ def _douyin_performance_from_data(
 
 
 class TikHubDouyinPerformanceProvider:
-    """Resolve one pasted Douyin link and read one current play-count snapshot."""
+    """Resolve one pasted Douyin link and read one public-metrics snapshot."""
 
     name = "tikhub"
 
@@ -1318,7 +1413,7 @@ class TikHubDouyinPerformanceProvider:
     ) -> DouyinVideoPerformance:
         if not self.configured:
             raise ProviderUnavailable(
-                "抖音播放回流未配置：" + "、".join(self.configuration_errors)
+                "抖音效果回流未配置：" + "、".join(self.configuration_errors)
             )
 
         async def record_calls(calls: list[TikHubCallRecord]) -> None:
@@ -1365,7 +1460,7 @@ class TikHubDouyinPerformanceProvider:
             "GET",
             "/api/v1/douyin/web/fetch_one_video_by_share_url",
             params={"share_url": share_url},
-            request_label="读取 1 条抖音分享链接的播放量",
+            request_label="读取 1 条抖音分享链接的作品数据",
             on_usage=on_usage,
         )
 
@@ -1382,7 +1477,7 @@ class TikHubDouyinPerformanceProvider:
             "POST",
             "/api/v1/douyin/web/fetch_multi_video",
             json_body=[normalized_id],
-            request_label="刷新 1 条抖音作品的播放量",
+            request_label="刷新 1 条抖音作品数据",
             expected_video_id=normalized_id,
             on_usage=on_usage,
         )
