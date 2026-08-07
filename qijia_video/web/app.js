@@ -1744,12 +1744,17 @@ function applyJobReadOnly(job) {
   ].join(',')).forEach((node) => {
     node.disabled = readOnly || state.busy;
   });
-  const performanceDisabled = readOnly
-    || state.busy
-    || state.capabilities?.douyin_performance?.ready !== true;
-  $('#douyin-bind-button').disabled = performanceDisabled;
-  $('#douyin-change-link-button').disabled = performanceDisabled;
-  $('#douyin-refresh-button').disabled = performanceDisabled;
+  const performanceUnavailable = (
+    state.capabilities?.douyin_performance?.ready !== true
+  );
+  $('#douyin-bind-button').disabled = (
+    readOnly || state.busy || performanceUnavailable
+  );
+  $('#douyin-change-link-button').disabled = readOnly || state.busy;
+  // Keep refresh actionable so permission or Provider errors can be explained
+  // beside the button. The server remains the source of truth and blocks the
+  // paid call before it happens when the actor or configuration is invalid.
+  $('#douyin-refresh-button').disabled = state.busy;
   if (!readOnly) return;
   document.querySelectorAll([
     '[data-regenerate-shot]',
@@ -2533,7 +2538,9 @@ $('#douyin-refresh-button').addEventListener('click', async () => {
   const job = state.selectedJob;
   if (!job?.douyin_performance || state.busy) return;
   if (!canEditResource(job)) {
-    notify('只有创建者或管理员可以发起付费的作品数据刷新。', true);
+    const message = '只有创建者或管理员可以发起付费的作品数据刷新。';
+    setDouyinRefreshFeedback(job.id, 'error', message);
+    notify(message, true);
     return;
   }
   const startedAt = Date.now();

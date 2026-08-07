@@ -376,6 +376,8 @@ test('packaged jobs expose Douyin-only manual playback feedback and ROI', () => 
   assert.match(app, /正在连接 TikHub 并读取最新作品数据/);
   assert.match(app, /刷新成功/);
   assert.match(app, /刷新失败：/);
+  assert.match(app, /\$\('#douyin-refresh-button'\)\.disabled = state\.busy/);
+  assert.match(app, /只有创建者或管理员可以发起付费的作品数据刷新/);
   assert.match(app, /latestSnapshot\[key\]/);
   assert.match(app, /confirm_cost: true/);
   assert.match(app, /每千次播放 ¥10、目标 10 倍/);
