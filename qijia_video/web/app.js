@@ -2288,14 +2288,21 @@ function renderDetail() {
     .filter(([, count]) => Number(count) > 0)
     .map(([reason, count]) => `${rejectionLabels[reason] || reason} ${count}`)
     .join('、');
+  const webSearchDetail = diagnostics.web_search_requests == null
+    ? '实际联网检索次数：供应商未回传'
+    : `实际联网检索 ${Number(diagnostics.web_search_requests)} 次`;
   researchRetryDetail.hidden = !newsResearchFailure;
   researchRetryDetail.textContent = newsResearchFailure
     ? [
       `第 ${Number(diagnostics.attempt_count || 1)} 次研究未形成可用简报`,
-      `实际联网检索 ${Number(diagnostics.web_search_requests || 0)} 次`,
+      webSearchDetail,
       `检索注释 ${Number(diagnostics.citation_count || 0)} 条`,
       `候选证据 ${Number(diagnostics.candidate_evidence_count || 0)} 条`,
-      `成功匹配 ${Number(diagnostics.accepted_evidence_count || 0)} 条`,
+      `引用 URL 已匹配 ${Number(diagnostics.matched_citation_count || 0)} 条`,
+      `通过完整性校验 ${Number(diagnostics.accepted_evidence_count || 0)} 条`,
+      Number(diagnostics.citation_excerpt_claim_count || 0) > 0
+        ? `由检索摘录补全事实描述 ${Number(diagnostics.citation_excerpt_claim_count)} 条`
+        : '',
       `可追溯站点 ${Number(diagnostics.accepted_site_count || 0)} 个`,
       rejected ? `被过滤：${rejected}` : '',
       diagnostics.detail || '',

@@ -525,14 +525,40 @@ class ResearchDiagnostics(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     operation: Literal["recent_news_research"] = "recent_news_research"
     attempt_count: int = Field(default=0, ge=0)
-    web_search_requests: int = Field(default=0, ge=0)
+    web_search_requests: int | None = Field(default=None, ge=0)
     citation_count: int = Field(default=0, ge=0)
     candidate_evidence_count: int = Field(default=0, ge=0)
+    matched_citation_count: int = Field(default=0, ge=0)
     accepted_evidence_count: int = Field(default=0, ge=0)
     accepted_site_count: int = Field(default=0, ge=0)
+    citation_excerpt_claim_count: int = Field(default=0, ge=0)
+    citation_identity_samples: list[str] = Field(
+        default_factory=list, max_length=5
+    )
+    candidate_identity_samples: list[str] = Field(
+        default_factory=list, max_length=5
+    )
     rejected_counts: dict[str, int] = Field(default_factory=dict)
     detail: str = Field(default="", max_length=1000)
     generated_at: str = Field(default="", max_length=64)
+
+    @model_validator(mode="after")
+    def restore_legacy_derived_counts(self):
+        post_match_reasons = (
+            "missing_claim",
+            "duplicate_url",
+            "url_too_long",
+            "missing_host",
+        )
+        inferred_matches = self.accepted_evidence_count + sum(
+            max(0, int(self.rejected_counts.get(reason, 0)))
+            for reason in post_match_reasons
+        )
+        if self.matched_citation_count < inferred_matches:
+            self.matched_citation_count = inferred_matches
+        if self.web_search_requests == 0 and self.citation_count > 0:
+            self.web_search_requests = None
+        return self
 
 
 class ScriptBeat(ContractModel):

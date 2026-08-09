@@ -27,6 +27,7 @@ from qijia_video.contracts import (
     PersonViewpointInput,
     QuickSourceCardInput,
     QualityReport,
+    ResearchDiagnostics,
     RenderManifest,
     ScriptDraft,
     SourceCard,
@@ -242,6 +243,18 @@ class QijiaVideoContractTests(unittest.TestCase):
         )
 
         self.assertEqual(len(brief.evidence), 1)
+
+    def test_legacy_research_diagnostics_restore_post_match_counts(self):
+        diagnostics = ResearchDiagnostics.model_validate({
+            "web_search_requests": 0,
+            "citation_count": 12,
+            "candidate_evidence_count": 9,
+            "accepted_evidence_count": 0,
+            "rejected_counts": {"missing_claim": 9},
+        })
+
+        self.assertIsNone(diagnostics.web_search_requests)
+        self.assertEqual(diagnostics.matched_citation_count, 9)
 
     def test_person_viewpoint_expands_to_internal_content_boundary(self):
         idea = PersonViewpointInput(
@@ -1399,11 +1412,20 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request_body["max_tool_calls"], 3)
         self.assertEqual(request_body["tool_choice"], "required")
         self.assertEqual(
+            request_body["response_format"]["json_schema"]["name"],
+            "recent_news_research_v3",
+        )
+        self.assertEqual(
             request_body["tools"][0]["parameters"]["max_total_results"],
             12,
         )
         self.assertIn("检索截止时间（Asia/Shanghai）", request_body["messages"][1]["content"])
         self.assertIn("优先官方与可信独立来源", request_body["messages"][1]["content"])
+        self.assertIn("claim 必须是非空事实描述", request_body["messages"][1]["content"])
+        claim_schema = request_body["response_format"]["json_schema"]["schema"][
+            "properties"
+        ]["evidence"]["items"]["properties"]["claim"]
+        self.assertIn("非空", claim_schema["description"])
         self.assertEqual(brief.kind, "recent_news")
         self.assertEqual(brief.prompt_version, NEWS_RESEARCH_PROMPT_VERSION)
         self.assertEqual(
@@ -1477,6 +1499,148 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             for item in brief.uncertainties
         ))
 
+    async def test_recent_news_research_recovers_blank_claim_from_citation_excerpt(self):
+        source_url = "https://official.example/releases/tera-fab"
+
+        def handler(_: httpx.Request) -> httpx.Response:
+            generated = {
+                "summary": "官方公布了一项可核验的新计划。",
+                "core_tension": "计划与实际落地仍需区分。",
+                "audience_relevance": ["用户需要知道已经确认了什么。"],
+                "content_angles": ["只讲来源能直接支持的已确认变化。"],
+                "interaction_opportunity": "你更关心计划还是落地进度？",
+                "evidence": [{
+                    "claim": "",
+                    "source_title": "模型标题",
+                    "source_url": source_url,
+                    "source_kind": "official",
+                    "published_at": "2026-08-09",
+                    "event_at": "2026-08-08",
+                }],
+                "uncertainties": [],
+            }
+            return httpx.Response(200, json={
+                "choices": [{"message": {
+                    "content": json.dumps(generated, ensure_ascii=False),
+                    "annotations": [
+                        {
+                            "type": "url_citation",
+                            "url_citation": {
+                                "url": source_url,
+                                "title": "官方发布记录",
+                                "content": (
+                                    "官方资料显示，TERA LAB 已公布新工厂计划。"
+                                    "[...] 量产时间仍待确认。"
+                                ),
+                            },
+                        },
+                        {
+                            "type": "url_citation",
+                            "url_citation": {
+                                "url": source_url,
+                                "title": "",
+                            },
+                        },
+                    ],
+                }}],
+            })
+
+        provider = OpenRouterScriptProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="test/news-model",
+            transport=httpx.MockTransport(handler),
+        )
+        card_input = NewsTopicInput(topic="TERA LAB").to_source_card_input()
+        card = SourceCard(
+            **card_input.model_dump(mode="json"),
+            id="card-news-blank-claim-recovered",
+            revision=1,
+            status="verified",
+        )
+
+        brief = await provider.research_recent_news(card)
+
+        self.assertEqual(len(brief.evidence), 1)
+        self.assertEqual(
+            brief.evidence[0].claim,
+            "官方资料显示，TERA LAB 已公布新工厂计划。 量产时间仍待确认。",
+        )
+        self.assertEqual(brief.evidence[0].source_title, "官方发布记录")
+        self.assertTrue(any(
+            "检索注释原文摘录补全" in item
+            for item in brief.uncertainties
+        ))
+
+    async def test_recent_news_research_reports_matched_blank_claim_without_excerpt(self):
+        source_url = "https://cited.example/news"
+
+        def handler(_: httpx.Request) -> httpx.Response:
+            generated = {
+                "summary": "模型返回了空事实描述。",
+                "core_tension": "空事实描述不能进入脚本。",
+                "audience_relevance": ["需要保留事实完整性边界。"],
+                "content_angles": ["解释为什么本次研究被阻断。"],
+                "interaction_opportunity": "",
+                "evidence": [{
+                    "claim": "",
+                    "source_title": "模型标题",
+                    "source_url": source_url,
+                    "source_kind": "official",
+                    "published_at": "2026-08-09",
+                    "event_at": "",
+                }],
+                "uncertainties": [],
+            }
+            return httpx.Response(200, json={
+                "choices": [{"message": {
+                    "content": json.dumps(generated, ensure_ascii=False),
+                    "annotations": [{
+                        "type": "url_citation",
+                        "url_citation": {
+                            "url": source_url,
+                            "title": "实际检索注释",
+                        },
+                    }],
+                }}],
+            })
+
+        provider = OpenRouterScriptProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="test/news-model",
+            transport=httpx.MockTransport(handler),
+        )
+        card_input = NewsTopicInput(topic="TERA LAB").to_source_card_input()
+        card = SourceCard(
+            **card_input.model_dump(mode="json"),
+            id="card-news-blank-claim-unrecoverable",
+            revision=1,
+            status="verified",
+        )
+
+        with self.assertRaisesRegex(
+            ResearchEvidenceUnavailable,
+            "检索证据缺少可用事实描述",
+        ) as raised:
+            await provider.research_recent_news(card)
+
+        diagnostics = raised.exception.diagnostics
+        self.assertIsNone(diagnostics["web_search_requests"])
+        self.assertEqual(diagnostics["citation_count"], 1)
+        self.assertEqual(diagnostics["candidate_evidence_count"], 1)
+        self.assertEqual(diagnostics["matched_citation_count"], 1)
+        self.assertEqual(diagnostics["accepted_evidence_count"], 0)
+        self.assertEqual(diagnostics["rejected_counts"]["missing_claim"], 1)
+        self.assertEqual(
+            diagnostics["citation_identity_samples"],
+            ["cited.example/news"],
+        )
+        self.assertEqual(
+            diagnostics["candidate_identity_samples"],
+            ["cited.example/news"],
+        )
+
     async def test_recent_news_research_reports_citation_rejection_diagnostics(self):
         def handler(_: httpx.Request) -> httpx.Response:
             generated = {
@@ -1523,13 +1687,17 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             status="verified",
         )
 
-        with self.assertRaises(ResearchEvidenceUnavailable) as raised:
+        with self.assertRaisesRegex(
+            ResearchEvidenceUnavailable,
+            "检索引用与模型 evidence URL 未匹配",
+        ) as raised:
             await provider.research_recent_news(card)
 
         diagnostics = raised.exception.diagnostics
         self.assertEqual(diagnostics["web_search_requests"], 1)
         self.assertEqual(diagnostics["citation_count"], 1)
         self.assertEqual(diagnostics["candidate_evidence_count"], 1)
+        self.assertEqual(diagnostics["matched_citation_count"], 0)
         self.assertEqual(diagnostics["accepted_evidence_count"], 0)
         self.assertEqual(
             diagnostics["rejected_counts"]["citation_not_matched"],

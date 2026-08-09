@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -34,7 +35,7 @@ from qijia_video.prompts import (
 SCRIPT_PROMPT_VERSION = "qijia_script_v12_research_interaction"
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v8_max_reasoning"
 PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_research_v1"
-NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v2"
+NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v3"
 OPENROUTER_REASONING_EFFORT = "max"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 PERSON_RESEARCH_MAX_COMPLETION_TOKENS = 48_000
@@ -178,9 +179,18 @@ _NEWS_RESEARCH_RESPONSE_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "claim": {"type": "string"},
+                    "claim": {
+                        "type": "string",
+                        "description": (
+                            "一条非空、由 source_url 页面直接支持的事实描述；"
+                            "无法确认时不要输出该 evidence"
+                        ),
+                    },
                     "source_title": {"type": "string"},
-                    "source_url": {"type": "string"},
+                    "source_url": {
+                        "type": "string",
+                        "description": "必须原样复制本次联网检索结果中的 URL",
+                    },
                     "source_kind": {
                         "type": "string",
                         "enum": [
@@ -259,7 +269,7 @@ class _OpenRouterJsonResponse:
     data: dict
     message: dict
     model_id: str
-    web_search_requests: int = 0
+    web_search_requests: int | None = None
 
 
 _STORYBOARD_FALLBACKS = (
@@ -547,9 +557,13 @@ def _citation_catalog(message: dict) -> dict[str, dict[str, str]]:
         normalized = _normalized_citation_url(url)
         if not normalized:
             continue
+        existing = catalog.get(normalized, {})
+        title = str(citation.get("title") or "").strip()
+        content = _message_text(citation.get("content")).strip()
         catalog[normalized] = {
-            "url": url,
-            "title": str(citation.get("title") or "").strip(),
+            "url": str(existing.get("url") or url),
+            "title": title or str(existing.get("title") or ""),
+            "content": content or str(existing.get("content") or ""),
         }
     return catalog
 
@@ -573,6 +587,26 @@ def _matched_citation(
     return next(iter(candidates.values())) if len(candidates) == 1 else None
 
 
+def _citation_excerpt(value: Any) -> str:
+    """Return a bounded source excerpt suitable for an evidence claim."""
+
+    text = _message_text(value).strip()
+    if not text:
+        return ""
+    text = re.sub(r"\[\s*(?:\.\.\.|…)\s*\]", " ", text)
+    text = " ".join(text.split()).strip()
+    if not text or _normalized_citation_url(text):
+        return ""
+    return text[:1200].rstrip()
+
+
+def _citation_identity_label(value: Any) -> str:
+    """Expose only host/path for bounded diagnostics, never query strings."""
+
+    host, path = _citation_identity(value)
+    return f"{host}{path}"[:500] if host and path else ""
+
+
 def _nonnegative_int(value: Any) -> int:
     try:
         return max(0, int(value or 0))
@@ -580,7 +614,7 @@ def _nonnegative_int(value: Any) -> int:
         return 0
 
 
-def _web_search_request_count(body: dict | None) -> int:
+def _web_search_request_count(body: dict | None) -> int | None:
     payload = body if isinstance(body, dict) else {}
     usage = payload.get("usage")
     usage = usage if isinstance(usage, dict) else {}
@@ -588,7 +622,10 @@ def _web_search_request_count(body: dict | None) -> int:
     server_tool_use = (
         server_tool_use if isinstance(server_tool_use, dict) else {}
     )
-    return _nonnegative_int(server_tool_use.get("web_search_requests"))
+    value = server_tool_use.get("web_search_requests")
+    if value is None:
+        return None
+    return _nonnegative_int(value)
 
 
 def _openrouter_usage_record(
@@ -661,7 +698,7 @@ def _openrouter_usage_record(
                 note,
                 (
                     f"联网检索 {web_search_requests} 次"
-                    if web_search_requests
+                    if web_search_requests is not None
                     else ""
                 ),
                 missing_cost_note,
@@ -1072,8 +1109,10 @@ class OpenRouterScriptProvider:
             + "至少形成一条与本次检索注释匹配、可追溯且带发布时间或事件时间的证据。"
             "优先同时检索官方或原始材料与可信独立来源，但不得为了凑站点而采用低质量转载；"
             "只有一个可追溯站点、缺少官方材料或缺少独立报道时不得猜测，必须写入 uncertainties。"
-            "每条 evidence 只写来源能够直接支持的一个事实，source_url 必须原样使用本次检索"
-            "结果中的 URL。published_at 写页面标注的发布时间，event_at 写事件发生时间；未知时"
+            "每条 evidence 只写来源能够直接支持的一个事实；claim 必须是非空事实描述，"
+            "如果无法写出非空 claim 就不要输出该 evidence，绝不能用空字符串占位。"
+            "source_url 必须原样使用本次检索结果中的 URL。published_at 写页面标注的发布时间，"
+            "event_at 写事件发生时间；未知时"
             "填写空字符串，不得猜测。source_kind 只能是 official、primary、independent 或"
             " other。summary 概括最新且最重要的变化；core_tension 写清它为什么值得现在关注；"
             "audience_relevance、content_angles 各写 2-4 条；无法确认、来源冲突或可能同名混淆"
@@ -1094,7 +1133,7 @@ class OpenRouterScriptProvider:
                 {"role": "user", "content": prompt},
             ],
             label="最新新闻研究",
-            schema_name="recent_news_research_v2",
+            schema_name="recent_news_research_v3",
             response_schema=_NEWS_RESEARCH_RESPONSE_SCHEMA,
             max_completion_tokens=NEWS_RESEARCH_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,
@@ -1125,6 +1164,8 @@ class OpenRouterScriptProvider:
         seen_urls: set[str] = set()
         source_hosts: set[str] = set()
         rejected_counts: dict[str, int] = {}
+        matched_citation_count = 0
+        citation_excerpt_claim_count = 0
 
         def reject(reason: str) -> None:
             rejected_counts[reason] = rejected_counts.get(reason, 0) + 1
@@ -1144,6 +1185,11 @@ class OpenRouterScriptProvider:
             if not citation:
                 reject("citation_not_matched")
                 continue
+            matched_citation_count += 1
+            claim_from_excerpt = False
+            if not claim:
+                claim = _citation_excerpt(citation.get("content"))
+                claim_from_excerpt = bool(claim)
             if not claim:
                 reject("missing_claim")
                 continue
@@ -1182,19 +1228,45 @@ class OpenRouterScriptProvider:
                 "published_at": str(raw.get("published_at") or "").strip()[:64],
                 "event_at": str(raw.get("event_at") or "").strip()[:64],
             })
+            if claim_from_excerpt:
+                citation_excerpt_claim_count += 1
+        citation_identity_samples = [
+            label
+            for label in (
+                _citation_identity_label(item.get("url"))
+                for item in citations.values()
+            )
+            if label
+        ][:5]
+        candidate_identity_samples = [
+            label
+            for label in (
+                _citation_identity_label(item.get("source_url"))
+                for item in raw_evidence
+                if isinstance(item, dict)
+            )
+            if label
+        ][:5]
         diagnostics = {
             "schema_version": "1.0",
             "operation": "recent_news_research",
             "web_search_requests": response.web_search_requests,
             "citation_count": len(citations),
             "candidate_evidence_count": len(raw_evidence),
+            "matched_citation_count": matched_citation_count,
             "accepted_evidence_count": len(grounded_evidence),
             "accepted_site_count": len(source_hosts),
+            "citation_excerpt_claim_count": citation_excerpt_claim_count,
+            "citation_identity_samples": citation_identity_samples,
+            "candidate_identity_samples": candidate_identity_samples,
             "rejected_counts": rejected_counts,
             "generated_at": timestamp(),
         }
         if not grounded_evidence:
-            if not citations and response.web_search_requests:
+            if not citations and (
+                response.web_search_requests is not None
+                and response.web_search_requests > 0
+            ):
                 message = "OpenRouter 已执行联网检索但未返回 citation 注释"
                 detail = (
                     f"web_search_requests={response.web_search_requests}，"
@@ -1202,15 +1274,45 @@ class OpenRouterScriptProvider:
                 )
             elif not citations:
                 message = "OpenRouter 未返回可追溯的联网检索引用"
+                request_count = (
+                    "未回传"
+                    if response.web_search_requests is None
+                    else str(response.web_search_requests)
+                )
                 detail = (
-                    "web_search_requests=0，citation_count=0；"
+                    f"web_search_requests={request_count}，citation_count=0；"
                     "上游可能未调用 web_search 或未回传 annotations"
                 )
-            else:
+            elif (
+                matched_citation_count > 0
+                and rejected_counts.get("missing_claim", 0)
+                == matched_citation_count
+            ):
+                message = "检索证据缺少可用事实描述"
+                detail = (
+                    f"citation_count={len(citations)}，"
+                    f"candidate_evidence_count={len(raw_evidence)}，"
+                    f"matched_citation_count={matched_citation_count}，"
+                    f"rejected_counts={rejected_counts}"
+                )
+            elif (
+                matched_citation_count == 0
+                and rejected_counts.get("citation_not_matched", 0) > 0
+            ):
                 message = "检索引用与模型 evidence URL 未匹配"
                 detail = (
                     f"citation_count={len(citations)}，"
-                    f"candidate_evidence_count={len(raw_evidence)}"
+                    f"candidate_evidence_count={len(raw_evidence)}，"
+                    f"matched_citation_count=0，"
+                    f"rejected_counts={rejected_counts}"
+                )
+            else:
+                message = "检索证据未通过完整性校验"
+                detail = (
+                    f"citation_count={len(citations)}，"
+                    f"candidate_evidence_count={len(raw_evidence)}，"
+                    f"matched_citation_count={matched_citation_count}，"
+                    f"rejected_counts={rejected_counts}"
                 )
             diagnostics["detail"] = detail
             raise ResearchEvidenceUnavailable(
@@ -1242,6 +1344,10 @@ class OpenRouterScriptProvider:
             add_uncertainty("本次研究尚未找到官方或原始材料。")
         if "independent" not in source_kinds:
             add_uncertainty("本次研究尚未找到可信独立报道。")
+        if citation_excerpt_claim_count:
+            add_uncertainty(
+                "部分证据的事实描述由检索注释原文摘录补全，请在脚本审核时核对。"
+            )
 
         generated.update({
             "schema_version": "1.0",
