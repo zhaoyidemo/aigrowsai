@@ -17,6 +17,7 @@ from qijia_video.db_models import VideoRun, utc_now
 
 logger = logging.getLogger(__name__)
 MAX_HOT_TASKS = 200
+MAX_PHASE_HISTORY = 64
 _tasks: dict[str, dict] = {}
 _creation_lock = asyncio.Lock()
 _persist_lock = asyncio.Lock()
@@ -48,6 +49,80 @@ def _jsonable(value):
 
 def _timestamp(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+def _parsed_timestamp(value: object) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _phase_duration(started_at: object, finished_at: datetime) -> float:
+    started = _parsed_timestamp(started_at)
+    if not started:
+        return 0.0
+    return round(max(0.0, (finished_at - started).total_seconds()), 3)
+
+
+def _progress_with_phase_timing(task: dict, payload: dict) -> dict:
+    now = datetime.now(timezone.utc)
+    previous = dict(task.get("progress_meta") or {})
+    history = [
+        dict(item)
+        for item in previous.get("phase_history", [])
+        if isinstance(item, dict)
+    ][-MAX_PHASE_HISTORY:]
+    previous_stage = str(previous.get("stage") or "")
+    next_stage = str(payload.get("stage") or previous_stage)
+    started_at = previous.get("phase_started_at")
+
+    if next_stage and next_stage != previous_stage:
+        if previous_stage and started_at:
+            history.append({
+                "stage": previous_stage,
+                "started_at": started_at,
+                "finished_at": now.isoformat(),
+                "duration_seconds": _phase_duration(started_at, now),
+            })
+        started_at = now.isoformat()
+    elif next_stage and not started_at:
+        started_at = now.isoformat()
+
+    result = dict(payload)
+    if next_stage:
+        result["stage"] = next_stage
+        result["phase_started_at"] = started_at
+        result["phase_elapsed_seconds"] = _phase_duration(started_at, now)
+    result["phase_history"] = history[-MAX_PHASE_HISTORY:]
+    return result
+
+
+def _finish_active_phase(task: dict, finished_at: datetime) -> None:
+    meta = dict(task.get("progress_meta") or {})
+    stage = str(meta.get("stage") or "")
+    started_at = meta.get("phase_started_at")
+    if not stage or not started_at or meta.get("phase_finished_at"):
+        return
+    duration = _phase_duration(started_at, finished_at)
+    history = [
+        dict(item)
+        for item in meta.get("phase_history", [])
+        if isinstance(item, dict)
+    ]
+    history.append({
+        "stage": stage,
+        "started_at": started_at,
+        "finished_at": finished_at.isoformat(),
+        "duration_seconds": duration,
+    })
+    meta["phase_finished_at"] = finished_at.isoformat()
+    meta["phase_elapsed_seconds"] = duration
+    meta["phase_history"] = history[-MAX_PHASE_HISTORY:]
+    task["progress_meta"] = _jsonable(meta)
 
 
 def _record_to_dict(row: VideoRun) -> dict:
@@ -228,7 +303,9 @@ def update_progress(task_id: str, progress: str | dict) -> None:
     if isinstance(progress, dict):
         payload = dict(progress)
         task["progress"] = str(payload.pop("message", "") or "")
-        task["progress_meta"] = _jsonable(payload)
+        task["progress_meta"] = _jsonable(
+            _progress_with_phase_timing(task, payload)
+        )
     else:
         task["progress"] = str(progress or "")
         task["progress_meta"] = {}
@@ -239,10 +316,12 @@ def complete_task(task_id: str, result: dict | None = None) -> None:
     task = _tasks.get(task_id)
     if not task:
         return
+    finished_at = datetime.now(timezone.utc)
+    _finish_active_phase(task, finished_at)
     task["status"] = "done"
     task["result"] = _jsonable(result) if result is not None else None
     task["error"] = None
-    task["finished_at"] = datetime.now(timezone.utc).isoformat()
+    task["finished_at"] = finished_at.isoformat()
     _schedule_snapshot(task_id)
 
 
@@ -252,11 +331,13 @@ def fail_task(
     task = _tasks.get(task_id)
     if not task:
         return
+    finished_at = datetime.now(timezone.utc)
+    _finish_active_phase(task, finished_at)
     task["status"] = "failed"
     task["error"] = str(error or "后台任务失败")[:4000]
     if result is not None:
         task["result"] = _jsonable(result)
-    task["finished_at"] = datetime.now(timezone.utc).isoformat()
+    task["finished_at"] = finished_at.isoformat()
     _schedule_snapshot(task_id)
 
 

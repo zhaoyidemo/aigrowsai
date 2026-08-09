@@ -1679,6 +1679,12 @@ class QijiaVideoService:
         actor: Actor,
         workspace: Path,
         progress: ProgressReporter | None = None,
+        *,
+        target_shot_ids: set[str] | None = None,
+        progress_stage: str = "first_frames",
+        progress_start: int = 46,
+        progress_end: int = 53,
+        progress_label: str = "分镜",
     ) -> VideoJob:
         if not job.storyboard_plan:
             raise InvalidTransition("缺少镜头分镜")
@@ -1693,16 +1699,25 @@ class QijiaVideoService:
             if reference_asset
             else ""
         )
-        total = len(job.storyboard_plan.shots)
+        target_indices = [
+            index
+            for index, shot in enumerate(job.storyboard_plan.shots)
+            if target_shot_ids is None or shot.shot_id in target_shot_ids
+        ]
+        if not target_indices:
+            return job
+        total = len(target_indices)
         required_candidate_ids = {
-            f"frame_{shot.shot_id}_01" for shot in job.storyboard_plan.shots
+            f"frame_{job.storyboard_plan.shots[index].shot_id}_01"
+            for index in target_indices
         }
         completed = sum(
             1
             for item in job.first_frame_candidates
             if item.candidate_id in required_candidate_ids and item.asset is not None
         )
-        for shot_index in range(len(job.storyboard_plan.shots)):
+        progress_span = max(0, progress_end - progress_start)
+        for target_position, shot_index in enumerate(target_indices, 1):
             # Saving returns a newly validated aggregate, so resolve the current
             # shot on each pass instead of retaining a stale nested model.
             shot = job.storyboard_plan.shots[shot_index]
@@ -1728,13 +1743,15 @@ class QijiaVideoService:
                     self._report(
                         progress,
                         message=(
-                            f"正在生成分镜 {shot_index + 1}/{len(job.storyboard_plan.shots)} "
+                            f"正在生成{progress_label} {target_position}/{total} "
                             "的首帧…"
                         ),
-                        stage="first_frames",
-                        percent=46 + round((completed * 7) / max(1, total)),
+                        stage=progress_stage,
+                        percent=progress_start + round(
+                            (completed * progress_span) / max(1, total)
+                        ),
                         shot_id=shot.shot_id,
-                        frame=shot_index + 1,
+                        frame=target_position,
                         frame_count=total,
                     )
                     try:
@@ -1877,15 +1894,6 @@ class QijiaVideoService:
             if current_shot.selected_candidate_id != selected_candidate_id:
                 current_shot.selected_candidate_id = selected_candidate_id
                 job = await self._save_job(job, actor)
-        self._report(
-            progress,
-            message=(
-                f"{total} 张首帧已就绪，开始生成 {SEEDANCE_VIDEO_SHOT_COUNT} 段 "
-                f"{self._video_resolution(job).upper()} 动态镜头…"
-            ),
-            stage="seedance_shot_1",
-            percent=54,
-        )
         return job
 
     @classmethod
@@ -2115,7 +2123,7 @@ class QijiaVideoService:
             unique[key] = task
         return list(unique.values())
 
-    async def _ensure_video_tasks(
+    async def _ensure_video_task_submissions(
         self,
         job: VideoJob,
         actor: Actor,
@@ -2144,7 +2152,7 @@ class QijiaVideoService:
                 message=f"正在提交 Seedance 视频 {shot_index}/{len(desired)}…",
                 stage=f"seedance_shot_{shot_index}",
                 percent=54 + round(
-                    ((shot_index - 1) * 20) / max(1, len(desired))
+                    ((shot_index - 1) * 4) / max(1, len(desired))
                 ),
                 shot=shot_index,
                 shot_count=len(desired),
@@ -2203,6 +2211,25 @@ class QijiaVideoService:
             job = await self._save_job(job, actor)
             existing[fingerprint] = task
 
+        self._report(
+            progress,
+            message=(
+                f"{len(desired)} 段 Seedance 已在后台生成，"
+                "同时补齐动态图片…"
+            ),
+            stage="seedance_parallel",
+            percent=58,
+            shot_count=len(desired),
+        )
+        return job
+
+    async def _wait_for_video_tasks(
+        self,
+        job: VideoJob,
+        actor: Actor,
+        progress: ProgressReporter | None = None,
+    ) -> VideoJob:
+        desired = self._build_visual_requests(job)
         for shot_index, request in enumerate(desired, 1):
             fingerprint = request.fingerprint()
             task = next(
@@ -2228,11 +2255,11 @@ class QijiaVideoService:
                     self._replace_video_task(job, task)
                     job = await self._save_job(job, actor)
             stage = f"seedance_shot_{shot_index}"
-            start_percent = 54 + round(
-                ((shot_index - 1) * 20) / len(desired)
+            start_percent = 65 + round(
+                ((shot_index - 1) * 9) / len(desired)
             )
-            completed_percent = 54 + round(
-                (shot_index * 20) / len(desired)
+            completed_percent = 65 + round(
+                (shot_index * 9) / len(desired)
             )
             deadline = time.monotonic() + self.video_timeout_seconds
             while task.state != ProviderTaskState.SUCCEEDED:
@@ -2278,6 +2305,15 @@ class QijiaVideoService:
                 usage_total_tokens=task.usage_total_tokens,
             )
         return job
+
+    async def _ensure_video_tasks(
+        self,
+        job: VideoJob,
+        actor: Actor,
+        progress: ProgressReporter | None = None,
+    ) -> VideoJob:
+        job = await self._ensure_video_task_submissions(job, actor, progress)
+        return await self._wait_for_video_tasks(job, actor, progress)
 
     @staticmethod
     def _narration_assets(job: VideoJob) -> list[AssetRef]:
@@ -2784,16 +2820,25 @@ class QijiaVideoService:
                     else "emphasis"
                 ),
             ))
-        selected_frame_assets = list(selected_frames.values())
-        assets_by_id = {
-            item.asset_id: item
-            for item in [*audio_assets, *visual_assets, *selected_frame_assets]
-        }
         cover_asset = (
             selected_frames.get(job.storyboard_plan.shots[0].shot_id)
             if job.storyboard_plan and job.storyboard_plan.shots
             else None
         )
+        required_visual_asset_ids = {
+            block.asset_id for block in blocks if block.asset_id
+        }
+        if cover_asset:
+            required_visual_asset_ids.add(cover_asset.asset_id)
+        render_visual_assets = [
+            item
+            for item in [*visual_assets, *selected_frames.values()]
+            if item.asset_id in required_visual_asset_ids
+        ]
+        assets_by_id = {
+            item.asset_id: item
+            for item in [*audio_assets, *render_visual_assets]
+        }
         return RenderManifest(
             job_id=job.id,
             width=width,
@@ -3730,18 +3775,51 @@ class QijiaVideoService:
                     stage="seedance_shot_1",
                     percent=54,
                 )
+                job = await self._ensure_video_tasks(job, actor, progress)
             else:
                 job = await self._ensure_storyboard_plan(job, actor, progress)
+                video_shot_ids = {
+                    shot.shot_id
+                    for shot in job.storyboard_plan.shots
+                    if shot.visual_type == "video"
+                }
+                image_shot_ids = {
+                    shot.shot_id
+                    for shot in job.storyboard_plan.shots
+                    if shot.visual_type == "image"
+                }
                 job = await self._ensure_first_frames(
-                    job, actor, workspace, progress
+                    job,
+                    actor,
+                    workspace,
+                    progress,
+                    target_shot_ids=video_shot_ids,
+                    progress_stage="first_frames",
+                    progress_start=46,
+                    progress_end=54,
+                    progress_label="视频镜头",
                 )
-            job = await self._ensure_video_tasks(job, actor, progress)
+                job = await self._ensure_video_task_submissions(
+                    job, actor, progress
+                )
+                job = await self._ensure_first_frames(
+                    job,
+                    actor,
+                    workspace,
+                    progress,
+                    target_shot_ids=image_shot_ids,
+                    progress_stage="seedance_parallel",
+                    progress_start=58,
+                    progress_end=65,
+                    progress_label="动态图片",
+                )
+                job = await self._wait_for_video_tasks(job, actor, progress)
             self._report(
                 progress,
                 message=(
                     f"{len(job.visual_requests)} 段 Seedance 视频已就绪，正在整理素材…"
                 ),
-                stage=f"seedance_shot_{len(job.visual_requests)}",
+                stage="visual_assets",
                 percent=74,
             )
             job, visual_assets = await self._ensure_visual_assets(
@@ -3755,7 +3833,7 @@ class QijiaVideoService:
             self._report(
                 progress,
                 message="正在用 Remotion 合成画面、旁白与字幕…",
-                stage="remotion",
+                stage="remotion_render",
                 percent=78,
             )
             raw_draft_path = await self.renderer.render(
@@ -3764,7 +3842,7 @@ class QijiaVideoService:
             self._report(
                 progress,
                 message="合成完成，正在整理 MP4 容器…",
-                stage="remotion",
+                stage="remotion_normalize",
                 percent=83,
             )
             draft_path = await self.media_packager.normalize(
@@ -3793,7 +3871,7 @@ class QijiaVideoService:
             self._report(
                 progress,
                 message="自动质检通过，正在生成封面和确认材料…",
-                stage="quality",
+                stage="artifact_upload",
                 percent=88,
             )
             draft_asset = await self.storage.put_file(

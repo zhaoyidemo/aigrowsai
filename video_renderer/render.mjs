@@ -12,9 +12,14 @@ const valueOf = (flag) => {
 };
 const manifestPath = resolve(valueOf('--manifest'));
 const outputPath = resolve(valueOf('--output'));
+const coverOutputValue = valueOf('--cover-output');
+const coverOutputPath = coverOutputValue ? resolve(coverOutputValue) : '';
 const renderStillOnly = args.includes('--still');
 if (!manifestPath || !outputPath || !existsSync(manifestPath)) {
   throw new Error('Usage: node render.mjs --manifest <file> --output <file>');
+}
+if (renderStillOnly && coverOutputPath) {
+  throw new Error('--still and --cover-output cannot be combined');
 }
 
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
@@ -144,6 +149,24 @@ try {
         }
       },
     });
+    if (coverOutputPath) {
+      const coverComposition = await selectComposition({
+        serveUrl,
+        id: 'KnowledgeCoverV1',
+        inputProps,
+        ...browserLaunch,
+      });
+      await renderStill({
+        composition: coverComposition,
+        serveUrl,
+        inputProps,
+        output: coverOutputPath,
+        imageFormat: 'jpeg',
+        overwrite: true,
+        ...browserLaunch,
+      });
+      process.stdout.write(`cover-rendered=${coverOutputPath}\n`);
+    }
   }
   process.stdout.write(`rendered=${outputPath}\n`);
 } finally {

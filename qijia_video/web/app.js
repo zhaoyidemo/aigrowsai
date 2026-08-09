@@ -174,7 +174,7 @@ function generationDefaults() {
   return state.capabilities?.generation_defaults || {
     script_prompt: '', seedance_prompt: '', video_resolution: '1080p',
     seedance_model: 'doubao-seedance-1-0-pro-fast-251015',
-    image_count: 10, shot_count: 13,
+    image_count: 2, shot_count: 5,
     tts_voice_id: 'zh_female_vv_uranus_bigtts', tts_speed_ratio: 1.2,
   };
 }
@@ -442,7 +442,7 @@ function setImageCountField(settings) {
   const inferred = settings?.image_count
     ?? (Number(settings?.shot_count) ? Number(settings.shot_count) - 3 : null)
     ?? defaults.image_count
-    ?? 10;
+    ?? 2;
   $('#image-count').value = normalizedImageCount(inferred);
   updateImageCountCost();
 }
@@ -497,7 +497,7 @@ function initializePromptFields() {
     saved.seedance_prompt = generationDefaults().seedance_prompt;
   }
   if (legacyFixedImageCount) {
-    saved.image_count = generationDefaults().image_count || 10;
+    saved.image_count = generationDefaults().image_count || 2;
     saved.shot_count = saved.image_count + 3;
   }
   setPromptFields(saved);
@@ -686,15 +686,21 @@ const progressStageIndexes = {
   production: 3,
   storyboard: 4,
   first_frames: 4,
+  first_frames_video: 4,
   frame_selection: 4,
+  seedance_parallel: 5,
   seedance_shot_1: 5,
   seedance_shot_2: 6,
   seedance_shot_3: 7,
   // Older five-video jobs can still finish after this release.
   seedance_shot_4: 7,
   seedance_shot_5: 7,
+  visual_assets: 7,
   remotion: 8,
+  remotion_render: 8,
+  remotion_normalize: 8,
   quality: 8,
+  artifact_upload: 8,
   confirm_final: 9,
   package: 10,
 };
@@ -1159,11 +1165,26 @@ function elapsedText(task) {
   if (!Number.isFinite(started)) return '—';
   const finished = parseTaskTime(task?.finished_at);
   const seconds = Math.max(0, Math.floor(((Number.isFinite(finished) ? finished : Date.now()) - started) / 1000));
+  return durationText(seconds);
+}
+
+function durationText(rawSeconds) {
+  const seconds = Math.max(0, Math.floor(Number(rawSeconds) || 0));
   if (seconds < 60) return `${seconds} 秒`;
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
   if (minutes < 60) return `${minutes} 分 ${remainder} 秒`;
   return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
+
+function phaseElapsedText(task) {
+  const meta = task?.progress_meta || {};
+  const started = parseTaskTime(meta.phase_started_at);
+  if (task?.status === 'running' && Number.isFinite(started)) {
+    return durationText((Date.now() - started) / 1000);
+  }
+  const recorded = Number(meta.phase_elapsed_seconds);
+  return Number.isFinite(recorded) ? durationText(recorded) : '—';
 }
 
 function formatTokens(value) {
@@ -2063,7 +2084,7 @@ function renderDetail() {
   const task = taskForJob(job);
   const copy = workflowCopy(job, current);
   $('#current-action').textContent = copy.current;
-  $('#stage-elapsed').textContent = elapsedText(task);
+  $('#stage-elapsed').textContent = `总 ${elapsedText(task)} · 当前 ${phaseElapsedText(task)}`;
   $('#next-action').textContent = copy.next;
   renderSeedanceUsage(job);
   renderShotStoryboard(job);

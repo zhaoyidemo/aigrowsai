@@ -123,10 +123,10 @@
           <label class="video-quality-setting image-count-setting" for="image-count">
             <span class="video-quality-copy">
               <strong>动态图片数量</strong>
-              <small>可选 2–10 段，默认 10 段；AI 视频始终保持 3 段。系统会按真实旁白时长安排镜头节奏。</small>
-              <small id="image-count-cost" class="image-count-cost">共需生成 13 张 Seedream（含 3 张视频首帧）</small>
+              <small>可选 2–10 段，默认 2 段；AI 视频始终保持 3 段。系统会按真实旁白时长安排镜头节奏。</small>
+              <small id="image-count-cost" class="image-count-cost">2 段动态图片 + 3 张视频首帧 = 5 张 Seedream</small>
             </span>
-            <input id="image-count" type="number" min="2" max="10" step="1" value="10" inputmode="numeric" aria-label="动态图片数量">
+            <input id="image-count" type="number" min="2" max="10" step="1" value="2" inputmode="numeric" aria-label="动态图片数量">
           </label>
           <section class="video-quality-setting tts-creation-setting" aria-label="旁白设置">
             <span class="video-quality-copy">
@@ -260,7 +260,7 @@
               <strong id="current-action">等待任务开始</strong>
             </div>
             <div class="workflow-summary-item">
-              <span>本轮耗时</span>
+              <span>总计 / 当前阶段</span>
               <strong id="stage-elapsed">—</strong>
             </div>
             <div class="workflow-summary-item">
@@ -346,7 +346,7 @@
           </section>
           <section id="shot-storyboard" class="review-section storyboard-section" hidden>
             <div class="section-title storyboard-heading">
-              <div><h3>AI 镜头故事板</h3><span id="storyboard-summary">3 段视频和 10 段动态图片会在这里逐个出现</span></div>
+              <div><h3>AI 镜头故事板</h3><span id="storyboard-summary">3 段视频和 2 段动态图片会在这里逐个出现</span></div>
               <span class="storyboard-hint">选中镜头，可查看首帧、提示词和历史版本</span>
             </div>
             <p id="frame-selection-warning" class="frame-selection-warning" hidden></p>

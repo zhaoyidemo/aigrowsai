@@ -17,7 +17,7 @@ def narration_char_count(text: str) -> int:
 
 MIN_IMAGE_CHAPTER_COUNT = 2
 MAX_IMAGE_CHAPTER_COUNT = 10
-DEFAULT_IMAGE_CHAPTER_COUNT = 10
+DEFAULT_IMAGE_CHAPTER_COUNT = 2
 
 DEFAULT_SCRIPT_PROMPT = """请把输入的人物和核心观点，写成一版面向家长的抖音知识短视频完整脚本，目标时长约 45-60 秒。
 

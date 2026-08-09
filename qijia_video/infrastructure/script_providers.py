@@ -205,6 +205,7 @@ def _normalize_storyboard_rows(
         else []
     )
     exact: dict[str, list[tuple[int, dict]]] = {}
+    expected_segment_ids = {segment.id for segment in target_segments}
     for position, candidate in enumerate(candidates):
         segment_id = str(candidate.get("segment_id") or "").strip()
         if segment_id:
@@ -237,6 +238,14 @@ def _normalize_storyboard_rows(
                 (
                     item for item in range(len(candidates))
                     if item not in used_positions
+                    and (
+                        not str(
+                            candidates[item].get("segment_id") or ""
+                        ).strip()
+                        or str(
+                            candidates[item].get("segment_id") or ""
+                        ).strip() not in expected_segment_ids
+                    )
                 ),
                 -1,
             )

@@ -210,6 +210,11 @@ test('workflow exposes three videos and configurable image chapters with action 
   ]) assert.match(app, new RegExp(label.replace('/', '\\/')));
   assert.match(page, /id="current-action"/);
   assert.match(page, /id="stage-elapsed"/);
+  assert.match(page, /总计 \/ 当前阶段/);
+  assert.match(app, /phaseElapsedText\(task\)/);
+  assert.match(app, /seedance_parallel: 5/);
+  assert.match(app, /remotion_render: 8/);
+  assert.match(app, /remotion_normalize: 8/);
   assert.match(page, /id="next-action"/);
   assert.match(page, /3 张继续生成 8-10 秒、所选画质的 AI 视频/);
   assert.match(page, /其余按所选动态图片数量直接进入成片/);
@@ -268,8 +273,8 @@ test('AI shots are visible storyboard cards with isolated version controls', () 
   assert.match(page, /id="shot-storyboard"/);
   assert.match(page, /id="shot-grid"/);
   assert.match(page, /id="shot-inspector"/);
-  assert.match(page, /3 段视频和 10 段动态图片会在这里逐个出现/);
-  assert.match(page, /id="image-count"[^>]+min="2"[^>]+max="10"[^>]+value="10"/);
+  assert.match(page, /3 段视频和 2 段动态图片会在这里逐个出现/);
+  assert.match(page, /id="image-count"[^>]+min="2"[^>]+max="10"[^>]+value="2"/);
   assert.match(page, /id="image-count-cost"/);
   assert.match(app, /image_count: rawImageCount/);
   assert.match(app, /shot_count: rawImageCount \+ 3/);
@@ -281,7 +286,7 @@ test('AI shots are visible storyboard cards with isolated version controls', () 
   assert.match(app, /data-select-version/);
   assert.match(app, /用这张首帧换一版/);
   assert.match(app, /id="shot-seedance-model"/);
-  assert.match(app, /默认 1\.5 Pro 保持原生 1080P/);
+  assert.match(app, /默认 1\.0 Pro Fast 保持原生 1080P/);
   assert.match(app, /seedance_model: seedanceModel/);
   assert.match(app, /刊例价预估约/);
   assert.match(app, /first_frame_candidate_id/);
@@ -306,6 +311,9 @@ test('final video mixes generated videos and motion images without narration tex
   assert.match(renderEntry, /pixelFormat: 'yuv420p'/);
   assert.match(renderEntry, /colorSpace: 'bt709'/);
   assert.match(renderEntry, /sampleRate: 48000/);
+  assert.match(renderEntry, /--cover-output/);
+  assert.match(renderEntry, /KnowledgeCoverV1/);
+  assert.equal((renderEntry.match(/await bundle\(/g) || []).length, 1);
   assert.match(renderer, /whiteSpace: 'nowrap'/);
   assert.match(renderer, /padding: '0 74px 220px'/);
   assert.match(renderer, /Array\.from\(cue\.text\)\.length/);

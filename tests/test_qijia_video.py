@@ -195,13 +195,13 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(card.verified_facts[0].text, idea.viewpoint)
         self.assertIn("不补造人物经历", card.interpretation_boundary[0].text)
 
-    def test_generation_settings_default_to_ten_images_and_preserve_legacy(self):
+    def test_generation_settings_default_to_two_images_and_preserve_legacy(self):
         settings = GenerationSettings(
             script_prompt="测试脚本写法",
             seedance_prompt="测试镜头风格",
         )
-        self.assertEqual(settings.image_count, 10)
-        self.assertEqual(settings.shot_count, 13)
+        self.assertEqual(settings.image_count, 2)
+        self.assertEqual(settings.shot_count, 5)
         self.assertEqual(settings.video_resolution, "1080p")
         self.assertEqual(settings.seedance_model, SEEDANCE_EFFICIENT_MODEL)
         self.assertEqual(
@@ -1596,12 +1596,14 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             [beat.id for beat in job.script.beats],
         )
 
-    async def test_default_visual_plan_allocates_ten_images_inside_script_beats(self):
+    async def test_ten_image_visual_plan_allocates_inside_script_beats(self):
         card = await self.service.create_source_card(valid_card(), self.actor)
         card = await self.service.verify_source_card(
             card.id, card.revision, self.actor
         )
-        job = await self.service.create_job(card.id, self.actor)
+        job = await self.service.create_job(
+            card.id, self.actor, GenerationSettings(image_count=10)
+        )
         job = await self.service.generate_script(job.id, self.actor)
 
         groups = self.service._storyboard_beat_groups(job)
@@ -1925,7 +1927,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         job = await self.service.create_job(
             card.id,
             self.actor,
-            GenerationSettings(seedance_prompt=conflicting_style),
+            GenerationSettings(
+                seedance_prompt=conflicting_style,
+                image_count=10,
+            ),
         )
         job = await self.service.generate_script(job.id, self.actor)
         job = await self.service.approve_script(
@@ -1949,6 +1954,49 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         ))
 
     async def test_two_distinct_approvals_create_complete_package(self):
+        call_order: list[str] = []
+
+        class OrderedImageProvider(MockImageProvider):
+            async def generate(
+                self,
+                prompt: str,
+                *,
+                seed: int,
+                reference_image_url: str = "",
+            ):
+                call_order.append("image")
+                return await super().generate(
+                    prompt,
+                    seed=seed,
+                    reference_image_url=reference_image_url,
+                )
+
+        class OrderedVideoProvider(MockVideoProvider):
+            def __init__(self):
+                super().__init__()
+                self._refreshing_status = False
+
+            async def submit(self, request, *, first_frame_url=""):
+                if not self._refreshing_status:
+                    call_order.append("video_submit")
+                return await super().submit(
+                    request,
+                    first_frame_url=first_frame_url,
+                )
+
+            async def get_status(
+                self, provider_task_id, request_fingerprint
+            ):
+                self._refreshing_status = True
+                try:
+                    return await super().get_status(
+                        provider_task_id, request_fingerprint
+                    )
+                finally:
+                    self._refreshing_status = False
+
+        self.service.image_provider = OrderedImageProvider()
+        self.service.video_provider = OrderedVideoProvider()
         card = await self.service.create_source_card(valid_card(), self.actor)
         card = await self.service.verify_source_card(
             card.id, card.revision, self.actor
@@ -1973,7 +2021,11 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             side_effect=lambda bits: seed_widths.append(bits) or len(seed_widths),
         ):
             job = await self.service.produce(job.id, self.actor)
-        self.assertEqual(seed_widths, [31] * 13)
+        self.assertEqual(seed_widths, [31] * 5)
+        self.assertEqual(
+            call_order,
+            ["image"] * 3 + ["video_submit"] * 3 + ["image"] * 2,
+        )
         self.assertEqual(job.state, JobState.FINAL_REVIEW_REQUIRED)
         self.assertEqual(len(job.review_bundle_hash), 64)
         self.assertTrue(job.render_manifest.subtitle_cues)
@@ -1995,8 +2047,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(
             cue.text == cue.text.strip() for cue in job.render_manifest.subtitle_cues
         ))
-        self.assertEqual(job.generation_settings.image_count, 10)
-        self.assertEqual(job.generation_settings.shot_count, 13)
+        self.assertEqual(job.generation_settings.image_count, 2)
+        self.assertEqual(job.generation_settings.shot_count, 5)
         self.assertEqual(len(job.visual_requests), 3)
         self.assertTrue(all(
             request.resolution == "1080p"
@@ -2033,7 +2085,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             task.state == ProviderTaskState.SUCCEEDED for task in job.video_tasks
         ))
         self.assertIsNotNone(job.storyboard_plan)
-        self.assertEqual(len(job.storyboard_plan.shots), 13)
+        self.assertEqual(len(job.storyboard_plan.shots), 5)
         planned_beat_ids = [
             beat_id
             for shot in job.storyboard_plan.shots
@@ -2053,10 +2105,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [shot.visual_type for shot in job.storyboard_plan.shots].count("image"),
-            10,
+            2,
         )
         self.assertEqual(job.storyboard_plan.shots[0].visual_type, "video")
-        self.assertEqual(len(job.first_frame_candidates), 13)
+        self.assertEqual(len(job.first_frame_candidates), 5)
         self.assertTrue(all(
             0 <= candidate.seed <= SEEDREAM_MAX_SEED
             for candidate in job.first_frame_candidates
@@ -2070,7 +2122,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             shot.selected_candidate_id == f"frame_{shot.shot_id}_01"
             for shot in job.storyboard_plan.shots
         ))
-        self.assertEqual(len(job.render_manifest.visual_blocks), 13)
+        self.assertEqual(len(job.render_manifest.visual_blocks), 5)
         self.assertEqual(
             sum(
                 block.duration_in_frames
@@ -2078,7 +2130,12 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             ),
             job.render_manifest.duration_in_frames,
         )
-        public_payload = qijia_api.public_job_payload(job)
+        public_payload = qijia_api.public_job_payload(job, {
+            "id": 7,
+            "username": "editor",
+            "role": "member",
+            "permissions": ["qijia_video"],
+        })
         self.assertEqual(public_payload["script"]["schema_version"], "2.0")
         self.assertIn("beats", public_payload["script"])
         self.assertNotIn("narration_segments", public_payload["script"])
@@ -2095,7 +2152,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 for shot in job.storyboard_plan.shots
             )
         }
-        self.assertEqual(len(selected_assets), 13)
+        self.assertEqual(len(selected_assets), 5)
         self.assertEqual(
             {request.first_frame_asset_id for request in job.visual_requests},
             {
@@ -2121,7 +2178,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             for request in job.visual_requests
         ))
         blocks = job.render_manifest.visual_blocks
-        self.assertEqual(len(blocks), 13)
+        self.assertEqual(len(blocks), 5)
         self.assertEqual(
             [block.type for block in blocks],
             [
@@ -2493,7 +2550,11 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "seedance_shot_1",
             "seedance_shot_2",
             "seedance_shot_3",
-            "remotion",
+            "seedance_parallel",
+            "visual_assets",
+            "remotion_render",
+            "remotion_normalize",
+            "artifact_upload",
             "quality",
             "confirm_final",
             "package",
@@ -2594,10 +2655,10 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         self.assertNotIn("mock", response.json()["data"]["tts_provider"])
         self.assertNotIn("mock", response.json()["data"]["video_provider"])
         self.assertEqual(
-            response.json()["data"]["generation_defaults"]["image_count"], 10
+            response.json()["data"]["generation_defaults"]["image_count"], 2
         )
         self.assertEqual(
-            response.json()["data"]["generation_defaults"]["shot_count"], 13
+            response.json()["data"]["generation_defaults"]["shot_count"], 5
         )
         self.assertEqual(
             response.json()["data"]["generation_defaults"]["video_resolution"],

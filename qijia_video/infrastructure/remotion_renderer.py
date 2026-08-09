@@ -78,6 +78,7 @@ class RemotionRenderer:
         *,
         output_name: str,
         still: bool,
+        cover_output_name: str | None = None,
     ) -> Path:
         manifest = RenderManifest.model_validate(manifest)
         ready, reason = self.available()
@@ -101,6 +102,9 @@ class RemotionRenderer:
             json.dumps(runtime, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         output = workspace / output_name
+        cover_output = (
+            workspace / cover_output_name if cover_output_name else None
+        )
         node = shutil.which(self.node_binary) or self.node_binary
         environment = dict(os.environ)
         environment["REMOTION_CONCURRENCY"] = self.concurrency
@@ -112,6 +116,8 @@ class RemotionRenderer:
         ]
         if still:
             arguments.append("--still")
+        if cover_output:
+            arguments.extend(["--cover-output", str(cover_output)])
         process = await asyncio.create_subprocess_exec(
             *arguments,
             cwd=str(self.renderer_root),
@@ -128,7 +134,11 @@ class RemotionRenderer:
             await process.wait()
             raise ProviderUnavailable("Remotion 渲染超时") from exc
         log = stdout.decode("utf-8", errors="replace")
-        if process.returncode != 0 or not output.is_file():
+        if (
+            process.returncode != 0
+            or not output.is_file()
+            or (cover_output is not None and not cover_output.is_file())
+        ):
             raise ProviderUnavailable(
                 "Remotion 渲染失败：" + log[-4000:]
             )
@@ -141,9 +151,13 @@ class RemotionRenderer:
             workspace,
             output_name="draft.mp4",
             still=False,
+            cover_output_name="cover.jpg",
         )
 
     async def render_cover(self, manifest, storage, workspace: Path) -> Path:
+        cached = workspace / "cover.jpg"
+        if cached.is_file():
+            return cached
         return await self._invoke(
             manifest,
             storage,

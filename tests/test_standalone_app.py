@@ -146,13 +146,27 @@ class StandaloneRunServiceTests(unittest.IsolatedAsyncioTestCase):
                     "stage": "script_generation",
                     "percent": 14,
                 })
+                run_service.update_progress(task_id, {
+                    "message": "正在生成旁白…",
+                    "stage": "tts",
+                    "percent": 34,
+                })
                 run_service.complete_task(task_id, {"job_id": "job-1"})
                 task = await run_service.get_task_async(task_id)
             finally:
                 run_service.reset_task_context(tokens)
 
         self.assertEqual(task["status"], "done")
-        self.assertEqual(task["progress_meta"]["percent"], 14)
+        self.assertEqual(task["progress_meta"]["percent"], 34)
+        self.assertIsNotNone(task["progress_meta"]["phase_started_at"])
+        self.assertIsNotNone(task["progress_meta"]["phase_finished_at"])
+        self.assertGreaterEqual(
+            task["progress_meta"]["phase_elapsed_seconds"], 0
+        )
+        self.assertEqual(
+            [item["stage"] for item in task["progress_meta"]["phase_history"]],
+            ["script_generation", "tts"],
+        )
         public = run_service.public_task(task)
         self.assertNotIn("job_payload", public)
         self.assertNotIn("owner_user_id", public)
