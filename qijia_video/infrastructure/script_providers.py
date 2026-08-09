@@ -33,7 +33,7 @@ from qijia_video.prompts import (
 )
 
 
-SCRIPT_PROMPT_VERSION = "qijia_script_v12_research_interaction"
+SCRIPT_PROMPT_VERSION = "qijia_script_v13_narrative_progression"
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v8_max_reasoning"
 PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_research_v1"
 NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v4"

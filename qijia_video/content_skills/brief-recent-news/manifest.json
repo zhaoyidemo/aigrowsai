@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "display_name": "最新新闻口播",
   "input_mode": "recent_news_topic",
   "compatible_formats": ["recent_news_briefing"],

@@ -203,13 +203,16 @@ class QijiaVideoContractTests(unittest.TestCase):
         )
         expert = default_skill_registry.resolve("explain-expert-view")
         news = default_skill_registry.resolve("brief-recent-news")
-        self.assertEqual(expert.version, "1.0.0")
-        self.assertEqual(news.version, "1.1.0")
+        self.assertEqual(expert.version, "1.1.0")
+        self.assertEqual(news.version, "1.2.0")
         self.assertEqual(
             GenerationSettings().script_prompt,
             expert.script_prompt,
         )
         self.assertEqual(news.research_mode.value, "recent_news_required")
+        self.assertIn("不要逐段独立创作后拼接", expert.script_prompt)
+        self.assertIn("事实、分析、预测和价值判断", news.script_prompt)
+        self.assertIn("不要逐段独立创作后拼接", news.script_prompt)
         self.assertNotEqual(expert.manifest_hash, news.manifest_hash)
 
     def test_news_topic_is_a_research_request_not_a_verified_news_fact(self):
@@ -443,6 +446,10 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertIn("画面不能只是旁白的图解", prompt)
         self.assertIn("结尾画面回应、完成或反转开场", prompt)
         self.assertIn("不要额外输出导演说明", prompt)
+        self.assertIn("先完成一版从头到尾自然连贯的完整口播", prompt)
+        self.assertIn("每个叙事段只承担一个主要信息任务", prompt)
+        self.assertIn("最后一段必须直接回应开场冲突和中心问题", prompt)
+        self.assertIn("不追求机械等字数", prompt)
 
     def test_longest_later_chapters_become_images(self):
         self.assertEqual(
@@ -2393,7 +2400,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         job = await self.service.create_job(card.id, self.actor)
 
         self.assertEqual(job.skill_snapshot.skill_id, "explain-expert-view")
-        self.assertEqual(job.skill_snapshot.version, "1.0.0")
+        self.assertEqual(job.skill_snapshot.version, "1.1.0")
         self.assertEqual(job.skill_snapshot.research_mode.value, "none")
         self.assertEqual(
             job.generation_settings.skill_id,

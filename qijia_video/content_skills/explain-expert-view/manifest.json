@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "display_name": "人物观点解读",
   "input_mode": "person_viewpoint",
   "compatible_formats": [
