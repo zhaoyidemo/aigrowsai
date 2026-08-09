@@ -1297,7 +1297,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ProviderUnavailable, "检索注释匹配"):
             await provider.research_person_viewpoint(card)
 
-    async def test_recent_news_research_freezes_time_and_requires_two_cited_hosts(self):
+    async def test_recent_news_research_freezes_time_and_uses_cited_sources(self):
         calls: list[httpx.Request] = []
         official_url = "https://official.example/releases/tera-lab"
         independent_url = "https://news.example/analysis/tera-lab"
@@ -1397,6 +1397,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             NEWS_RESEARCH_MAX_COMPLETION_TOKENS,
         )
         self.assertEqual(request_body["max_tool_calls"], 3)
+        self.assertEqual(request_body["tool_choice"], "required")
         self.assertEqual(
             request_body["tools"][0]["parameters"]["max_total_results"],
             12,
@@ -1505,6 +1506,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                         },
                     }],
                 }}],
+                "usage": {"server_tool_use": {"web_search_requests": 1}},
             })
 
         provider = OpenRouterScriptProvider(
@@ -1525,6 +1527,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             await provider.research_recent_news(card)
 
         diagnostics = raised.exception.diagnostics
+        self.assertEqual(diagnostics["web_search_requests"], 1)
         self.assertEqual(diagnostics["citation_count"], 1)
         self.assertEqual(diagnostics["candidate_evidence_count"], 1)
         self.assertEqual(diagnostics["accepted_evidence_count"], 0)
@@ -1532,6 +1535,56 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             diagnostics["rejected_counts"]["citation_not_matched"],
             1,
         )
+
+    async def test_recent_news_research_reports_missing_citation_annotations(self):
+        def handler(_: httpx.Request) -> httpx.Response:
+            generated = {
+                "summary": "模型完成了检索，但上游没有返回 citation 注释。",
+                "core_tension": "没有引用注释就不能把候选事实写入脚本。",
+                "audience_relevance": ["需要保留来源边界。"],
+                "content_angles": ["解释为什么需要重新研究。"],
+                "interaction_opportunity": "",
+                "evidence": [{
+                    "claim": "没有注释支持的候选事实。",
+                    "source_title": "候选页面",
+                    "source_url": "https://candidate.example/news",
+                    "source_kind": "other",
+                    "published_at": "2026-08-09",
+                    "event_at": "",
+                }],
+                "uncertainties": [],
+            }
+            return httpx.Response(200, json={
+                "choices": [{"message": {
+                    "content": json.dumps(generated, ensure_ascii=False),
+                }}],
+                "usage": {"server_tool_use": {"web_search_requests": 1}},
+            })
+
+        provider = OpenRouterScriptProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="test/news-model",
+            transport=httpx.MockTransport(handler),
+        )
+        card_input = NewsTopicInput(topic="TERA LAB").to_source_card_input()
+        card = SourceCard(
+            **card_input.model_dump(mode="json"),
+            id="card-news-missing-annotations",
+            revision=1,
+            status="verified",
+        )
+
+        with self.assertRaisesRegex(
+            ResearchEvidenceUnavailable,
+            "已执行联网检索但未返回 citation",
+        ) as raised:
+            await provider.research_recent_news(card)
+
+        diagnostics = raised.exception.diagnostics
+        self.assertEqual(diagnostics["web_search_requests"], 1)
+        self.assertEqual(diagnostics["citation_count"], 0)
+        self.assertEqual(diagnostics["candidate_evidence_count"], 1)
 
     async def test_openrouter_reports_truncated_json_with_the_exact_stage(self):
         def handler(_: httpx.Request) -> httpx.Response:

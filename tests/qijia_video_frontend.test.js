@@ -50,6 +50,7 @@ test('content Skills select versioned expert or recent-news workflows', () => {
   assert.match(app, /\/actions\/retry-news-research/);
   assert.match(app, /confirm_cost: true/);
   assert.match(app, /research_diagnostics/);
+  assert.match(app, /web_search_requests/);
   assert.match(app, /recent_news_research: 1/);
   assert.match(app, /job\.skill_snapshot\?\.display_name/);
 });

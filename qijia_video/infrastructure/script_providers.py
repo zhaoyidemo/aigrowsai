@@ -259,6 +259,7 @@ class _OpenRouterJsonResponse:
     data: dict
     message: dict
     model_id: str
+    web_search_requests: int = 0
 
 
 _STORYBOARD_FALLBACKS = (
@@ -579,6 +580,17 @@ def _nonnegative_int(value: Any) -> int:
         return 0
 
 
+def _web_search_request_count(body: dict | None) -> int:
+    payload = body if isinstance(body, dict) else {}
+    usage = payload.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    server_tool_use = usage.get("server_tool_use")
+    server_tool_use = (
+        server_tool_use if isinstance(server_tool_use, dict) else {}
+    )
+    return _nonnegative_int(server_tool_use.get("web_search_requests"))
+
+
 def _openrouter_usage_record(
     body: dict | None,
     *,
@@ -599,13 +611,7 @@ def _openrouter_usage_record(
     completion_details = (
         completion_details if isinstance(completion_details, dict) else {}
     )
-    server_tool_use = usage.get("server_tool_use")
-    server_tool_use = (
-        server_tool_use if isinstance(server_tool_use, dict) else {}
-    )
-    web_search_requests = _nonnegative_int(
-        server_tool_use.get("web_search_requests")
-    )
+    web_search_requests = _web_search_request_count(payload)
     raw_cost = usage.get("cost")
     try:
         reported_cost = max(0.0, float(raw_cost)) if raw_cost is not None else None
@@ -696,6 +702,7 @@ async def _openrouter_json_request(
     on_usage: UsageRecorder | None = None,
     reasoning_effort: str = OPENROUTER_REASONING_EFFORT,
     tools: list[dict] | None = None,
+    tool_choice: str | dict | None = None,
     max_tool_calls: int | None = None,
 ) -> _OpenRouterJsonResponse:
     usage_id = f"usage_{uuid.uuid4().hex}"
@@ -724,6 +731,8 @@ async def _openrouter_json_request(
     }
     if tools:
         payload["tools"] = tools
+    if tools and tool_choice is not None:
+        payload["tool_choice"] = tool_choice
     if max_tool_calls is not None:
         payload["max_tool_calls"] = max(1, int(max_tool_calls))
     async with httpx.AsyncClient(
@@ -834,6 +843,7 @@ async def _openrouter_json_request(
             data=_json_object(content),
             message=message if isinstance(message, dict) else {},
             model_id=str(body.get("model") or model),
+            web_search_requests=_web_search_request_count(body),
         )
     except ProviderUnavailable as exc:
         if finish_reason == "length":
@@ -1107,6 +1117,7 @@ class OpenRouterScriptProvider:
                     ],
                 },
             }],
+            tool_choice="required",
             max_tool_calls=3,
         )
         citations = _citation_catalog(response.message)
@@ -1174,6 +1185,7 @@ class OpenRouterScriptProvider:
         diagnostics = {
             "schema_version": "1.0",
             "operation": "recent_news_research",
+            "web_search_requests": response.web_search_requests,
             "citation_count": len(citations),
             "candidate_evidence_count": len(raw_evidence),
             "accepted_evidence_count": len(grounded_evidence),
@@ -1182,9 +1194,27 @@ class OpenRouterScriptProvider:
             "generated_at": timestamp(),
         }
         if not grounded_evidence:
-            diagnostics["detail"] = "没有 evidence 与本次 web_search citation 成功匹配"
+            if not citations and response.web_search_requests:
+                message = "OpenRouter 已执行联网检索但未返回 citation 注释"
+                detail = (
+                    f"web_search_requests={response.web_search_requests}，"
+                    "citation_count=0"
+                )
+            elif not citations:
+                message = "OpenRouter 未返回可追溯的联网检索引用"
+                detail = (
+                    "web_search_requests=0，citation_count=0；"
+                    "上游可能未调用 web_search 或未回传 annotations"
+                )
+            else:
+                message = "检索引用与模型 evidence URL 未匹配"
+                detail = (
+                    f"citation_count={len(citations)}，"
+                    f"candidate_evidence_count={len(raw_evidence)}"
+                )
+            diagnostics["detail"] = detail
             raise ResearchEvidenceUnavailable(
-                "没有形成可追溯的新闻证据",
+                message,
                 diagnostics,
             )
         generated = dict(response.data)

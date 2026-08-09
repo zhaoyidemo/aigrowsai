@@ -525,6 +525,7 @@ class ResearchDiagnostics(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     operation: Literal["recent_news_research"] = "recent_news_research"
     attempt_count: int = Field(default=0, ge=0)
+    web_search_requests: int = Field(default=0, ge=0)
     citation_count: int = Field(default=0, ge=0)
     candidate_evidence_count: int = Field(default=0, ge=0)
     accepted_evidence_count: int = Field(default=0, ge=0)

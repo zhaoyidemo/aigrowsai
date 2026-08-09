@@ -2292,6 +2292,7 @@ function renderDetail() {
   researchRetryDetail.textContent = newsResearchFailure
     ? [
       `第 ${Number(diagnostics.attempt_count || 1)} 次研究未形成可用简报`,
+      `实际联网检索 ${Number(diagnostics.web_search_requests || 0)} 次`,
       `检索注释 ${Number(diagnostics.citation_count || 0)} 条`,
       `候选证据 ${Number(diagnostics.candidate_evidence_count || 0)} 条`,
       `成功匹配 ${Number(diagnostics.accepted_evidence_count || 0)} 条`,
