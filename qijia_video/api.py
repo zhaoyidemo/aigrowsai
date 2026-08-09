@@ -126,6 +126,10 @@ class NarrationPreviewRequest(RevisionRequest):
     confirm_cost: Literal[True]
 
 
+class NewsResearchRetryRequest(RevisionRequest):
+    confirm_cost: Literal[True]
+
+
 class ScriptApprovalRequest(RevisionRequest):
     script_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
@@ -623,6 +627,29 @@ async def retry_job(job_id: str, user: dict = Depends(get_current_user)):
         "reused": run.reused,
         "requires_review": False,
     })
+
+
+@api_router.post("/jobs/{job_id}/actions/retry-news-research")
+@boundary
+async def retry_news_research(
+    job_id: str,
+    body: NewsResearchRetryRequest,
+    user: dict = Depends(get_current_user),
+):
+    actor = actor_from_user(user)
+    job = await runtime.service.authorize_news_research_retry(
+        job_id,
+        body.expected_revision,
+        actor,
+    )
+    run = await start_run("generate_script", job.id, actor)
+    return ok({
+        "job": public_job_payload(
+            await runtime.service.get_job(job.id, actor), user
+        ),
+        "task_id": run.task_id,
+        "reused": run.reused,
+    }, "已由编辑确认重新研究，正在生成脚本")
 
 
 @api_router.post("/jobs/{job_id}/actions/revise-script")

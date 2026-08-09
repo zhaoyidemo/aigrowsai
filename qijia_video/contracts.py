@@ -497,7 +497,7 @@ class NewsResearchBrief(ContractModel):
     )
     interaction_opportunity: str = Field(default="", max_length=1000)
     evidence: list[PersonResearchEvidence] = Field(
-        default_factory=list, min_length=2, max_length=10
+        default_factory=list, min_length=1, max_length=10
     )
     uncertainties: list[str] = Field(default_factory=list, max_length=10)
     model_id: str = Field(default="", max_length=256)
@@ -506,18 +506,6 @@ class NewsResearchBrief(ContractModel):
 
     @model_validator(mode="after")
     def validate_news_evidence_mix(self):
-        hosts = {
-            (urlparse(item.source_url).hostname or "").lower().removeprefix("www.")
-            for item in self.evidence
-        }
-        hosts.discard("")
-        if len(hosts) < 2:
-            raise ValueError("最新新闻简报必须包含两个不同站点的来源")
-        source_kinds = {item.source_kind for item in self.evidence}
-        if not source_kinds.intersection({"official", "primary"}):
-            raise ValueError("最新新闻简报必须包含官方或原始来源")
-        if "independent" not in source_kinds:
-            raise ValueError("最新新闻简报必须包含可信独立来源")
         if not any(
             item.published_at or item.event_at for item in self.evidence
         ):
@@ -529,6 +517,21 @@ class NewsResearchBrief(ContractModel):
         if frozen_at.tzinfo is None:
             raise ValueError("最新新闻检索截止时间必须包含时区")
         return self
+
+
+class ResearchDiagnostics(ContractModel):
+    """Bounded citation-matching diagnostics safe to expose to an editor."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    operation: Literal["recent_news_research"] = "recent_news_research"
+    attempt_count: int = Field(default=0, ge=0)
+    citation_count: int = Field(default=0, ge=0)
+    candidate_evidence_count: int = Field(default=0, ge=0)
+    accepted_evidence_count: int = Field(default=0, ge=0)
+    accepted_site_count: int = Field(default=0, ge=0)
+    rejected_counts: dict[str, int] = Field(default_factory=dict)
+    detail: str = Field(default="", max_length=1000)
+    generated_at: str = Field(default="", max_length=64)
 
 
 class ScriptBeat(ContractModel):
@@ -1178,10 +1181,14 @@ class VideoJob(ContractModel):
     skill_snapshot: ContentSkillSnapshot | None = None
     # None 仅用于兼容上线前已经持久化的任务；所有新任务都会冻结完整配置。
     generation_settings: GenerationSettings | None = None
-    # Optional research must never become another production gate. A failed
-    # attempt is remembered so retries do not silently repeat a paid search.
+    # Research results and bounded failure diagnostics live in the aggregate so
+    # retries never silently repeat a paid search.
     research_brief: PersonResearchBrief | NewsResearchBrief | None = None
     research_warning: str = Field(default="", max_length=2000)
+    research_diagnostics: ResearchDiagnostics | None = None
+    # One initial research attempt is implicit. Every additional paid attempt
+    # requires an editor-authorized increment through the dedicated API.
+    research_retry_authorizations: int = Field(default=0, ge=0)
     script: ScriptDraft | None = None
     script_hash: str = ""
     script_review: ScriptReview | None = None

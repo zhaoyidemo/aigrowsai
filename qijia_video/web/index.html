@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.15.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.15.1">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -227,7 +227,7 @@
             <label class="primary-field">
               <span class="question-line"><span class="question-number">2</span>最关心哪个角度？（可选）</span>
               <textarea name="focus" maxlength="1000" rows="5" placeholder="例如：最近一周的重要发布、合作或产品变化，以及它对普通用户意味着什么。"></textarea>
-              <span class="field-hint">系统会冻结任务创建时间，检索官方与独立来源；无法形成两个不同站点的可追溯证据时会停止，不会降级为无来源脚本。</span>
+              <span class="field-hint">系统会冻结任务创建时间并优先检索官方与独立来源；至少一条证据必须能与检索注释匹配并带有事件或发布时间。只有单一站点时会醒目标注，交由你审核，不再阻断脚本。</span>
             </label>
             <label>内容领域
               <select name="content_domain">
@@ -466,11 +466,13 @@
           </section>
           <button id="revise-script-button" class="button primary" type="button" hidden>返回修改脚本</button>
           <button id="retry-button" class="button danger" type="button" hidden>从失败阶段重试</button>
+          <p id="research-retry-detail" class="cost-note" hidden></p>
+          <button id="retry-research-button" class="button danger" type="button" hidden>重新研究并生成脚本（产生一次检索费用）</button>
         </section>
       </section>
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.15.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.15.1"></script>
 </body>
 </html>

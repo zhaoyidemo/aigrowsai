@@ -15,6 +15,7 @@ import zipfile
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from qijia_video import MODULE_VERSION
 from qijia_video.contracts import (
@@ -35,6 +36,7 @@ from qijia_video.contracts import (
     ProviderTaskState,
     ProviderUsageRecord,
     QualityReport,
+    ResearchDiagnostics,
     RenderManifest,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
@@ -799,6 +801,60 @@ class QijiaVideoService:
     def content_skills(self) -> list[dict]:
         return self.skill_registry.public_catalog()
 
+    @staticmethod
+    def _news_research_warning(brief: NewsResearchBrief) -> str:
+        hosts = {
+            (urlsplit(item.source_url).hostname or "")
+            .lower()
+            .removeprefix("www.")
+            for item in brief.evidence
+        }
+        hosts.discard("")
+        kinds = {item.source_kind for item in brief.evidence}
+        warnings: list[str] = []
+        if len(hosts) < 2:
+            warnings.append(
+                "本次新闻研究只有一个可追溯站点，未完成跨站点交叉验证"
+            )
+        if not kinds.intersection({"official", "primary"}):
+            warnings.append("尚未找到官方或原始材料")
+        if "independent" not in kinds:
+            warnings.append("尚未找到可信独立报道")
+        return "；".join(warnings) + ("。请在脚本审核时谨慎确认。" if warnings else "")
+
+    async def authorize_news_research_retry(
+        self,
+        job_id: str,
+        expected_revision: int,
+        actor: Actor,
+    ) -> VideoJob:
+        """Authorize one additional user-initiated retry of a failed news search."""
+
+        job = await self.get_job(job_id, actor)
+        self._assert_revision(job.revision, expected_revision)
+        if (
+            job.state != JobState.FAILED
+            or job.failed_stage != "script"
+            or job.research_brief is not None
+            or not job.skill_snapshot
+            or job.skill_snapshot.research_mode
+            != SkillResearchMode.RECENT_NEWS_REQUIRED
+        ):
+            raise InvalidTransition("当前任务不需要重新研究最新新闻")
+        attempt_count = sum(
+            item.operation == "recent_news_research"
+            for item in job.usage_records
+        )
+        attempt_limit = 1 + job.research_retry_authorizations
+        if attempt_count >= attempt_limit:
+            job.research_retry_authorizations += 1
+        job.state = JobState.CARD_VERIFIED
+        job.failed_stage = ""
+        job.error = ""
+        job.research_warning = ""
+        job.research_diagnostics = None
+        return await self._save_job(job, actor)
+
     async def list_jobs(self, actor: Actor, *, limit: int = 100) -> list[VideoJob]:
         return [
             VideoJob.model_validate(item)
@@ -1027,10 +1083,19 @@ class QijiaVideoService:
                 SkillResearchMode.PERSON_VIEWPOINT_OPTIONAL: "person_research",
                 SkillResearchMode.RECENT_NEWS_REQUIRED: "recent_news_research",
             }.get(research_mode, "")
-            research_usage_exists = any(
+            research_usage_count = sum(
                 item.operation == research_operation
                 for item in job.usage_records
-            ) if research_operation else False
+            ) if research_operation else 0
+            research_usage_exists = bool(research_usage_count)
+            research_attempt_limit = (
+                1 + job.research_retry_authorizations
+                if research_required
+                else 1
+            )
+            research_submission_available = (
+                research_usage_count < research_attempt_limit
+            )
             skill_research = getattr(
                 self.script_provider, "research_for_skill", None
             )
@@ -1047,11 +1112,15 @@ class QijiaVideoService:
                 card = self._card_with_person_research(
                     card, job.research_brief
                 )
-            elif research_mode != SkillResearchMode.NONE and research_usage_exists:
+            elif (
+                research_mode != SkillResearchMode.NONE
+                and research_usage_exists
+                and not research_submission_available
+            ):
                 if not job.research_warning:
                     job.research_warning = (
-                        "上次最新新闻研究调用未形成完整简报；为避免重复计费，"
-                        "本次不会自动重新提交，且禁止降级生成脚本。"
+                        "上次最新新闻研究调用未形成可追溯简报；为避免自动重复计费，"
+                        "请由编辑点击“重新研究”后再提交一次。"
                         if research_required
                         else (
                             "上次自动研究调用未形成完整简报；为避免重复计费，"
@@ -1122,22 +1191,49 @@ class QijiaVideoService:
                         )
                     card = self._card_with_person_research(card, brief)
                     job.research_brief = brief
-                    job.research_warning = ""
+                    job.research_warning = (
+                        self._news_research_warning(brief)
+                        if isinstance(brief, NewsResearchBrief)
+                        else ""
+                    )
+                    job.research_diagnostics = None
                     job.source_card_snapshot = card.model_dump(mode="json")
                     job = await self._save_job(job, actor)
                 except Exception as research_error:
+                    detail = str(research_error).strip() or "未知研究错误"
                     job.research_warning = (
                         (
-                            "最新新闻研究未形成两个独立、可追溯的来源，"
-                            "禁止降级生成脚本："
-                            if research_required
-                            else (
-                                "自动研究暂未形成可追溯简报，"
-                                "已使用原始人物观点继续生成："
-                            )
+                            detail
+                            if detail.startswith("最新新闻研究")
+                            else "最新新闻研究失败，未生成无来源脚本：" + detail
                         )
-                        + str(research_error)
+                        if research_required
+                        else (
+                            "自动研究暂未形成可追溯简报，"
+                            "已使用原始人物观点继续生成：" + detail
+                        )
                     )[:2000]
+                    if research_required:
+                        diagnostic_data = dict(
+                            getattr(research_error, "diagnostics", {}) or {}
+                        )
+                        diagnostic_data.update({
+                            "schema_version": "1.0",
+                            "operation": "recent_news_research",
+                            "attempt_count": sum(
+                                item.operation == "recent_news_research"
+                                for item in job.usage_records
+                            ),
+                            "detail": str(
+                                diagnostic_data.get("detail") or detail
+                            )[:1000],
+                            "generated_at": str(
+                                diagnostic_data.get("generated_at") or timestamp()
+                            ),
+                        })
+                        job.research_diagnostics = (
+                            ResearchDiagnostics.model_validate(diagnostic_data)
+                        )
                     job = await self._save_job(job, actor)
                     if research_required:
                         raise QualityGateFailed(job.research_warning) from research_error

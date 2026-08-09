@@ -182,6 +182,13 @@ function generationDefaults() {
   };
 }
 
+function isNewsResearchFailure(job) {
+  return job?.state === 'failed'
+    && job?.failed_stage === 'script'
+    && job?.skill_snapshot?.research_mode === 'recent_news_required'
+    && !job?.research_brief;
+}
+
 function contentSkills() {
   return Array.isArray(state.capabilities?.content_skills)
     ? state.capabilities.content_skills
@@ -2190,6 +2197,7 @@ function applyJobReadOnly(job) {
     '#save-script-button',
     '#approve-script-button',
     '#retry-button',
+    '#retry-research-button',
     '#revise-script-button',
     '#preview-tts-button',
   ].join(',')).forEach((node) => {
@@ -2254,12 +2262,44 @@ function renderDetail() {
   error.hidden = !job.error;
   error.textContent = job.error || '任务失败';
   const narrationFailure = isNarrationRevisionFailure(job);
+  const newsResearchFailure = isNewsResearchFailure(job);
   const reviseButton = $('#revise-script-button');
   reviseButton.hidden = !narrationFailure;
   reviseButton.textContent = (job.visual_requests || []).length
     ? '返回修改脚本（复用现有画面）'
     : '返回修改脚本';
-  $('#retry-button').hidden = job.state !== 'failed' || narrationFailure;
+  $('#retry-button').hidden = (
+    job.state !== 'failed' || narrationFailure || newsResearchFailure
+  );
+  const retryResearchButton = $('#retry-research-button');
+  retryResearchButton.hidden = !newsResearchFailure;
+  const researchRetryDetail = $('#research-retry-detail');
+  const diagnostics = job.research_diagnostics || {};
+  const rejectionLabels = {
+    invalid_item: '无效证据结构',
+    invalid_url: '无效 URL',
+    citation_not_matched: '未匹配检索注释',
+    missing_claim: '缺少事实描述',
+    duplicate_url: '重复 URL',
+    url_too_long: 'URL 过长',
+    missing_host: '缺少站点',
+  };
+  const rejected = Object.entries(diagnostics.rejected_counts || {})
+    .filter(([, count]) => Number(count) > 0)
+    .map(([reason, count]) => `${rejectionLabels[reason] || reason} ${count}`)
+    .join('、');
+  researchRetryDetail.hidden = !newsResearchFailure;
+  researchRetryDetail.textContent = newsResearchFailure
+    ? [
+      `第 ${Number(diagnostics.attempt_count || 1)} 次研究未形成可用简报`,
+      `检索注释 ${Number(diagnostics.citation_count || 0)} 条`,
+      `候选证据 ${Number(diagnostics.candidate_evidence_count || 0)} 条`,
+      `成功匹配 ${Number(diagnostics.accepted_evidence_count || 0)} 条`,
+      `可追溯站点 ${Number(diagnostics.accepted_site_count || 0)} 个`,
+      rejected ? `被过滤：${rejected}` : '',
+      diagnostics.detail || '',
+    ].filter(Boolean).join(' · ')
+    : '';
 
   const scriptSection = $('#script-review');
   scriptSection.hidden = job.state !== 'script_review_required';
@@ -3202,6 +3242,29 @@ $('#retry-button').addEventListener('click', async () => {
     return;
   }
   catch (error) { notify(error.message, true); }
+  finally { setBusy(false); }
+});
+
+$('#retry-research-button').addEventListener('click', async () => {
+  const job = state.selectedJob; if (!job) return;
+  if (!window.confirm('重新研究会产生一次新的 OpenRouter 检索费用，确认继续吗？')) return;
+  setBusy(true); notify('');
+  try {
+    const result = await api(
+      'POST',
+      `/jobs/${encodeURIComponent(job.id)}/actions/retry-news-research`,
+      {expected_revision: job.revision, confirm_cost: true},
+    );
+    if (result.job) updateVisibleJob(result.job);
+    setBusy(false);
+    await pollTask(result.task_id, job.id);
+    notify('最新新闻已重新研究，脚本已更新。');
+    return;
+  }
+  catch (error) {
+    await loadAll({selectJobId: job.id}).catch(() => {});
+    notify(error.message, true);
+  }
   finally { setBusy(false); }
 });
 

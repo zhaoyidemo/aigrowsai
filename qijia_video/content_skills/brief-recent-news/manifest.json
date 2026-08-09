@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "display_name": "最新新闻口播",
   "input_mode": "recent_news_topic",
   "compatible_formats": ["recent_news_briefing"],
@@ -17,7 +17,7 @@
     "uncertainty-labeling"
   ],
   "quality_rules": [
-    "至少使用两个不同站点、可与检索注释匹配的公开来源，并覆盖官方或原始来源与可信独立来源",
+    "至少使用一条可与检索注释匹配且带有事件或发布时间的公开证据；单站点或来源类型不完整时必须醒目标注",
     "明确检索截止时间，不把旧闻包装成刚发生",
     "区分事件发生时间与文章发布时间",
     "预测、计划和传闻不得表述为既成事实"

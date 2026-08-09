@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 from pydantic import ValidationError
@@ -23,7 +23,7 @@ from qijia_video.contracts import (
     content_hash,
     timestamp,
 )
-from qijia_video.errors import ProviderUnavailable
+from qijia_video.errors import ProviderUnavailable, ResearchEvidenceUnavailable
 from qijia_video.prompts import (
     DEFAULT_SCRIPT_PROMPT,
     SCRIPT_OUTPUT_CONTRACT,
@@ -34,7 +34,7 @@ from qijia_video.prompts import (
 SCRIPT_PROMPT_VERSION = "qijia_script_v12_research_interaction"
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v8_max_reasoning"
 PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_research_v1"
-NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v1"
+NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v2"
 OPENROUTER_REASONING_EFFORT = "max"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 PERSON_RESEARCH_MAX_COMPLETION_TOKENS = 48_000
@@ -496,13 +496,42 @@ def _normalized_citation_url(value: Any) -> str:
     if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
         return ""
     path = parts.path.rstrip("/") or "/"
+    query = urlencode([
+        (key, item)
+        for key, item in parse_qsl(parts.query, keep_blank_values=True)
+        if not key.lower().startswith("utm_")
+        and key.lower() not in {
+            "fbclid",
+            "gclid",
+            "mc_cid",
+            "mc_eid",
+            "msclkid",
+        }
+    ])
     return urlunsplit((
         parts.scheme.lower(),
         parts.netloc.lower(),
         path,
-        parts.query,
+        query,
         "",
     ))
+
+
+def _citation_identity(value: Any) -> tuple[str, str]:
+    """Match one canonical article when only tracking/query details differ."""
+
+    normalized = _normalized_citation_url(value)
+    if not normalized:
+        return "", ""
+    parts = urlsplit(normalized)
+    host = (parts.hostname or "").lower().removeprefix("www.")
+    try:
+        port = parts.port
+    except ValueError:
+        return "", ""
+    if port:
+        host = f"{host}:{port}"
+    return host, parts.path.rstrip("/") or "/"
 
 
 def _citation_catalog(message: dict) -> dict[str, dict[str, str]]:
@@ -522,6 +551,25 @@ def _citation_catalog(message: dict) -> dict[str, dict[str, str]]:
             "title": str(citation.get("title") or "").strip(),
         }
     return catalog
+
+
+def _matched_citation(
+    catalog: dict[str, dict[str, str]],
+    source_url: Any,
+) -> dict[str, str] | None:
+    normalized = _normalized_citation_url(source_url)
+    exact = catalog.get(normalized)
+    if exact:
+        return exact
+    identity = _citation_identity(source_url)
+    if not all(identity):
+        return None
+    candidates = {
+        item["url"]: item
+        for item in catalog.values()
+        if _citation_identity(item.get("url")) == identity
+    }
+    return next(iter(candidates.values())) if len(candidates) == 1 else None
 
 
 def _nonnegative_int(value: Any) -> int:
@@ -992,7 +1040,7 @@ class OpenRouterScriptProvider:
         as_of: str = "",
         on_usage: UsageRecorder | None = None,
     ) -> NewsResearchBrief:
-        """Research current news and require two independently cited sources."""
+        """Research current news and require at least one cited, timed source."""
 
         if not self.configured:
             raise ProviderUnavailable(
@@ -1011,7 +1059,9 @@ class OpenRouterScriptProvider:
                 if research_prompt.strip()
                 else ""
             )
-            + "至少使用两个不同站点的可追溯来源，并同时覆盖官方或原始材料与可信独立来源。"
+            + "至少形成一条与本次检索注释匹配、可追溯且带发布时间或事件时间的证据。"
+            "优先同时检索官方或原始材料与可信独立来源，但不得为了凑站点而采用低质量转载；"
+            "只有一个可追溯站点、缺少官方材料或缺少独立报道时不得猜测，必须写入 uncertainties。"
             "每条 evidence 只写来源能够直接支持的一个事实，source_url 必须原样使用本次检索"
             "结果中的 URL。published_at 写页面标注的发布时间，event_at 写事件发生时间；未知时"
             "填写空字符串，不得猜测。source_kind 只能是 official、primary、independent 或"
@@ -1034,7 +1084,7 @@ class OpenRouterScriptProvider:
                 {"role": "user", "content": prompt},
             ],
             label="最新新闻研究",
-            schema_name="recent_news_research_v1",
+            schema_name="recent_news_research_v2",
             response_schema=_NEWS_RESEARCH_RESPONSE_SCHEMA,
             max_completion_tokens=NEWS_RESEARCH_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,
@@ -1063,21 +1113,41 @@ class OpenRouterScriptProvider:
         grounded_evidence: list[dict[str, str]] = []
         seen_urls: set[str] = set()
         source_hosts: set[str] = set()
-        for raw in response.data.get("evidence") or []:
+        rejected_counts: dict[str, int] = {}
+
+        def reject(reason: str) -> None:
+            rejected_counts[reason] = rejected_counts.get(reason, 0) + 1
+
+        raw_evidence = response.data.get("evidence") or []
+        raw_evidence = raw_evidence if isinstance(raw_evidence, list) else []
+        for raw in raw_evidence:
             if not isinstance(raw, dict):
+                reject("invalid_item")
                 continue
             normalized_url = _normalized_citation_url(raw.get("source_url"))
-            citation = citations.get(normalized_url)
-            claim = str(raw.get("claim") or "").strip()
-            if (
-                not citation
-                or not claim
-                or normalized_url in seen_urls
-                or len(citation["url"]) > 2000
-            ):
+            if not normalized_url:
+                reject("invalid_url")
                 continue
-            host = (urlsplit(citation["url"]).hostname or "").lower()
+            citation = _matched_citation(citations, raw.get("source_url"))
+            claim = str(raw.get("claim") or "").strip()
+            if not citation:
+                reject("citation_not_matched")
+                continue
+            if not claim:
+                reject("missing_claim")
+                continue
+            citation_key = _normalized_citation_url(citation["url"])
+            if citation_key in seen_urls:
+                reject("duplicate_url")
+                continue
+            if len(citation["url"]) > 2000:
+                reject("url_too_long")
+                continue
+            host = (
+                urlsplit(citation["url"]).hostname or ""
+            ).lower().removeprefix("www.")
             if not host:
+                reject("missing_host")
                 continue
             source_kind = str(raw.get("source_kind") or "other").strip()
             if source_kind not in {
@@ -1087,7 +1157,7 @@ class OpenRouterScriptProvider:
                 "other",
             }:
                 source_kind = "other"
-            seen_urls.add(normalized_url)
+            seen_urls.add(citation_key)
             source_hosts.add(host)
             grounded_evidence.append({
                 "claim": claim[:1200],
@@ -1101,15 +1171,47 @@ class OpenRouterScriptProvider:
                 "published_at": str(raw.get("published_at") or "").strip()[:64],
                 "event_at": str(raw.get("event_at") or "").strip()[:64],
             })
-        if len(grounded_evidence) < 2 or len(source_hosts) < 2:
-            raise ProviderUnavailable(
-                "最新新闻研究没有形成两个不同站点的可追溯来源，禁止降级生成脚本"
+        diagnostics = {
+            "schema_version": "1.0",
+            "operation": "recent_news_research",
+            "citation_count": len(citations),
+            "candidate_evidence_count": len(raw_evidence),
+            "accepted_evidence_count": len(grounded_evidence),
+            "accepted_site_count": len(source_hosts),
+            "rejected_counts": rejected_counts,
+            "generated_at": timestamp(),
+        }
+        if not grounded_evidence:
+            diagnostics["detail"] = "没有 evidence 与本次 web_search citation 成功匹配"
+            raise ResearchEvidenceUnavailable(
+                "没有形成可追溯的新闻证据",
+                diagnostics,
             )
         generated = dict(response.data)
 
         def bounded_list(key: str, maximum: int) -> list:
             value = generated.get(key)
             return list(value[:maximum]) if isinstance(value, list) else []
+
+        uncertainties = [
+            str(item).strip()
+            for item in bounded_list("uncertainties", 10)
+            if str(item).strip()
+        ]
+
+        def add_uncertainty(message: str) -> None:
+            if message not in uncertainties:
+                uncertainties.append(message)
+
+        source_kinds = {item["source_kind"] for item in grounded_evidence}
+        if len(source_hosts) < 2:
+            add_uncertainty(
+                "本次研究只有一个可追溯站点，尚未完成跨站点交叉验证。"
+            )
+        if not source_kinds.intersection({"official", "primary"}):
+            add_uncertainty("本次研究尚未找到官方或原始材料。")
+        if "independent" not in source_kinds:
+            add_uncertainty("本次研究尚未找到可信独立报道。")
 
         generated.update({
             "schema_version": "1.0",
@@ -1119,7 +1221,7 @@ class OpenRouterScriptProvider:
             "audience_relevance": bounded_list("audience_relevance", 6),
             "content_angles": bounded_list("content_angles", 5),
             "evidence": grounded_evidence[:10],
-            "uncertainties": bounded_list("uncertainties", 10),
+            "uncertainties": uncertainties[:10],
             "model_id": response.model_id,
             "prompt_version": NEWS_RESEARCH_PROMPT_VERSION,
             "generated_at": timestamp(),
@@ -1127,8 +1229,15 @@ class OpenRouterScriptProvider:
         try:
             return NewsResearchBrief.model_validate(generated)
         except (TypeError, ValidationError) as exc:
-            raise ProviderUnavailable(
-                "最新新闻研究返回内容不符合研究简报契约，禁止降级生成脚本"
+            detail = (
+                str(exc.errors()[0].get("msg") or "")
+                if isinstance(exc, ValidationError) and exc.errors()
+                else str(exc)
+            )[:500]
+            diagnostics["detail"] = detail
+            raise ResearchEvidenceUnavailable(
+                "研究结果缺少必要字段或时间信息",
+                diagnostics,
             ) from exc
 
     def _prompt(self, card: SourceCard, prompt: str | None = None) -> str:
