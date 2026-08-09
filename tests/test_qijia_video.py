@@ -1413,7 +1413,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request_body["tool_choice"], "required")
         self.assertEqual(
             request_body["response_format"]["json_schema"]["name"],
-            "recent_news_research_v3",
+            "recent_news_research_v4",
         )
         self.assertEqual(
             request_body["tools"][0]["parameters"]["max_total_results"],
@@ -1571,6 +1571,153 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             "检索注释原文摘录补全" in item
             for item in brief.uncertainties
         ))
+
+    async def test_recent_news_research_whitelists_provider_fields_and_fills_editorial_gaps(self):
+        source_url = "https://official.example/releases/tera-fab"
+        claim = "官方在 2026-08-09 公布了 TERA FAB 项目计划。"
+
+        def handler(_: httpx.Request) -> httpx.Response:
+            generated = {
+                "summary": "",
+                "core_tension": "",
+                "audience_relevance": [""],
+                "content_angles": [],
+                "interaction_opportunity": "",
+                "evidence": [{
+                    "claim": claim,
+                    "source_title": "模型标题",
+                    "source_url": source_url,
+                    "source_kind": "official",
+                    "published_at": "2026-08-09",
+                    "event_at": "",
+                }],
+                "uncertainties": [""],
+                "provider_extra": {"trace": "must-not-enter-brief"},
+            }
+            return httpx.Response(200, json={
+                "choices": [{"message": {
+                    "content": json.dumps(generated, ensure_ascii=False),
+                    "annotations": [{
+                        "type": "url_citation",
+                        "url_citation": {
+                            "url": source_url,
+                            "title": "官方发布记录",
+                        },
+                    }],
+                }}],
+            })
+
+        provider = OpenRouterScriptProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="test/news-model",
+            transport=httpx.MockTransport(handler),
+        )
+        card_input = NewsTopicInput(topic="TERA FAB").to_source_card_input()
+        card = SourceCard(
+            **card_input.model_dump(mode="json"),
+            id="card-news-provider-extra",
+            revision=1,
+            status="verified",
+        )
+
+        brief = await provider.research_recent_news(card)
+
+        self.assertEqual(brief.summary, claim)
+        self.assertIn("后续实际影响仍需区分", brief.core_tension)
+        self.assertEqual(len(brief.audience_relevance), 1)
+        self.assertEqual(len(brief.content_angles), 1)
+        self.assertNotIn(
+            "provider_extra",
+            brief.model_dump(mode="json"),
+        )
+
+    async def test_recent_news_research_only_reports_time_failure_when_time_is_missing(self):
+        source_url = "https://official.example/releases/tera-fab"
+
+        def handler(_: httpx.Request) -> httpx.Response:
+            generated = {
+                "summary": "官方公布了一项可核验的新计划。",
+                "core_tension": "计划与实际落地仍需区分。",
+                "audience_relevance": ["用户需要知道已经确认了什么。"],
+                "content_angles": ["只讲来源能直接支持的已确认变化。"],
+                "interaction_opportunity": "",
+                "evidence": [{
+                    "claim": "官方公布了 TERA FAB 项目计划。",
+                    "source_title": "模型标题",
+                    "source_url": source_url,
+                    "source_kind": "official",
+                    "published_at": "",
+                    "event_at": "",
+                }],
+                "uncertainties": [],
+            }
+            return httpx.Response(200, json={
+                "choices": [{"message": {
+                    "content": json.dumps(generated, ensure_ascii=False),
+                    "annotations": [{
+                        "type": "url_citation",
+                        "url_citation": {
+                            "url": source_url,
+                            "title": "官方发布记录",
+                        },
+                    }],
+                }}],
+            })
+
+        provider = OpenRouterScriptProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="test/news-model",
+            transport=httpx.MockTransport(handler),
+        )
+        card_input = NewsTopicInput(topic="TERA FAB").to_source_card_input()
+        card = SourceCard(
+            **card_input.model_dump(mode="json"),
+            id="card-news-missing-time",
+            revision=1,
+            status="verified",
+        )
+
+        with self.assertRaisesRegex(
+            ResearchEvidenceUnavailable,
+            "检索证据缺少事件或发布时间",
+        ) as raised:
+            await provider.research_recent_news(card)
+
+        diagnostics = raised.exception.diagnostics
+        self.assertEqual(diagnostics["accepted_evidence_count"], 1)
+        self.assertEqual(diagnostics["accepted_timed_evidence_count"], 0)
+        self.assertEqual(diagnostics["matched_citation_count"], 1)
+
+    async def test_recent_news_research_rejects_invalid_time_before_paid_call(self):
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(500)
+
+        provider = OpenRouterScriptProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="test/news-model",
+            transport=httpx.MockTransport(handler),
+        )
+        card_input = NewsTopicInput(topic="TERA FAB").to_source_card_input()
+        card = SourceCard(
+            **card_input.model_dump(mode="json"),
+            id="card-news-invalid-as-of",
+            revision=1,
+            status="verified",
+        )
+
+        with self.assertRaisesRegex(
+            ProviderUnavailable,
+            "截止时间无效，未调用模型",
+        ):
+            await provider.research_recent_news(card, as_of="not-an-iso-time")
+
+        self.assertEqual(calls, [])
 
     async def test_recent_news_research_reports_matched_blank_claim_without_excerpt(self):
         source_url = "https://cited.example/news"

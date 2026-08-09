@@ -53,6 +53,9 @@ test('content Skills select versioned expert or recent-news workflows', () => {
   assert.match(app, /web_search_requests/);
   assert.match(app, /matched_citation_count/);
   assert.match(app, /citation_excerpt_claim_count/);
+  assert.match(app, /accepted_timed_evidence_count/);
+  assert.match(app, /unexpected_response_fields/);
+  assert.match(app, /validation_errors/);
   assert.match(app, /实际联网检索次数：供应商未回传/);
   assert.match(app, /recent_news_research: 1/);
   assert.match(app, /job\.skill_snapshot\?\.display_name/);

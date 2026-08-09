@@ -2300,10 +2300,19 @@ function renderDetail() {
       `候选证据 ${Number(diagnostics.candidate_evidence_count || 0)} 条`,
       `引用 URL 已匹配 ${Number(diagnostics.matched_citation_count || 0)} 条`,
       `通过完整性校验 ${Number(diagnostics.accepted_evidence_count || 0)} 条`,
+      diagnostics.accepted_timed_evidence_count == null
+        ? ''
+        : `带事件或发布时间 ${Number(diagnostics.accepted_timed_evidence_count)} 条`,
       Number(diagnostics.citation_excerpt_claim_count || 0) > 0
         ? `由检索摘录补全事实描述 ${Number(diagnostics.citation_excerpt_claim_count)} 条`
         : '',
       `可追溯站点 ${Number(diagnostics.accepted_site_count || 0)} 个`,
+      (diagnostics.unexpected_response_fields || []).length
+        ? `已隔离上游额外字段：${diagnostics.unexpected_response_fields.join('、')}`
+        : '',
+      (diagnostics.validation_errors || []).length
+        ? `字段校验：${diagnostics.validation_errors.join('；')}`
+        : '',
       rejected ? `被过滤：${rejected}` : '',
       diagnostics.detail || '',
     ].filter(Boolean).join(' · ')

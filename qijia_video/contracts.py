@@ -531,6 +531,7 @@ class ResearchDiagnostics(ContractModel):
     matched_citation_count: int = Field(default=0, ge=0)
     accepted_evidence_count: int = Field(default=0, ge=0)
     accepted_site_count: int = Field(default=0, ge=0)
+    accepted_timed_evidence_count: int | None = Field(default=None, ge=0)
     citation_excerpt_claim_count: int = Field(default=0, ge=0)
     citation_identity_samples: list[str] = Field(
         default_factory=list, max_length=5
@@ -538,6 +539,10 @@ class ResearchDiagnostics(ContractModel):
     candidate_identity_samples: list[str] = Field(
         default_factory=list, max_length=5
     )
+    unexpected_response_fields: list[str] = Field(
+        default_factory=list, max_length=10
+    )
+    validation_errors: list[str] = Field(default_factory=list, max_length=10)
     rejected_counts: dict[str, int] = Field(default_factory=dict)
     detail: str = Field(default="", max_length=1000)
     generated_at: str = Field(default="", max_length=64)

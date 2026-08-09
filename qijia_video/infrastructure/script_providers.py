@@ -6,6 +6,7 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -35,7 +36,7 @@ from qijia_video.prompts import (
 SCRIPT_PROMPT_VERSION = "qijia_script_v12_research_interaction"
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v8_max_reasoning"
 PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_research_v1"
-NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v3"
+NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v4"
 OPENROUTER_REASONING_EFFORT = "max"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 PERSON_RESEARCH_MAX_COMPLETION_TOKENS = 48_000
@@ -1095,6 +1096,16 @@ class OpenRouterScriptProvider:
             )
         topic = card.subject.name
         frozen_as_of = str(as_of or timestamp()).strip()
+        try:
+            frozen_at = datetime.fromisoformat(frozen_as_of)
+        except ValueError as exc:
+            raise ProviderUnavailable(
+                "最新新闻研究截止时间无效，未调用模型"
+            ) from exc
+        if frozen_at.tzinfo is None or len(frozen_as_of) > 64:
+            raise ProviderUnavailable(
+                "最新新闻研究截止时间无效，未调用模型"
+            )
         prompt = (
             "请为一条中文知识短视频完成最新新闻联网研究。必须先检索，再输出中文 JSON。\n\n"
             f"检索截止时间（Asia/Shanghai）：{frozen_as_of}\n"
@@ -1116,7 +1127,8 @@ class OpenRouterScriptProvider:
             "填写空字符串，不得猜测。source_kind 只能是 official、primary、independent 或"
             " other。summary 概括最新且最重要的变化；core_tension 写清它为什么值得现在关注；"
             "audience_relevance、content_angles 各写 2-4 条；无法确认、来源冲突或可能同名混淆"
-            "的内容写入 uncertainties。只返回 schema 要求的 JSON。"
+            "的内容写入 uncertainties。summary、core_tension、audience_relevance 和"
+            "content_angles 均不得为空；只返回 schema 要求的字段和 JSON。"
         )
         response = await _openrouter_json_request(
             api_key=self.api_key,
@@ -1133,7 +1145,7 @@ class OpenRouterScriptProvider:
                 {"role": "user", "content": prompt},
             ],
             label="最新新闻研究",
-            schema_name="recent_news_research_v3",
+            schema_name="recent_news_research_v4",
             response_schema=_NEWS_RESEARCH_RESPONSE_SCHEMA,
             max_completion_tokens=NEWS_RESEARCH_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,
@@ -1247,6 +1259,18 @@ class OpenRouterScriptProvider:
             )
             if label
         ][:5]
+        expected_response_fields = set(
+            _NEWS_RESEARCH_RESPONSE_SCHEMA["properties"]
+        )
+        unexpected_response_fields = sorted(
+            str(key)
+            for key in response.data
+            if key not in expected_response_fields
+        )[:10]
+        accepted_timed_evidence_count = sum(
+            bool(item["published_at"] or item["event_at"])
+            for item in grounded_evidence
+        )
         diagnostics = {
             "schema_version": "1.0",
             "operation": "recent_news_research",
@@ -1256,9 +1280,11 @@ class OpenRouterScriptProvider:
             "matched_citation_count": matched_citation_count,
             "accepted_evidence_count": len(grounded_evidence),
             "accepted_site_count": len(source_hosts),
+            "accepted_timed_evidence_count": accepted_timed_evidence_count,
             "citation_excerpt_claim_count": citation_excerpt_claim_count,
             "citation_identity_samples": citation_identity_samples,
             "candidate_identity_samples": candidate_identity_samples,
+            "unexpected_response_fields": unexpected_response_fields,
             "rejected_counts": rejected_counts,
             "generated_at": timestamp(),
         }
@@ -1319,60 +1345,126 @@ class OpenRouterScriptProvider:
                 message,
                 diagnostics,
             )
-        generated = dict(response.data)
+        if accepted_timed_evidence_count == 0:
+            diagnostics["detail"] = (
+                f"accepted_evidence_count={len(grounded_evidence)}，"
+                "accepted_timed_evidence_count=0"
+            )
+            raise ResearchEvidenceUnavailable(
+                "检索证据缺少事件或发布时间",
+                diagnostics,
+            )
 
-        def bounded_list(key: str, maximum: int) -> list:
-            value = generated.get(key)
-            return list(value[:maximum]) if isinstance(value, list) else []
+        def bounded_text(key: str, maximum: int) -> str:
+            value = response.data.get(key)
+            return value.strip()[:maximum] if isinstance(value, str) else ""
 
-        uncertainties = [
-            str(item).strip()
-            for item in bounded_list("uncertainties", 10)
-            if str(item).strip()
-        ]
+        def bounded_strings(
+            key: str,
+            maximum: int,
+            *,
+            item_maximum: int = 1200,
+        ) -> list[str]:
+            value = response.data.get(key)
+            if not isinstance(value, list):
+                return []
+            return [
+                item.strip()[:item_maximum]
+                for item in value
+                if isinstance(item, str) and item.strip()
+            ][:maximum]
 
-        def add_uncertainty(message: str) -> None:
-            if message not in uncertainties:
-                uncertainties.append(message)
+        model_uncertainties = bounded_strings(
+            "uncertainties",
+            10,
+            item_maximum=1000,
+        )
+        system_uncertainties: list[str] = []
+
+        def add_system_uncertainty(message: str) -> None:
+            if message not in system_uncertainties:
+                system_uncertainties.append(message)
 
         source_kinds = {item["source_kind"] for item in grounded_evidence}
         if len(source_hosts) < 2:
-            add_uncertainty(
+            add_system_uncertainty(
                 "本次研究只有一个可追溯站点，尚未完成跨站点交叉验证。"
             )
         if not source_kinds.intersection({"official", "primary"}):
-            add_uncertainty("本次研究尚未找到官方或原始材料。")
+            add_system_uncertainty("本次研究尚未找到官方或原始材料。")
         if "independent" not in source_kinds:
-            add_uncertainty("本次研究尚未找到可信独立报道。")
+            add_system_uncertainty("本次研究尚未找到可信独立报道。")
         if citation_excerpt_claim_count:
-            add_uncertainty(
+            add_system_uncertainty(
                 "部分证据的事实描述由检索注释原文摘录补全，请在脚本审核时核对。"
             )
 
-        generated.update({
+        uncertainties: list[str] = []
+        for item in (*system_uncertainties, *model_uncertainties):
+            if item not in uncertainties:
+                uncertainties.append(item)
+
+        summary = (
+            bounded_text("summary", 2000)
+            or grounded_evidence[0]["claim"]
+        )
+        core_tension = (
+            bounded_text("core_tension", 1200)
+            or "这项变化的已确认信息与后续实际影响仍需区分。"
+        )
+        audience_relevance = bounded_strings("audience_relevance", 6)
+        if not audience_relevance:
+            audience_relevance = [
+                "需要区分已确认事实、官方计划与仍待验证的后续影响。"
+            ]
+        content_angles = bounded_strings("content_angles", 5)
+        if not content_angles:
+            content_angles = [
+                "先说明来源已经确认的变化，再说明仍待验证的部分。"
+            ]
+
+        # Build the final contract from an explicit allowlist. Provider or
+        # response-healing metadata must never leak into the persisted brief.
+        generated = {
             "schema_version": "1.0",
             "kind": "recent_news",
             "topic": topic,
             "as_of": frozen_as_of,
-            "audience_relevance": bounded_list("audience_relevance", 6),
-            "content_angles": bounded_list("content_angles", 5),
+            "summary": summary,
+            "core_tension": core_tension,
+            "audience_relevance": audience_relevance,
+            "content_angles": content_angles,
+            "interaction_opportunity": bounded_text(
+                "interaction_opportunity",
+                1000,
+            ),
             "evidence": grounded_evidence[:10],
             "uncertainties": uncertainties[:10],
-            "model_id": response.model_id,
+            "model_id": response.model_id[:256],
             "prompt_version": NEWS_RESEARCH_PROMPT_VERSION,
             "generated_at": timestamp(),
-        })
+        }
         try:
             return NewsResearchBrief.model_validate(generated)
         except (TypeError, ValidationError) as exc:
-            detail = (
-                str(exc.errors()[0].get("msg") or "")
-                if isinstance(exc, ValidationError) and exc.errors()
-                else str(exc)
-            )[:500]
-            diagnostics["detail"] = detail
+            if isinstance(exc, ValidationError):
+                validation_errors = []
+                for item in exc.errors()[:10]:
+                    location = ".".join(
+                        str(part) for part in item.get("loc") or ()
+                    )
+                    message = str(item.get("msg") or "字段校验失败")
+                    validation_errors.append(
+                        f"{location}: {message}" if location else message
+                    )
+            else:
+                validation_errors = [str(exc) or "字段校验失败"]
+            diagnostics["validation_errors"] = [
+                item[:500] for item in validation_errors
+            ]
+            diagnostics["detail"] = "；".join(validation_errors)[:1000]
             raise ResearchEvidenceUnavailable(
-                "研究结果缺少必要字段或时间信息",
+                "研究简报字段校验失败",
                 diagnostics,
             ) from exc
 
