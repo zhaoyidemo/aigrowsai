@@ -21,6 +21,7 @@ from qijia_video.contracts import (
     AssetRef,
     GenerationSettings,
     JobState,
+    PersonResearchBrief,
     PersonViewpointInput,
     QuickSourceCardInput,
     QualityReport,
@@ -58,9 +59,14 @@ from qijia_video.infrastructure.mock_providers import (
     TemplateStoryboardProvider,
 )
 from qijia_video.infrastructure.script_providers import (
+    OPENROUTER_REASONING_EFFORT,
     OpenRouterScriptProvider,
     OpenRouterStoryboardProvider,
+    PERSON_RESEARCH_MAX_COMPLETION_TOKENS,
+    PERSON_RESEARCH_PROMPT_VERSION,
+    SCRIPT_MAX_COMPLETION_TOKENS,
     SCRIPT_PROMPT_VERSION,
+    STORYBOARD_MAX_COMPLETION_TOKENS,
 )
 from qijia_video.infrastructure.storage import (
     TOS_DOWNLOAD_ATTEMPTS,
@@ -195,13 +201,13 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(card.verified_facts[0].text, idea.viewpoint)
         self.assertIn("不补造人物经历", card.interpretation_boundary[0].text)
 
-    def test_generation_settings_default_to_two_images_and_preserve_legacy(self):
+    def test_generation_settings_default_to_ten_images_and_preserve_legacy(self):
         settings = GenerationSettings(
             script_prompt="测试脚本写法",
             seedance_prompt="测试镜头风格",
         )
-        self.assertEqual(settings.image_count, 2)
-        self.assertEqual(settings.shot_count, 5)
+        self.assertEqual(settings.image_count, 10)
+        self.assertEqual(settings.shot_count, 13)
         self.assertEqual(settings.video_resolution, "1080p")
         self.assertEqual(settings.seedance_model, SEEDANCE_EFFICIENT_MODEL)
         self.assertEqual(
@@ -747,7 +753,7 @@ class SeedreamProviderContractTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
-    async def test_media_packager_remuxes_without_reencoding(self):
+    async def test_media_packager_normalizes_audio_without_reencoding_video(self):
         packager = FfmpegMediaPackager()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -772,11 +778,16 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, destination)
         arguments = runner.await_args.args
-        self.assertIn("-c", arguments)
-        self.assertEqual(arguments[arguments.index("-c") + 1], "copy")
+        self.assertEqual(arguments[arguments.index("-c:v") + 1], "copy")
+        self.assertEqual(
+            arguments[arguments.index("-af") + 1],
+            "loudnorm=I=-16:TP=-1.5:LRA=7",
+        )
+        self.assertEqual(arguments[arguments.index("-c:a") + 1], "aac")
+        self.assertEqual(arguments[arguments.index("-b:a") + 1], "192k")
+        self.assertEqual(arguments[arguments.index("-ar") + 1], "48000")
         self.assertIn("+faststart", arguments)
         self.assertNotIn("libx264", arguments)
-        self.assertNotIn("aac", arguments)
 
     async def test_media_packager_holds_last_frame_instead_of_slowing_video(self):
         packager = FfmpegMediaPackager()
@@ -1020,8 +1031,15 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             request_body["plugins"], [{"id": "response-healing"}]
         )
         self.assertTrue(request_body["provider"]["require_parameters"])
-        self.assertEqual(request_body["reasoning"]["effort"], "low")
-        self.assertEqual(request_body["max_completion_tokens"], 4800)
+        self.assertEqual(
+            request_body["reasoning"]["effort"],
+            OPENROUTER_REASONING_EFFORT,
+        )
+        self.assertTrue(request_body["reasoning"]["exclude"])
+        self.assertEqual(
+            request_body["max_completion_tokens"],
+            SCRIPT_MAX_COMPLETION_TOKENS,
+        )
         self.assertNotIn("max_tokens", request_body)
         self.assertNotIn("temperature", request_body)
         prompt = request_body["messages"][1]["content"]
@@ -1032,6 +1050,8 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("降低 2 秒流失率、提高 5 秒完播率", prompt)
         self.assertIn("强钩子设计", prompt)
         self.assertIn("导演思维", prompt)
+        self.assertIn("可复用的判断框架", prompt)
+        self.assertIn("具体、低压力、无需暴露隐私", prompt)
         self.assertIn("5-8 段", prompt)
         self.assertIn("narration 是唯一会送入 TTS 的口播", prompt)
         self.assertIn(
@@ -1064,6 +1084,161 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(custom_prompt.startswith("只用短句，语气平静。"))
         self.assertIn("【系统输出格式】", custom_prompt)
         self.assertIn("【本次来源卡】", custom_prompt)
+
+    async def test_person_research_uses_bounded_web_search_and_cited_evidence(self):
+        calls: list[httpx.Request] = []
+        cited_url = "https://example.edu/primary-source"
+        uncited_url = "https://untrusted.example/unsupported"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            generated = {
+                "summary": "该人物的思想可以帮助家长区分支持与替代。",
+                "core_tension": "及时帮助和保留自主空间之间存在真实张力。",
+                "audience_relevance": [
+                    "孩子遇到困难时，家长常在立即接手和继续观察之间摇摆。",
+                    "不同风险场景需要不同程度的支持。",
+                ],
+                "content_angles": [
+                    "先判断风险，再决定帮助到哪一步。",
+                    "把支持拆成提示、示范和代办三个层级。",
+                ],
+                "interaction_opportunity": "你更容易在哪类任务里过早接手？",
+                "evidence": [
+                    {
+                        "claim": "可靠原始资料支持的背景事实。",
+                        "source_title": "模型填写但应由注释覆盖的标题",
+                        "source_url": cited_url,
+                    },
+                    {
+                        "claim": "没有检索注释支持的内容不能进入简报。",
+                        "source_title": "未核验页面",
+                        "source_url": uncited_url,
+                    },
+                ],
+                "uncertainties": ["该观点不能表述为人物逐字原话。"],
+            }
+            return httpx.Response(200, json={
+                "id": "generation-research-1",
+                "model": "resolved/research-model",
+                "choices": [{
+                    "message": {
+                        "content": json.dumps(generated, ensure_ascii=False),
+                        "annotations": [{
+                            "type": "url_citation",
+                            "url_citation": {
+                                "url": cited_url,
+                                "title": "大学原始资料",
+                                "content": "与主题相关的原始资料摘要。",
+                            },
+                        }],
+                    },
+                }],
+                "usage": {
+                    "prompt_tokens": 900,
+                    "completion_tokens": 300,
+                    "total_tokens": 1200,
+                    "cost": 0.045,
+                    "server_tool_use": {"web_search_requests": 2},
+                },
+            })
+
+        provider = OpenRouterScriptProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="test/research-model",
+            transport=httpx.MockTransport(handler),
+        )
+        card_input = PersonViewpointInput(
+            person_name="阿尔弗雷德·阿德勒",
+            viewpoint="真正影响孩子的，是孩子如何理解自己在家庭中的位置。",
+        ).to_source_card_input()
+        card = SourceCard(
+            **card_input.model_dump(mode="json"),
+            id="card-person-research",
+            revision=1,
+            status="verified",
+        )
+        usage_records: list[ProviderUsageRecord] = []
+
+        async def record_usage(usage: ProviderUsageRecord) -> None:
+            usage_records.append(usage)
+
+        brief = await provider.research_person_viewpoint(
+            card, on_usage=record_usage
+        )
+
+        self.assertEqual(len(calls), 1)
+        request_body = json.loads(calls[0].content)
+        self.assertEqual(
+            request_body["reasoning"]["effort"],
+            OPENROUTER_REASONING_EFFORT,
+        )
+        self.assertEqual(
+            request_body["max_completion_tokens"],
+            PERSON_RESEARCH_MAX_COMPLETION_TOKENS,
+        )
+        self.assertEqual(request_body["max_tool_calls"], 2)
+        tool = request_body["tools"][0]
+        self.assertEqual(tool["type"], "openrouter:web_search")
+        self.assertEqual(tool["parameters"]["engine"], "exa")
+        self.assertEqual(tool["parameters"]["mode"], "deep-lite")
+        self.assertEqual(tool["parameters"]["max_uses"], 2)
+        self.assertEqual(tool["parameters"]["max_total_results"], 8)
+        prompt = request_body["messages"][1]["content"]
+        self.assertIn("研究日期（UTC）", prompt)
+        self.assertIn("至少使用两个彼此独立的查询", prompt)
+        self.assertEqual(brief.person_name, card.subject.name)
+        self.assertEqual(brief.viewpoint, card.core_idea)
+        self.assertEqual(brief.prompt_version, PERSON_RESEARCH_PROMPT_VERSION)
+        self.assertEqual(brief.model_id, "resolved/research-model")
+        self.assertEqual(len(brief.evidence), 1)
+        self.assertEqual(brief.evidence[0].source_url, cited_url)
+        self.assertEqual(brief.evidence[0].source_title, "大学原始资料")
+        self.assertEqual(len(usage_records), 1)
+        self.assertEqual(usage_records[0].operation, "person_research")
+        self.assertIn("联网检索 2 次", usage_records[0].note)
+
+    async def test_person_research_rejects_evidence_without_search_citations(self):
+        def handler(_: httpx.Request) -> httpx.Response:
+            generated = {
+                "summary": "看似完整但没有引用注释的研究结果。",
+                "core_tension": "帮助与替代之间的张力。",
+                "audience_relevance": ["家长需要判断帮助边界。"],
+                "content_angles": ["先看风险，再决定介入程度。"],
+                "interaction_opportunity": "你会在哪一步停下来观察？",
+                "evidence": [{
+                    "claim": "没有注释支持的事实。",
+                    "source_title": "未知页面",
+                    "source_url": "https://example.com/uncited",
+                }],
+                "uncertainties": [],
+            }
+            return httpx.Response(200, json={
+                "choices": [{"message": {
+                    "content": json.dumps(generated, ensure_ascii=False),
+                }}],
+            })
+
+        provider = OpenRouterScriptProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="test/research-model",
+            transport=httpx.MockTransport(handler),
+        )
+        card_input = PersonViewpointInput(
+            person_name="阿尔弗雷德·阿德勒",
+            viewpoint="真正影响孩子的，是孩子如何理解自己在家庭中的位置。",
+        ).to_source_card_input()
+        card = SourceCard(
+            **card_input.model_dump(mode="json"),
+            id="card-uncited-research",
+            revision=1,
+            status="verified",
+        )
+
+        with self.assertRaisesRegex(ProviderUnavailable, "检索注释匹配"):
+            await provider.research_person_viewpoint(card)
 
     async def test_openrouter_reports_truncated_json_with_the_exact_stage(self):
         def handler(_: httpx.Request) -> httpx.Response:
@@ -1221,6 +1396,14 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         def storyboard_handler(request: httpx.Request) -> httpx.Response:
             calls.append(request)
             payload = json.loads(request.content)
+            self.assertEqual(
+                payload["reasoning"]["effort"],
+                OPENROUTER_REASONING_EFFORT,
+            )
+            self.assertEqual(
+                payload["max_completion_tokens"],
+                STORYBOARD_MAX_COMPLETION_TOKENS,
+            )
             prompt = payload["messages"][1]["content"]
             self.assertIn("first_frame_prompt", prompt)
             self.assertIn("motion_prompt", prompt)
@@ -1536,6 +1719,129 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.temporary.cleanup()
+
+    async def test_person_research_enriches_the_job_without_adding_a_gate(self):
+        brief = PersonResearchBrief.model_validate({
+            "person_name": "阿尔弗雷德·阿德勒",
+            "viewpoint": "真正影响孩子的，是孩子如何理解自己在家庭中的位置。",
+            "summary": "用家庭位置感解释孩子如何参与真实任务。",
+            "core_tension": "家长的快速帮助可能同时减少孩子的参与空间。",
+            "audience_relevance": ["孩子卡住时，家长容易直接接手。"],
+            "content_angles": ["把帮助拆成观察、提示和接手三个层级。"],
+            "interaction_opportunity": "你最容易在哪类任务里直接接手？",
+            "evidence": [{
+                "claim": "有来源支持的人物与主题背景事实。",
+                "source_title": "大学研究资料",
+                "source_url": "https://example.edu/adler",
+            }],
+            "uncertainties": ["用户观点不是人物逐字引语。"],
+            "model_id": "test/research-model",
+            "prompt_version": PERSON_RESEARCH_PROMPT_VERSION,
+            "generated_at": timestamp(),
+        })
+
+        class ResearchingScriptProvider(TemplateScriptProvider):
+            def __init__(self):
+                self.research_calls = 0
+                self.generated_card: SourceCard | None = None
+                self.generated_prompt = ""
+
+            async def research_person_viewpoint(self, card, *, on_usage=None):
+                del card, on_usage
+                self.research_calls += 1
+                return brief
+
+            async def generate(self, card, prompt=None):
+                self.generated_card = card.model_copy(deep=True)
+                self.generated_prompt = str(prompt or "")
+                return await super().generate(card, prompt)
+
+        provider = ResearchingScriptProvider()
+        self.service.script_provider = provider
+        card = await self.service.create_source_card(
+            PersonViewpointInput(
+                person_name=brief.person_name,
+                viewpoint=brief.viewpoint,
+            ).to_source_card_input(),
+            self.actor,
+        )
+        card = await self.service.verify_source_card(
+            card.id, card.revision, self.actor
+        )
+        job = await self.service.create_job(card.id, self.actor)
+
+        generated = await self.service.generate_script(job.id, self.actor)
+
+        self.assertEqual(generated.state, JobState.SCRIPT_REVIEW_REQUIRED)
+        self.assertEqual(provider.research_calls, 1)
+        self.assertEqual(generated.research_brief, brief)
+        self.assertEqual(generated.research_warning, "")
+        self.assertIn("【自动研究简报】", provider.generated_prompt)
+        self.assertIn(brief.content_angles[0], provider.generated_prompt)
+        enriched = SourceCard.model_validate(generated.source_card_snapshot)
+        self.assertEqual(
+            [item.id for item in enriched.sources if item.id.startswith("research_source")],
+            ["research_source_01"],
+        )
+        self.assertEqual(
+            [item.text for item in enriched.verified_facts if item.id.startswith("research_fact")],
+            [brief.evidence[0].claim],
+        )
+        boundaries = [item.text for item in enriched.interpretation_boundary]
+        self.assertNotIn(
+            "只围绕用户输入的观点展开，不补造人物经历、逐字引语、研究数据或来源出处。",
+            boundaries,
+        )
+        self.assertTrue(any("有来源支持的事实" in item for item in boundaries))
+        enriched_again = self.service._card_with_person_research(enriched, brief)
+        self.assertEqual(len(enriched_again.sources), len(enriched.sources))
+        self.assertEqual(
+            len(enriched_again.verified_facts), len(enriched.verified_facts)
+        )
+
+    async def test_person_research_failure_continues_and_is_not_retried(self):
+        class OneTimeScriptFailureProvider(TemplateScriptProvider):
+            def __init__(self):
+                self.research_calls = 0
+                self.generate_calls = 0
+
+            async def research_person_viewpoint(self, card, *, on_usage=None):
+                del card, on_usage
+                self.research_calls += 1
+                raise ProviderUnavailable("研究服务暂时不可用")
+
+            async def generate(self, card, prompt=None):
+                self.generate_calls += 1
+                if self.generate_calls == 1:
+                    raise ProviderUnavailable("脚本服务暂时不可用")
+                return await super().generate(card, prompt)
+
+        provider = OneTimeScriptFailureProvider()
+        self.service.script_provider = provider
+        card = await self.service.create_source_card(
+            PersonViewpointInput(
+                person_name="阿尔弗雷德·阿德勒",
+                viewpoint="真正影响孩子的，是孩子如何理解自己在家庭中的位置。",
+            ).to_source_card_input(),
+            self.actor,
+        )
+        card = await self.service.verify_source_card(
+            card.id, card.revision, self.actor
+        )
+        job = await self.service.create_job(card.id, self.actor)
+
+        with self.assertRaisesRegex(ProviderUnavailable, "脚本服务暂时不可用"):
+            await self.service.generate_script(job.id, self.actor)
+        failed = await self.service.get_job(job.id, self.actor)
+        self.assertEqual(failed.state, JobState.FAILED)
+        self.assertIn("已使用原始人物观点继续生成", failed.research_warning)
+
+        completed = await self.service.generate_script(job.id, self.actor)
+
+        self.assertEqual(completed.state, JobState.SCRIPT_REVIEW_REQUIRED)
+        self.assertEqual(provider.research_calls, 1)
+        self.assertEqual(provider.generate_calls, 2)
+        self.assertIn("已使用原始人物观点继续生成", completed.research_warning)
 
     async def test_seedance_cost_keeps_submission_price_snapshot(self):
         job = VideoJob.model_validate({
@@ -2021,10 +2327,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             side_effect=lambda bits: seed_widths.append(bits) or len(seed_widths),
         ):
             job = await self.service.produce(job.id, self.actor)
-        self.assertEqual(seed_widths, [31] * 5)
+        self.assertEqual(seed_widths, [31] * 13)
         self.assertEqual(
             call_order,
-            ["image"] * 3 + ["video_submit"] * 3 + ["image"] * 2,
+            ["image"] * 3 + ["video_submit"] * 3 + ["image"] * 10,
         )
         self.assertEqual(job.state, JobState.FINAL_REVIEW_REQUIRED)
         self.assertEqual(len(job.review_bundle_hash), 64)
@@ -2047,8 +2353,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(
             cue.text == cue.text.strip() for cue in job.render_manifest.subtitle_cues
         ))
-        self.assertEqual(job.generation_settings.image_count, 2)
-        self.assertEqual(job.generation_settings.shot_count, 5)
+        self.assertEqual(job.generation_settings.image_count, 10)
+        self.assertEqual(job.generation_settings.shot_count, 13)
         self.assertEqual(len(job.visual_requests), 3)
         self.assertTrue(all(
             request.resolution == "1080p"
@@ -2085,7 +2391,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             task.state == ProviderTaskState.SUCCEEDED for task in job.video_tasks
         ))
         self.assertIsNotNone(job.storyboard_plan)
-        self.assertEqual(len(job.storyboard_plan.shots), 5)
+        self.assertEqual(len(job.storyboard_plan.shots), 13)
         planned_beat_ids = [
             beat_id
             for shot in job.storyboard_plan.shots
@@ -2105,10 +2411,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [shot.visual_type for shot in job.storyboard_plan.shots].count("image"),
-            2,
+            10,
         )
         self.assertEqual(job.storyboard_plan.shots[0].visual_type, "video")
-        self.assertEqual(len(job.first_frame_candidates), 5)
+        self.assertEqual(len(job.first_frame_candidates), 13)
         self.assertTrue(all(
             0 <= candidate.seed <= SEEDREAM_MAX_SEED
             for candidate in job.first_frame_candidates
@@ -2122,7 +2428,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             shot.selected_candidate_id == f"frame_{shot.shot_id}_01"
             for shot in job.storyboard_plan.shots
         ))
-        self.assertEqual(len(job.render_manifest.visual_blocks), 5)
+        self.assertEqual(len(job.render_manifest.visual_blocks), 13)
         self.assertEqual(
             sum(
                 block.duration_in_frames
@@ -2152,7 +2458,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 for shot in job.storyboard_plan.shots
             )
         }
-        self.assertEqual(len(selected_assets), 5)
+        self.assertEqual(len(selected_assets), 13)
         self.assertEqual(
             {request.first_frame_asset_id for request in job.visual_requests},
             {
@@ -2178,7 +2484,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             for request in job.visual_requests
         ))
         blocks = job.render_manifest.visual_blocks
-        self.assertEqual(len(blocks), 5)
+        self.assertEqual(len(blocks), 13)
         self.assertEqual(
             [block.type for block in blocks],
             [
@@ -2201,7 +2507,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertEqual(
             [block.shot_id for block in blocks],
-            [f"shot_{index:02d}" for index in range(1, 6)],
+            [f"shot_{index:02d}" for index in range(1, 14)],
         )
         self.assertEqual(job.render_manifest.video_title, job.script.video_title)
         self.assertEqual(job.render_manifest.cover_text, job.script.cover_text)
@@ -2655,10 +2961,10 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         self.assertNotIn("mock", response.json()["data"]["tts_provider"])
         self.assertNotIn("mock", response.json()["data"]["video_provider"])
         self.assertEqual(
-            response.json()["data"]["generation_defaults"]["image_count"], 2
+            response.json()["data"]["generation_defaults"]["image_count"], 10
         )
         self.assertEqual(
-            response.json()["data"]["generation_defaults"]["shot_count"], 5
+            response.json()["data"]["generation_defaults"]["shot_count"], 13
         )
         self.assertEqual(
             response.json()["data"]["generation_defaults"]["video_resolution"],

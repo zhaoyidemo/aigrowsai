@@ -352,6 +352,44 @@ class SourceCard(SourceCardInput):
     updated_at: str = ""
 
 
+class PersonResearchEvidence(ContractModel):
+    """One web-grounded research point used by a person-viewpoint job."""
+
+    claim: str = Field(min_length=1, max_length=1200)
+    source_title: str = Field(min_length=1, max_length=500)
+    source_url: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_source_url(self):
+        if not self.source_url.startswith(("https://", "http://")):
+            raise ValueError("研究简报来源 URL 必须使用 http 或 https")
+        return self
+
+
+class PersonResearchBrief(ContractModel):
+    """Automatic, cited context that enriches one person-viewpoint job."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    person_name: str = Field(min_length=1, max_length=120)
+    viewpoint: str = Field(min_length=10, max_length=1800)
+    summary: str = Field(min_length=1, max_length=2000)
+    core_tension: str = Field(min_length=1, max_length=1200)
+    audience_relevance: list[str] = Field(
+        default_factory=list, min_length=1, max_length=6
+    )
+    content_angles: list[str] = Field(
+        default_factory=list, min_length=1, max_length=5
+    )
+    interaction_opportunity: str = Field(default="", max_length=1000)
+    evidence: list[PersonResearchEvidence] = Field(
+        default_factory=list, min_length=1, max_length=8
+    )
+    uncertainties: list[str] = Field(default_factory=list, max_length=8)
+    model_id: str = Field(default="", max_length=256)
+    prompt_version: str = Field(default="", max_length=128)
+    generated_at: str = Field(default="", max_length=64)
+
+
 class ScriptBeat(ContractModel):
     """One semantic beat with independent spoken, visual and editorial tracks."""
 
@@ -958,6 +996,10 @@ class VideoJob(ContractModel):
     source_card_snapshot: dict[str, Any]
     # None 仅用于兼容上线前已经持久化的任务；所有新任务都会冻结完整配置。
     generation_settings: GenerationSettings | None = None
+    # Optional research must never become another production gate. A failed
+    # attempt is remembered so retries do not silently repeat a paid search.
+    research_brief: PersonResearchBrief | None = None
+    research_warning: str = Field(default="", max_length=2000)
     script: ScriptDraft | None = None
     script_hash: str = ""
     script_review: ScriptReview | None = None

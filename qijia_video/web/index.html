@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.13.6">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.14.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -123,10 +123,10 @@
           <label class="video-quality-setting image-count-setting" for="image-count">
             <span class="video-quality-copy">
               <strong>动态图片数量</strong>
-              <small>可选 2–10 段，默认 2 段；AI 视频始终保持 3 段。系统会按真实旁白时长安排镜头节奏。</small>
-              <small id="image-count-cost" class="image-count-cost">2 段动态图片 + 3 张视频首帧 = 5 张 Seedream</small>
+              <small>可选 2–10 段，默认 10 段；AI 视频始终保持 3 段。系统会按真实旁白时长安排镜头节奏。</small>
+              <small id="image-count-cost" class="image-count-cost">10 段动态图片 + 3 张视频首帧 = 13 张 Seedream</small>
             </span>
-            <input id="image-count" type="number" min="2" max="10" step="1" value="2" inputmode="numeric" aria-label="动态图片数量">
+            <input id="image-count" type="number" min="2" max="10" step="1" value="10" inputmode="numeric" aria-label="动态图片数量">
           </label>
           <section class="video-quality-setting tts-creation-setting" aria-label="旁白设置">
             <span class="video-quality-copy">
@@ -174,7 +174,7 @@
               <button id="topic-source-submit" class="button primary" type="submit">确认资料并生成脚本</button>
             </form>
           </section>
-          <p id="manual-intake-intro" class="panel-note intake-intro">输入一个人物和他的核心观点，系统会把观点中的冲突、反直觉与现实意义展开成完整视频脚本。</p>
+          <p id="manual-intake-intro" class="panel-note intake-intro">输入一个人物和他的核心观点，系统会先自动研究可追溯资料，再把观点中的冲突、反直觉与现实意义展开成完整视频脚本。</p>
           <form id="source-card-form" class="form-stack">
             <label class="primary-field">
               <span class="question-line"><span class="question-number">1</span>你想讲谁？</span>
@@ -184,7 +184,7 @@
             <label class="primary-field">
               <span class="question-line"><span class="question-number">2</span>这个人物最值得展开的观点是什么？</span>
               <textarea name="viewpoint" required minlength="10" maxlength="1800" rows="7" placeholder="例如：真正影响孩子的，不是父母说了什么，而是孩子如何理解自己在家庭中的位置。"></textarea>
-              <span class="field-hint">直接写观点即可。系统会寻找它与常见认知的真实冲突，但不会虚构人物经历或引语。</span>
+              <span class="field-hint">直接写观点即可。系统会联网整理人物与主题简报；没有可靠来源时会使用原始观点继续，不会虚构人物经历或引语。</span>
             </label>
             <section class="reference-input" aria-labelledby="reference-input-title">
               <div class="reference-input-heading">
@@ -290,6 +290,7 @@
           <div id="job-error" class="error-box" hidden></div>
           <section id="script-review" class="review-section" hidden>
             <div class="section-title"><h3>脚本确认</h3><span id="script-review-spec">确认后开始配音与画面生成</span></div>
+            <section id="person-research-brief" class="person-research-brief" aria-label="人物主题自动研究简报" hidden></section>
             <section class="tts-review-settings" aria-label="本任务配音设置">
               <div class="tts-review-heading">
                 <div><strong>配音试听</strong><span>试听当前开场，确认后用于整条视频</span></div>
@@ -346,7 +347,7 @@
           </section>
           <section id="shot-storyboard" class="review-section storyboard-section" hidden>
             <div class="section-title storyboard-heading">
-              <div><h3>AI 镜头故事板</h3><span id="storyboard-summary">3 段视频和 2 段动态图片会在这里逐个出现</span></div>
+              <div><h3>AI 镜头故事板</h3><span id="storyboard-summary">3 段视频和 10 段动态图片会在这里逐个出现</span></div>
               <span class="storyboard-hint">选中镜头，可查看首帧、提示词和历史版本</span>
             </div>
             <p id="frame-selection-warning" class="frame-selection-warning" hidden></p>
@@ -438,6 +439,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.13.6"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.14.0"></script>
 </body>
 </html>

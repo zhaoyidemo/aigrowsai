@@ -110,7 +110,13 @@ class FfmpegMediaPackager:
             "-i", str(source),
             "-map", "0:v:0",
             "-map", "0:a:0",
-            "-c", "copy",
+            # Keep the already-rendered video bit-for-bit while giving every
+            # narration a stable short-form listening level.
+            "-c:v", "copy",
+            "-af", "loudnorm=I=-16:TP=-1.5:LRA=7",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "48000",
             "-movflags", "+faststart",
             str(destination),
         )

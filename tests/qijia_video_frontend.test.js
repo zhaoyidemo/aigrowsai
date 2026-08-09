@@ -141,6 +141,18 @@ test('creation intake asks only for one person and one viewpoint', () => {
   assert.ok(page.indexOf('id="generation-prompt-settings"') > page.indexOf('id="source-submit-button"'));
 });
 
+test('person viewpoint research is visible, cited, and non-blocking', () => {
+  assert.match(page, /会先自动研究可追溯资料/);
+  assert.match(page, /没有可靠来源时会使用原始观点继续/);
+  assert.match(page, /id="person-research-brief"/);
+  assert.match(app, /function renderPersonResearchBrief\(job\)/);
+  assert.match(app, /人物主题自动研究简报/);
+  assert.match(app, /自动研究已降级/);
+  assert.match(app, /research_warning/);
+  assert.match(app, /rel="noopener noreferrer"/);
+  assert.match(app, /renderPersonResearchBrief\(job\)/);
+});
+
 test('topic research is Douyin-only, cost-bounded, and human-gated', () => {
   assert.match(page, /data-workspace-tab="topics"[^>]*>今日选题/);
   assert.match(page, /主题<\/dt><dd>家庭教育/);
@@ -273,8 +285,10 @@ test('AI shots are visible storyboard cards with isolated version controls', () 
   assert.match(page, /id="shot-storyboard"/);
   assert.match(page, /id="shot-grid"/);
   assert.match(page, /id="shot-inspector"/);
-  assert.match(page, /3 段视频和 2 段动态图片会在这里逐个出现/);
-  assert.match(page, /id="image-count"[^>]+min="2"[^>]+max="10"[^>]+value="2"/);
+  assert.match(page, /3 段视频和 10 段动态图片会在这里逐个出现/);
+  assert.match(page, /id="image-count"[^>]+min="2"[^>]+max="10"[^>]+value="10"/);
+  assert.match(page, /默认 10 段/);
+  assert.match(page, /10 段动态图片 \+ 3 张视频首帧 = 13 张 Seedream/);
   assert.match(page, /id="image-count-cost"/);
   assert.match(app, /image_count: rawImageCount/);
   assert.match(app, /shot_count: rawImageCount \+ 3/);

@@ -4,12 +4,15 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import ValidationError
 
 from qijia_video.contracts import (
+    PersonResearchBrief,
     ProviderUsageRecord,
     ScriptDraft,
     ScriptReview,
@@ -27,8 +30,13 @@ from qijia_video.prompts import (
 )
 
 
-SCRIPT_PROMPT_VERSION = "qijia_script_v11_reference_normalization"
-STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v7_variable_images"
+SCRIPT_PROMPT_VERSION = "qijia_script_v12_research_interaction"
+STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v8_max_reasoning"
+PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_research_v1"
+OPENROUTER_REASONING_EFFORT = "max"
+SCRIPT_MAX_COMPLETION_TOKENS = 48_000
+PERSON_RESEARCH_MAX_COMPLETION_TOKENS = 48_000
+STORYBOARD_MAX_COMPLETION_TOKENS = 128_000
 UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
 
 
@@ -104,6 +112,50 @@ _SCRIPT_RESPONSE_SCHEMA = {
     "additionalProperties": False,
 }
 
+_PERSON_RESEARCH_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "core_tension": {"type": "string"},
+        "audience_relevance": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "content_angles": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "interaction_opportunity": {"type": "string"},
+        "evidence": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "source_title": {"type": "string"},
+                    "source_url": {"type": "string"},
+                },
+                "required": ["claim", "source_title", "source_url"],
+                "additionalProperties": False,
+            },
+        },
+        "uncertainties": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+    },
+    "required": [
+        "summary",
+        "core_tension",
+        "audience_relevance",
+        "content_angles",
+        "interaction_opportunity",
+        "evidence",
+        "uncertainties",
+    ],
+    "additionalProperties": False,
+}
+
 _STORYBOARD_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -135,6 +187,14 @@ _STORYBOARD_RESPONSE_SCHEMA = {
     "required": ["shots"],
     "additionalProperties": False,
 }
+
+
+@dataclass(frozen=True)
+class _OpenRouterJsonResponse:
+    data: dict
+    message: dict
+    model_id: str
+
 
 _STORYBOARD_FALLBACKS = (
     {
@@ -352,6 +412,43 @@ def _json_object(content: Any) -> dict:
     raise ProviderUnavailable("模型没有返回有效 JSON")
 
 
+def _normalized_citation_url(value: Any) -> str:
+    text = str(value or "").strip()
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return ""
+    if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+        return ""
+    path = parts.path.rstrip("/") or "/"
+    return urlunsplit((
+        parts.scheme.lower(),
+        parts.netloc.lower(),
+        path,
+        parts.query,
+        "",
+    ))
+
+
+def _citation_catalog(message: dict) -> dict[str, dict[str, str]]:
+    catalog: dict[str, dict[str, str]] = {}
+    for annotation in message.get("annotations") or []:
+        if not isinstance(annotation, dict):
+            continue
+        citation = annotation.get("url_citation")
+        if not isinstance(citation, dict):
+            citation = annotation
+        url = str(citation.get("url") or "").strip()
+        normalized = _normalized_citation_url(url)
+        if not normalized:
+            continue
+        catalog[normalized] = {
+            "url": url,
+            "title": str(citation.get("title") or "").strip(),
+        }
+    return catalog
+
+
 def _nonnegative_int(value: Any) -> int:
     try:
         return max(0, int(value or 0))
@@ -378,6 +475,13 @@ def _openrouter_usage_record(
     completion_details = usage.get("completion_tokens_details")
     completion_details = (
         completion_details if isinstance(completion_details, dict) else {}
+    )
+    server_tool_use = usage.get("server_tool_use")
+    server_tool_use = (
+        server_tool_use if isinstance(server_tool_use, dict) else {}
+    )
+    web_search_requests = _nonnegative_int(
+        server_tool_use.get("web_search_requests")
     )
     raw_cost = usage.get("cost")
     try:
@@ -422,7 +526,19 @@ def _openrouter_usage_record(
             if reported_cost is not None
             else ""
         ),
-        note="；".join(item for item in (note, missing_cost_note) if item),
+        note="；".join(
+            item
+            for item in (
+                note,
+                (
+                    f"联网检索 {web_search_requests} 次"
+                    if web_search_requests
+                    else ""
+                ),
+                missing_cost_note,
+            )
+            if item
+        ),
         occurred_at=timestamp(),
     )
 
@@ -455,7 +571,10 @@ async def _openrouter_json_request(
     transport: httpx.AsyncBaseTransport | None,
     operation: str,
     on_usage: UsageRecorder | None = None,
-) -> dict:
+    reasoning_effort: str = OPENROUTER_REASONING_EFFORT,
+    tools: list[dict] | None = None,
+    max_tool_calls: int | None = None,
+) -> _OpenRouterJsonResponse:
     usage_id = f"usage_{uuid.uuid4().hex}"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -466,8 +585,8 @@ async def _openrouter_json_request(
         "model": model,
         "messages": messages,
         # GPT-5 reasoning tokens share this ceiling with the visible answer.
-        # Low effort preserves enough budget for the complete JSON document.
-        "reasoning": {"effort": "low", "exclude": True},
+        # Callers therefore pair max reasoning with a workload-sized ceiling.
+        "reasoning": {"effort": reasoning_effort, "exclude": True},
         "max_completion_tokens": max_completion_tokens,
         "response_format": {
             "type": "json_schema",
@@ -480,6 +599,10 @@ async def _openrouter_json_request(
         "plugins": [{"id": "response-healing"}],
         "provider": {"require_parameters": True},
     }
+    if tools:
+        payload["tools"] = tools
+    if max_tool_calls is not None:
+        payload["max_tool_calls"] = max(1, int(max_tool_calls))
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(timeout_seconds, connect=20.0),
         transport=transport,
@@ -584,7 +707,11 @@ async def _openrouter_json_request(
             + (f"；request_id={request_id}" if request_id else "")
         )
     try:
-        return _json_object(content)
+        return _OpenRouterJsonResponse(
+            data=_json_object(content),
+            message=message if isinstance(message, dict) else {},
+            model_id=str(body.get("model") or model),
+        )
     except ProviderUnavailable as exc:
         if finish_reason == "length":
             detail = "输出被截断，请从失败阶段重试"
@@ -610,7 +737,7 @@ class OpenRouterScriptProvider:
         base_url: str,
         model: str,
         transport: httpx.AsyncBaseTransport | None = None,
-        timeout_seconds: float = 120.0,
+        timeout_seconds: float = 300.0,
     ):
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "https://openrouter.ai/api").strip()
@@ -625,6 +752,129 @@ class OpenRouterScriptProvider:
             and self.model
             and self.base_url.startswith("https://")
         )
+
+    async def research_person_viewpoint(
+        self,
+        card: SourceCard,
+        *,
+        on_usage: UsageRecorder | None = None,
+    ) -> PersonResearchBrief:
+        """Build a cited editorial brief without turning research into a gate."""
+
+        if not self.configured:
+            raise ProviderUnavailable(
+                "人物研究未配置：请设置 OPENROUTER_API_KEY"
+            )
+        person_name = card.subject.name
+        viewpoint = card.core_idea
+        research_date = timestamp()[:10]
+        prompt = (
+            "请为一条面向家长的知识短视频完成联网研究简报。必须先检索，再输出中文 JSON。\n\n"
+            f"研究日期（UTC）：{research_date}\n"
+            f"人物：{person_name}\n"
+            f"用户给出的主题观点：{viewpoint}\n\n"
+            "研究目标：确认人物的专业背景与该主题相关的概念脉络，找到它对当代家长真正有用的"
+            "冲突、边界和现实场景。用户写下的观点只是创作命题，除非来源逐字支持，绝不能把它"
+            "写成该人物的原话。不要为了完整而补造履历、引语、书名、研究结论或因果关系。\n\n"
+            "检索时优先原始著作的可靠版本、大学/研究机构、专业协会、同行评议论文、权威出版社"
+            "或可信的传记资料；至少使用两个彼此独立的查询。忽略营销软文、短视频标题、百科搬运"
+            "和无来源的二手总结。资料有冲突或只能间接支持时，写入 uncertainties。\n\n"
+            "输出要求：summary 是可直接交给主编的研究结论；core_tension 只写一个最有价值的认知"
+            "张力；audience_relevance 写 2-4 个家长能识别的现实关联；content_angles 写 2-4 个"
+            "可展开但不夸大的角度；interaction_opportunity 设计一个具体、低压力、无需暴露隐私的"
+            "评论讨论点。evidence 写 3-6 条可安全转述的事实或概念，每条 source_url 必须原样使用"
+            "本次检索结果中的 URL，source_title 必须与页面一致。只返回 schema 要求的 JSON。"
+        )
+        response = await _openrouter_json_request(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是严谨的教育与心理学内容研究员。"
+                        "区分来源事实、合理解释和编辑角度，只返回有效 JSON。"
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            label="人物主题研究",
+            schema_name="qijia_person_research_v1",
+            response_schema=_PERSON_RESEARCH_RESPONSE_SCHEMA,
+            max_completion_tokens=PERSON_RESEARCH_MAX_COMPLETION_TOKENS,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+            operation="person_research",
+            on_usage=on_usage,
+            tools=[{
+                "type": "openrouter:web_search",
+                "parameters": {
+                    "engine": "exa",
+                    "mode": "deep-lite",
+                    "max_results": 4,
+                    "max_uses": 2,
+                    "max_total_results": 8,
+                    "max_characters": 4000,
+                    "excluded_domains": [
+                        "douyin.com",
+                        "xiaohongshu.com",
+                        "zhihu.com",
+                    ],
+                },
+            }],
+            max_tool_calls=2,
+        )
+        citations = _citation_catalog(response.message)
+        grounded_evidence: list[dict[str, str]] = []
+        for raw in response.data.get("evidence") or []:
+            if not isinstance(raw, dict):
+                continue
+            normalized_url = _normalized_citation_url(raw.get("source_url"))
+            citation = citations.get(normalized_url)
+            claim = str(raw.get("claim") or "").strip()
+            if not citation or not claim:
+                continue
+            citation_url = citation["url"]
+            if len(citation_url) > 2000:
+                continue
+            grounded_evidence.append({
+                "claim": claim[:1200],
+                "source_title": (
+                    citation.get("title")
+                    or str(raw.get("source_title") or "").strip()
+                    or citation["url"]
+                )[:500],
+                "source_url": citation_url,
+            })
+        if not grounded_evidence:
+            raise ProviderUnavailable(
+                "人物主题研究没有返回可与检索注释匹配的来源，已降级使用原始观点"
+            )
+        generated = dict(response.data)
+
+        def bounded_list(key: str, maximum: int) -> list:
+            value = generated.get(key)
+            return list(value[:maximum]) if isinstance(value, list) else []
+
+        generated.update({
+            "schema_version": "1.0",
+            "person_name": person_name,
+            "viewpoint": viewpoint,
+            "audience_relevance": bounded_list("audience_relevance", 6),
+            "content_angles": bounded_list("content_angles", 5),
+            "evidence": grounded_evidence[:8],
+            "uncertainties": bounded_list("uncertainties", 8),
+            "model_id": response.model_id,
+            "prompt_version": PERSON_RESEARCH_PROMPT_VERSION,
+            "generated_at": timestamp(),
+        })
+        try:
+            return PersonResearchBrief.model_validate(generated)
+        except (TypeError, ValidationError) as exc:
+            raise ProviderUnavailable(
+                "人物主题研究返回内容不符合研究简报契约，已降级使用原始观点"
+            ) from exc
 
     def _prompt(self, card: SourceCard, prompt: str | None = None) -> str:
         sources = [item.model_dump(mode="json") for item in card.sources]
@@ -776,7 +1026,7 @@ class OpenRouterScriptProvider:
             },
             {"role": "user", "content": self._prompt(card, prompt)},
         ]
-        generated = await _openrouter_json_request(
+        response = await _openrouter_json_request(
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -784,14 +1034,14 @@ class OpenRouterScriptProvider:
             label="脚本生成",
             schema_name="qijia_script_draft_v2",
             response_schema=_SCRIPT_RESPONSE_SCHEMA,
-            max_completion_tokens=4800,
+            max_completion_tokens=SCRIPT_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,
             transport=self.transport,
             operation="script_generation",
             on_usage=on_usage,
         )
 
-        return self._script_from_generated(card, generated)
+        return self._script_from_generated(card, response.data)
 
     async def review(self, card: SourceCard, script: ScriptDraft) -> ScriptReview:
         known_fact_ids = {item.id for item in card.verified_facts}
@@ -860,7 +1110,7 @@ class OpenRouterStoryboardProvider:
         base_url: str,
         model: str,
         transport: httpx.AsyncBaseTransport | None = None,
-        timeout_seconds: float = 120.0,
+        timeout_seconds: float = 300.0,
     ):
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "https://openrouter.ai/api").strip()
@@ -988,7 +1238,7 @@ class OpenRouterStoryboardProvider:
                 for index, group in enumerate(grouped_beats, 1)
             )
         )
-        generated = await _openrouter_json_request(
+        response = await _openrouter_json_request(
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -1005,14 +1255,14 @@ class OpenRouterStoryboardProvider:
             label="分镜生成",
             schema_name="qijia_storyboard_v3",
             response_schema=_STORYBOARD_RESPONSE_SCHEMA,
-            max_completion_tokens=8000,
+            max_completion_tokens=STORYBOARD_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,
             transport=self.transport,
             operation="storyboard_generation",
             on_usage=on_usage,
         )
         raw_shots = _normalize_storyboard_rows(
-            generated.get("shots"), target_segments
+            response.data.get("shots"), target_segments
         )
         shots: list[StoryboardShot] = []
         try:

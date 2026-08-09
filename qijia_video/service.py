@@ -22,11 +22,14 @@ from qijia_video.contracts import (
     ApprovalRecord,
     Artifact,
     AssetRef,
+    ContentFormat,
     DouyinPerformance,
     DouyinPlaybackSnapshot,
     FirstFrameCandidate,
     GenerationSettings,
     JobState,
+    InterpretationBoundary,
+    PersonResearchBrief,
     ProviderTask,
     ProviderTaskState,
     ProviderUsageRecord,
@@ -40,6 +43,7 @@ from qijia_video.contracts import (
     ScriptReview,
     SourceCard,
     SourceCardInput,
+    SourceEntry,
     SourceCardStatus,
     StoryboardPlan,
     StoryboardShot,
@@ -49,6 +53,7 @@ from qijia_video.contracts import (
     VisualGenerationRequest,
     VisualShotVersion,
     VisualBlock,
+    VerifiedFact,
     content_hash,
     timestamp,
 )
@@ -408,17 +413,110 @@ class QijiaVideoService:
             )
 
     @staticmethod
-    def _script_prompt_for_settings(settings: GenerationSettings) -> str:
+    def _card_with_person_research(
+        card: SourceCard,
+        brief: PersonResearchBrief,
+    ) -> SourceCard:
+        enriched = card.model_copy(deep=True)
+        used_source_ids = {item.id for item in enriched.sources}
+        used_fact_ids = {item.id for item in enriched.verified_facts}
+        source_by_url = {
+            item.url.rstrip("/"): item.id
+            for item in enriched.sources
+            if item.url
+        }
+        existing_claims = {item.text for item in enriched.verified_facts}
+
+        def next_id(prefix: str, used: set[str]) -> str:
+            index = 1
+            while f"{prefix}_{index:02d}" in used:
+                index += 1
+            value = f"{prefix}_{index:02d}"
+            used.add(value)
+            return value
+
+        for evidence in brief.evidence:
+            normalized_url = evidence.source_url.rstrip("/")
+            source_id = source_by_url.get(normalized_url)
+            if not source_id:
+                source_id = next_id("research_source", used_source_ids)
+                enriched.sources.append(SourceEntry(
+                    id=source_id,
+                    type="article",
+                    title=evidence.source_title,
+                    url=evidence.source_url,
+                    accessed_at=brief.generated_at[:10] or timestamp()[:10],
+                    rights_status="verified_for_citation",
+                ))
+                source_by_url[normalized_url] = source_id
+            if evidence.claim in existing_claims:
+                continue
+            enriched.verified_facts.append(VerifiedFact(
+                id=next_id("research_fact", used_fact_ids),
+                text=evidence.claim,
+                source_refs=[source_id],
+            ))
+            existing_claims.add(evidence.claim)
+
+        legacy_boundary_text = (
+            "只围绕用户输入的观点展开，不补造人物经历、逐字引语、"
+            "研究数据或来源出处。"
+        )
+        boundary_text = (
+            "只围绕用户输入的观点和自动研究中有来源支持的事实展开；不得补造人物经历、"
+            "逐字引语、研究数据或来源出处，也不得把用户观点、研究摘要或编辑角度写成人物"
+            "原话。资料存在冲突或不确定时，必须保留限定语。"
+        )
+        for index, boundary in enumerate(enriched.interpretation_boundary):
+            if boundary.text == legacy_boundary_text:
+                enriched.interpretation_boundary[index] = boundary.model_copy(
+                    update={"text": boundary_text}
+                )
+        if not any(
+            item.text == boundary_text for item in enriched.interpretation_boundary
+        ):
+            used_boundary_ids = {
+                item.id for item in enriched.interpretation_boundary
+            }
+            enriched.interpretation_boundary.append(InterpretationBoundary(
+                id=next_id("research_boundary", used_boundary_ids),
+                text=boundary_text,
+            ))
+        return SourceCard.model_validate(enriched)
+
+    @staticmethod
+    def _script_prompt_for_settings(
+        settings: GenerationSettings,
+        research_brief: PersonResearchBrief | None = None,
+    ) -> str:
         minimum, maximum = TTS_SCRIPT_CHARACTER_TARGETS[
             settings.tts_speed_ratio
         ]
-        return (
+        prompt = (
             settings.script_prompt.rstrip()
             + "\n\n【本任务配音节奏】"
             + f"已选 Seed-TTS 2.0 语速 {settings.tts_speed_ratio:.1f}x。"
             + f"所有 narration 的纯旁白合计建议 {minimum}-{maximum} 个汉字，"
             + "以此范围覆盖上文任何不同的字数建议；"
             + "目标仍为 45-75 秒，表达完整和自然优先。"
+        )
+        if not research_brief:
+            return prompt
+        editorial_context = {
+            "summary": research_brief.summary,
+            "core_tension": research_brief.core_tension,
+            "audience_relevance": research_brief.audience_relevance,
+            "content_angles": research_brief.content_angles,
+            "interaction_opportunity": research_brief.interaction_opportunity,
+            "uncertainties": research_brief.uncertainties,
+        }
+        return (
+            prompt
+            + "\n\n【自动研究简报】\n"
+            + json.dumps(editorial_context, ensure_ascii=False)
+            + "\n研究证据已经作为 research_fact 加入本次来源卡。"
+            + "简报中的内容角度只用于编辑构思，不可冒充事实或人物原话；"
+            + "遇到 uncertainties 必须保留限定语，不要为了钩子抹掉边界。"
         )
 
     @staticmethod
@@ -841,24 +939,81 @@ class QijiaVideoService:
         job.error = ""
         job = await self._save_job(job, actor)
         try:
+            card = SourceCard.model_validate(job.source_card_snapshot)
+            settings = self._generation_settings(job)
+
+            async def persist_script_usage(usage: ProviderUsageRecord) -> None:
+                nonlocal job
+                job = await self._persist_usage_record(job, usage, actor)
+
             self._report(
                 progress,
                 message="正在读取人物和核心观点…",
                 stage="material_confirmed",
-                percent=8,
+                percent=4,
             )
-            card = SourceCard.model_validate(job.source_card_snapshot)
+            research_method = getattr(
+                self.script_provider, "research_person_viewpoint", None
+            )
+            research_usage_exists = any(
+                item.operation == "person_research"
+                for item in job.usage_records
+            )
+            if (
+                card.content_format == ContentFormat.PERSON_IDEA
+                and job.research_brief
+            ):
+                card = self._card_with_person_research(
+                    card, job.research_brief
+                )
+            elif (
+                card.content_format == ContentFormat.PERSON_IDEA
+                and callable(research_method)
+                and not job.research_warning
+                and not research_usage_exists
+            ):
+                self._report(
+                    progress,
+                    message="正在联网研究人物与主题，整理可追溯简报…",
+                    stage="person_research",
+                    percent=7,
+                )
+                try:
+                    brief = await research_method(
+                        card,
+                        on_usage=persist_script_usage,
+                    )
+                    card = self._card_with_person_research(card, brief)
+                    job.research_brief = brief
+                    job.research_warning = ""
+                    job.source_card_snapshot = card.model_dump(mode="json")
+                    job = await self._save_job(job, actor)
+                except Exception as research_error:
+                    job.research_warning = (
+                        "自动研究暂未形成可追溯简报，已使用原始人物观点继续生成："
+                        + str(research_error)
+                    )[:2000]
+                    job = await self._save_job(job, actor)
+            elif (
+                card.content_format == ContentFormat.PERSON_IDEA
+                and research_usage_exists
+                and not job.research_warning
+            ):
+                job.research_warning = (
+                    "上次自动研究调用未形成完整简报；为避免重复计费，"
+                    "本次直接使用原始人物观点继续生成。"
+                )
+                job = await self._save_job(job, actor)
+
             self._report(
                 progress,
                 message="正在调用脚本模型生成口播脚本…",
                 stage="script_generation",
                 percent=14,
             )
-            settings = self._generation_settings(job)
-            script_prompt = self._script_prompt_for_settings(settings)
-            async def persist_script_usage(usage: ProviderUsageRecord) -> None:
-                nonlocal job
-                job = await self._persist_usage_record(job, usage, actor)
+            script_prompt = self._script_prompt_for_settings(
+                settings, job.research_brief
+            )
 
             generate_with_usage = getattr(
                 self.script_provider, "generate_with_usage", None

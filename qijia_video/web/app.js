@@ -174,7 +174,7 @@ function generationDefaults() {
   return state.capabilities?.generation_defaults || {
     script_prompt: '', seedance_prompt: '', video_resolution: '1080p',
     seedance_model: 'doubao-seedance-1-0-pro-fast-251015',
-    image_count: 2, shot_count: 5,
+    image_count: 10, shot_count: 13,
     tts_voice_id: 'zh_female_vv_uranus_bigtts', tts_speed_ratio: 1.2,
   };
 }
@@ -442,7 +442,7 @@ function setImageCountField(settings) {
   const inferred = settings?.image_count
     ?? (Number(settings?.shot_count) ? Number(settings.shot_count) - 3 : null)
     ?? defaults.image_count
-    ?? 2;
+    ?? 10;
   $('#image-count').value = normalizedImageCount(inferred);
   updateImageCountCost();
 }
@@ -497,7 +497,7 @@ function initializePromptFields() {
     saved.seedance_prompt = generationDefaults().seedance_prompt;
   }
   if (legacyFixedImageCount) {
-    saved.image_count = generationDefaults().image_count || 2;
+    saved.image_count = generationDefaults().image_count || 10;
     saved.shot_count = saved.image_count + 3;
   }
   setPromptFields(saved);
@@ -679,6 +679,7 @@ const workflowStages = [
 ];
 const progressStageIndexes = {
   material_confirmed: 0,
+  person_research: 1,
   script: 1,
   script_generation: 1,
   confirm_script: 2,
@@ -1905,6 +1906,57 @@ function renderScriptDocument(job) {
   updateScriptLengthStatus();
 }
 
+function renderPersonResearchBrief(job) {
+  const node = $('#person-research-brief');
+  const brief = job?.research_brief;
+  const warning = String(job?.research_warning || '').trim();
+  node.hidden = !brief && !warning;
+  if (node.hidden) {
+    node.innerHTML = '';
+    return;
+  }
+  if (!brief) {
+    node.innerHTML = [
+      '<div class="research-brief-heading"><div><strong>自动研究已降级</strong>',
+      '<span>不阻断本次创作</span></div></div>',
+      '<p class="research-warning">' + escapeHtml(warning) + '</p>',
+    ].join('');
+    return;
+  }
+
+  const list = (values) => (
+    '<ul>' + (Array.isArray(values) ? values : []).map(
+      (value) => '<li>' + escapeHtml(value) + '</li>',
+    ).join('') + '</ul>'
+  );
+  const evidence = Array.isArray(brief.evidence) ? brief.evidence : [];
+  const evidenceRows = evidence.map((item) => [
+    '<li><a href="' + escapeHtml(item.source_url || '') + '" target="_blank" rel="noopener noreferrer">',
+    escapeHtml(item.source_title || item.source_url || '研究来源'),
+    '</a><span>' + escapeHtml(item.claim || '') + '</span></li>',
+  ].join('')).join('');
+  const uncertainties = Array.isArray(brief.uncertainties)
+    && brief.uncertainties.length
+    ? '<div class="research-uncertainties"><strong>需保留的边界</strong>'
+      + list(brief.uncertainties) + '</div>'
+    : '';
+  node.innerHTML = [
+    '<div class="research-brief-heading"><div><strong>人物主题自动研究简报</strong>',
+    '<span>有可追溯来源 · 已用于本次脚本</span></div>',
+    '<small>' + escapeHtml(brief.model_id || '') + '</small></div>',
+    '<p class="research-summary">' + escapeHtml(brief.summary || '') + '</p>',
+    '<div class="research-brief-grid">',
+    '<article><span>最值得讲的张力</span><p>' + escapeHtml(brief.core_tension || '') + '</p></article>',
+    '<article><span>家长现实关联</span>' + list(brief.audience_relevance) + '</article>',
+    '<article><span>可展开角度</span>' + list(brief.content_angles) + '</article>',
+    '<article><span>互动切口</span><p>' + escapeHtml(brief.interaction_opportunity || '—') + '</p></article>',
+    '</div>',
+    '<details class="research-evidence"><summary>查看 ' + evidence.length + ' 条研究证据与边界</summary>',
+    '<ol>' + evidenceRows + '</ol>' + uncertainties + '</details>',
+    warning ? '<p class="research-warning">' + escapeHtml(warning) + '</p>' : '',
+  ].join('');
+}
+
 function focusFirstNarration() {
   document.querySelector('[data-script-field="narration"]')?.focus();
 }
@@ -2103,6 +2155,7 @@ function renderDetail() {
   scriptSection.hidden = job.state !== 'script_review_required';
   if (!scriptSection.hidden && job.script) {
     setJobTtsFields(job);
+    renderPersonResearchBrief(job);
     renderScriptDocument(job);
     const ttsSettings = job.generation_settings || {
       ...generationDefaults(),
