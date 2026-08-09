@@ -147,6 +147,7 @@ button:focus-visible { outline: 3px solid rgba(49,95,86,.2); outline-offset: 2px
 .panel-note, .empty { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .intake-intro { margin: -2px 0 20px; max-width: 38em; }
 .video-quality-setting { display: grid; grid-template-columns: minmax(0, 1fr) 148px; align-items: center; gap: 12px; margin: -2px 0 18px; border: 1px solid #d8d3c8; border-radius: 9px; padding: 11px 12px; background: #f8f6ef; }
+.skill-setting { border-color: #b8d2ca; background: #f1f7f4; }
 .video-quality-copy { display: grid; gap: 3px; min-width: 0; }
 .video-quality-copy strong { color: var(--ink); font-size: 13px; }
 .video-quality-copy small { color: var(--muted); font-size: 9px; font-weight: 450; line-height: 1.5; }

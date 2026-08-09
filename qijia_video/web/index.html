@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.14.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.15.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -109,6 +109,13 @@
             <div><p class="step">01</p><h2>开始一条视频</h2></div>
             <button id="new-card-button" class="button secondary" type="button">新建</button>
           </div>
+          <label class="video-quality-setting skill-setting" for="content-skill">
+            <span class="video-quality-copy">
+              <strong>内容 Skill</strong>
+              <small id="content-skill-description">选择一套有版本、研究规则、提示词和质量边界的内容工作流。</small>
+            </span>
+            <select id="content-skill" aria-label="内容 Skill"></select>
+          </label>
           <label class="video-quality-setting" for="video-resolution">
             <span class="video-quality-copy">
               <strong>视频画质</strong>
@@ -211,12 +218,37 @@
               <button id="source-submit-button" class="button primary" type="submit">生成脚本</button>
             </div>
           </form>
+          <form id="news-topic-form" class="form-stack" hidden>
+            <label class="primary-field">
+              <span class="question-line"><span class="question-number">1</span>你想追踪什么主题？</span>
+              <input name="topic" required minlength="2" maxlength="300" autocomplete="off" placeholder="例如：TERALAB">
+              <span class="field-hint">可以输入公司、产品、项目、研究方向或商业事件。主题只是检索请求，不会被当作事实。</span>
+            </label>
+            <label class="primary-field">
+              <span class="question-line"><span class="question-number">2</span>最关心哪个角度？（可选）</span>
+              <textarea name="focus" maxlength="1000" rows="5" placeholder="例如：最近一周的重要发布、合作或产品变化，以及它对普通用户意味着什么。"></textarea>
+              <span class="field-hint">系统会冻结任务创建时间，检索官方与独立来源；无法形成两个不同站点的可追溯证据时会停止，不会降级为无来源脚本。</span>
+            </label>
+            <label>内容领域
+              <select name="content_domain">
+                <option value="technology" selected>科技</option>
+                <option value="business">商业</option>
+                <option value="general_news">通用新闻</option>
+              </select>
+            </label>
+            <label>目标受众
+              <input name="target_audience" maxlength="160" value="关注该主题的普通用户">
+            </label>
+            <div class="actions source-form-actions">
+              <button id="news-submit-button" class="button primary" type="submit">检索新闻并生成脚本</button>
+            </div>
+          </form>
           <details id="generation-prompt-settings" class="advanced-settings prompt-settings global-prompt-settings">
             <summary>调整 AI 写法和画面风格（实验用）</summary>
             <p class="field-hint">默认值可以直接使用。修改后会用于下一条新建视频，并保存在当前浏览器中；系统会为每个视觉章节生成 1 张画面，其中 3 张继续生成 8-10 秒、所选画质的 AI 视频，其余按所选动态图片数量直接进入成片。</p>
             <label>脚本生成提示词
               <textarea id="script-generation-prompt" rows="11" maxlength="8000" spellcheck="false"></textarea>
-              <span class="field-hint">人物、观点和 JSON 输出结构由系统自动附加，你只需调整写作方式。</span>
+              <span class="field-hint">来源卡和 JSON 输出结构由系统自动附加；修改只影响当前所选 Skill 的下一条新任务。</span>
             </label>
             <label>全片画面导演设定
               <textarea id="seedance-generation-prompt" rows="8" maxlength="3200" spellcheck="false"></textarea>
@@ -439,6 +471,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.14.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.15.0"></script>
 </body>
 </html>

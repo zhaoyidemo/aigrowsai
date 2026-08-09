@@ -53,6 +53,9 @@ class ContentDomain(StrEnum):
     EDUCATIONAL_PSYCHOLOGY = "educational_psychology"
     PARENT_CHILD_RELATIONSHIP = "parent_child_relationship"
     PARENT_GROWTH = "parent_growth"
+    TECHNOLOGY = "technology"
+    BUSINESS = "business"
+    GENERAL_NEWS = "general_news"
 
 
 class ContentFormat(StrEnum):
@@ -60,6 +63,18 @@ class ContentFormat(StrEnum):
     RESEARCH = "research_explainer"
     CONCEPT = "concept_explainer"
     BOOK = "book_explainer"
+    RECENT_NEWS = "recent_news_briefing"
+
+
+class SkillInputMode(StrEnum):
+    PERSON_VIEWPOINT = "person_viewpoint"
+    RECENT_NEWS_TOPIC = "recent_news_topic"
+
+
+class SkillResearchMode(StrEnum):
+    NONE = "none"
+    PERSON_VIEWPOINT_OPTIONAL = "person_viewpoint_optional"
+    RECENT_NEWS_REQUIRED = "recent_news_required"
 
 
 class RiskLevel(StrEnum):
@@ -106,7 +121,15 @@ class Actor(ContractModel):
 
 
 class Subject(ContractModel):
-    type: Literal["person", "research", "concept", "book"]
+    type: Literal[
+        "person",
+        "research",
+        "concept",
+        "book",
+        "organization",
+        "event",
+        "topic",
+    ]
     name: str = Field(min_length=1, max_length=300)
 
 
@@ -154,7 +177,7 @@ class SourceCardInput(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     content_domain: ContentDomain
     content_format: ContentFormat
-    target_audience: Literal["parents"] = "parents"
+    target_audience: str = Field(default="parents", min_length=1, max_length=160)
     risk_level: RiskLevel = RiskLevel.LOW
     subject: Subject
     title: str = Field(min_length=1, max_length=300)
@@ -240,6 +263,67 @@ class PersonViewpointInput(ContractModel):
                 "text": (
                     "只围绕用户输入的观点展开，不补造人物经历、逐字引语、"
                     "研究数据或来源出处。"
+                ),
+            }],
+        )
+
+
+class NewsTopicInput(ContractModel):
+    """Minimal input for a Skill that must research current public news."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    topic: str = Field(min_length=2, max_length=300)
+    focus: str = Field(default="", max_length=1000)
+    target_audience: str = Field(
+        default="关注该主题的普通用户",
+        min_length=1,
+        max_length=160,
+    )
+    content_domain: ContentDomain = ContentDomain.TECHNOLOGY
+
+    @model_validator(mode="after")
+    def validate_news_domain(self):
+        if self.content_domain not in {
+            ContentDomain.TECHNOLOGY,
+            ContentDomain.BUSINESS,
+            ContentDomain.GENERAL_NEWS,
+        }:
+            raise ValueError("最新新闻 Skill 仅支持科技、商业或通用新闻领域")
+        return self
+
+    def to_source_card_input(self) -> SourceCardInput:
+        topic = re.sub(r"\s+", " ", self.topic).strip()
+        focus = re.sub(r"\s+", " ", self.focus).strip()
+        created_at = datetime.now(BEIJING_TZ).isoformat(timespec="seconds")
+        return SourceCardInput(
+            content_domain=self.content_domain,
+            content_format=ContentFormat.RECENT_NEWS,
+            target_audience=self.target_audience,
+            subject={"type": "topic", "name": topic},
+            title=(focus or f"{topic} 最新公开动态")[:300],
+            core_idea=focus or f"检索并解释 {topic} 截至任务创建时刻的最新公开动态。",
+            parent_question=f"{topic} 最近发生了什么，为什么值得关注？"[:500],
+            sources=[{
+                "id": "request_source_01",
+                "type": "other",
+                "title": f"用户创作请求：{topic}"[:500],
+                "locator": f"任务创建时间 {created_at}",
+                "rights_status": "verified_for_citation",
+            }],
+            verified_facts=[{
+                "id": "request_context_01",
+                "text": (
+                    f"用户请求检索主题“{topic}”的最新公开动态；"
+                    "这条请求本身不是新闻事实，不得作为新闻结论。"
+                ),
+                "source_refs": ["request_source_01"],
+            }],
+            interpretation_boundary=[{
+                "id": "news_boundary_01",
+                "text": (
+                    "用户输入的主题和关注角度不是新闻证据。必须先完成联网研究，"
+                    "只使用可与检索注释匹配的 research_fact；区分事件时间、发布时间、"
+                    "官方计划、第三方判断与未确认信息。"
                 ),
             }],
         )
@@ -358,6 +442,11 @@ class PersonResearchEvidence(ContractModel):
     claim: str = Field(min_length=1, max_length=1200)
     source_title: str = Field(min_length=1, max_length=500)
     source_url: str = Field(min_length=1, max_length=2000)
+    source_kind: Literal[
+        "official", "primary", "independent", "other"
+    ] = "other"
+    published_at: str = Field(default="", max_length=64)
+    event_at: str = Field(default="", max_length=64)
 
     @model_validator(mode="after")
     def validate_source_url(self):
@@ -370,6 +459,7 @@ class PersonResearchBrief(ContractModel):
     """Automatic, cited context that enriches one person-viewpoint job."""
 
     schema_version: Literal["1.0"] = SCHEMA_VERSION
+    kind: Literal["person_viewpoint"] = "person_viewpoint"
     person_name: str = Field(min_length=1, max_length=120)
     viewpoint: str = Field(min_length=10, max_length=1800)
     summary: str = Field(min_length=1, max_length=2000)
@@ -388,6 +478,57 @@ class PersonResearchBrief(ContractModel):
     model_id: str = Field(default="", max_length=256)
     prompt_version: str = Field(default="", max_length=128)
     generated_at: str = Field(default="", max_length=64)
+
+
+class NewsResearchBrief(ContractModel):
+    """Cited, time-frozen research required by the recent-news Skill."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    kind: Literal["recent_news"] = "recent_news"
+    topic: str = Field(min_length=2, max_length=300)
+    as_of: str = Field(min_length=1, max_length=64)
+    summary: str = Field(min_length=1, max_length=2000)
+    core_tension: str = Field(min_length=1, max_length=1200)
+    audience_relevance: list[str] = Field(
+        default_factory=list, min_length=1, max_length=6
+    )
+    content_angles: list[str] = Field(
+        default_factory=list, min_length=1, max_length=5
+    )
+    interaction_opportunity: str = Field(default="", max_length=1000)
+    evidence: list[PersonResearchEvidence] = Field(
+        default_factory=list, min_length=2, max_length=10
+    )
+    uncertainties: list[str] = Field(default_factory=list, max_length=10)
+    model_id: str = Field(default="", max_length=256)
+    prompt_version: str = Field(default="", max_length=128)
+    generated_at: str = Field(default="", max_length=64)
+
+    @model_validator(mode="after")
+    def validate_news_evidence_mix(self):
+        hosts = {
+            (urlparse(item.source_url).hostname or "").lower().removeprefix("www.")
+            for item in self.evidence
+        }
+        hosts.discard("")
+        if len(hosts) < 2:
+            raise ValueError("最新新闻简报必须包含两个不同站点的来源")
+        source_kinds = {item.source_kind for item in self.evidence}
+        if not source_kinds.intersection({"official", "primary"}):
+            raise ValueError("最新新闻简报必须包含官方或原始来源")
+        if "independent" not in source_kinds:
+            raise ValueError("最新新闻简报必须包含可信独立来源")
+        if not any(
+            item.published_at or item.event_at for item in self.evidence
+        ):
+            raise ValueError("最新新闻简报必须记录至少一个事件或发布时间")
+        try:
+            frozen_at = datetime.fromisoformat(self.as_of)
+        except ValueError as exc:
+            raise ValueError("最新新闻检索截止时间必须是 ISO 8601") from exc
+        if frozen_at.tzinfo is None:
+            raise ValueError("最新新闻检索截止时间必须包含时区")
+        return self
 
 
 class ScriptBeat(ContractModel):
@@ -529,9 +670,47 @@ class ScriptReview(ContractModel):
     reviewed_at: str = ""
 
 
+class ContentSkillSnapshot(ContractModel):
+    """Immutable workflow definition frozen before any paid task is started."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    skill_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    version: str = Field(
+        min_length=1,
+        max_length=32,
+        pattern=r"^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
+    )
+    display_name: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=1000)
+    input_mode: SkillInputMode
+    compatible_formats: list[ContentFormat] = Field(min_length=1)
+    research_mode: SkillResearchMode = SkillResearchMode.NONE
+    research_prompt: str = Field(default="", max_length=12000)
+    script_system_prompt: str = Field(min_length=1, max_length=4000)
+    policy_ids: list[str] = Field(default_factory=list, max_length=30)
+    quality_rules: list[str] = Field(default_factory=list, max_length=30)
+    output_schema: Literal["script_draft_v2"] = "script_draft_v2"
+    manifest_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    frozen_at: str = Field(min_length=1, max_length=64)
+
+
 class GenerationSettings(ContractModel):
     """创建任务时冻结的可实验生成参数。"""
 
+    skill_id: str = Field(
+        default="",
+        max_length=64,
+        pattern=r"^$|^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    skill_version: str = Field(
+        default="",
+        max_length=32,
+        pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
+    )
     script_prompt: str = Field(
         default=DEFAULT_SCRIPT_PROMPT,
         min_length=1,
@@ -994,11 +1173,14 @@ class VideoJob(ContractModel):
     source_card_id: str
     source_card_revision: int = Field(ge=1)
     source_card_snapshot: dict[str, Any]
+    # New jobs freeze the full content workflow. None means the persisted task
+    # predates Skill routing and must continue under legacy semantics.
+    skill_snapshot: ContentSkillSnapshot | None = None
     # None 仅用于兼容上线前已经持久化的任务；所有新任务都会冻结完整配置。
     generation_settings: GenerationSettings | None = None
     # Optional research must never become another production gate. A failed
     # attempt is remembered so retries do not silently repeat a paid search.
-    research_brief: PersonResearchBrief | None = None
+    research_brief: PersonResearchBrief | NewsResearchBrief | None = None
     research_warning: str = Field(default="", max_length=2000)
     script: ScriptDraft | None = None
     script_hash: str = ""

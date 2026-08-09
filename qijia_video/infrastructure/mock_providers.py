@@ -6,6 +6,7 @@ import wave
 from pathlib import Path
 
 from qijia_video.contracts import (
+    ContentFormat,
     NarrationAudioSegment,
     NarrationManifest,
     ScriptBeat,
@@ -30,6 +31,70 @@ class TemplateScriptProvider:
         primary_fact = card.verified_facts[0]
         source_refs = [primary_fact.id]
         subject = card.subject.name
+        if card.content_format == ContentFormat.RECENT_NEWS:
+            secondary_fact = (
+                card.verified_facts[1]
+                if len(card.verified_facts) > 1
+                else primary_fact
+            )
+            return ScriptDraft(
+                source_card_id=card.id,
+                source_card_revision=card.revision,
+                video_title=card.title,
+                cover_text=f"{subject} 最新变化"[:30],
+                hook=f"{subject} 最近发生了什么？先看截至本次检索已经确认的变化。",
+                beats=[
+                    ScriptBeat(
+                        id="n01",
+                        narration=f"{subject} 最近发生了什么？先看截至本次检索已经确认的变化。",
+                        role="hook",
+                        visual_direction="核心主体处于变化发生前后的交界，关键物件开始运动。",
+                        source_refs=source_refs,
+                    ),
+                    ScriptBeat(
+                        id="n02",
+                        narration=(
+                            f"这次只围绕一个问题：{card.core_idea}"
+                            "先区分已经发生的事实、官方计划和仍待验证的效果。"
+                        ),
+                        role="context",
+                        visual_direction="同一信息空间里，已确认事实与待观察信号形成清楚层次。",
+                        source_refs=source_refs,
+                    ),
+                    ScriptBeat(
+                        id="n03",
+                        narration=primary_fact.text,
+                        role="explanation",
+                        visual_direction="延续同一主体，用具体动作和前后状态呈现第一条证据。",
+                        source_refs=source_refs,
+                    ),
+                    ScriptBeat(
+                        id="n04",
+                        narration=(
+                            secondary_fact.text
+                            + " 两个来源共同确认的部分可以转述，效果判断仍要保留边界。"
+                        ),
+                        role="application",
+                        visual_direction="从官方主体转向独立观察视角，保持相同视觉锚点。",
+                        source_refs=[secondary_fact.id],
+                    ),
+                    ScriptBeat(
+                        id="n05",
+                        narration=(
+                            "对普通关注者来说，接下来最值得看的不是宣传词，"
+                            "而是功能是否真正可用，以及后续是否出现独立证据。"
+                        ),
+                        role="closing",
+                        visual_direction="镜头回到核心主体并拉远，保留一个明确的后续观察信号。",
+                        on_screen_text="继续看可验证的变化",
+                        source_refs=[secondary_fact.id],
+                    ),
+                ],
+                closing="把结论留给下一条可验证的公开信息。",
+                estimated_duration_seconds=48,
+                caption=card.title,
+                hashtags=["最新动态", "科技新闻", "商业观察"],
+            )
         boundaries = "；".join(item.text for item in card.interpretation_boundary[:2])
         script = ScriptDraft(
             source_card_id=card.id,
@@ -175,24 +240,24 @@ class TemplateStoryboardProvider:
         segments = {item.id: item for item in script.beats}
         scenes = [
             (
-                "家长站在两条方向相反的柔和色带之间，停下惯性的动作",
-                "家长缓慢放下抬起的手，两条色带轻轻分开，镜头微微推进",
+                "核心主体处于关键变化的动作起点，中景构图，前后状态形成清楚对比",
+                "动作从第一帧开始，镜头克制推进并停在关键变化上",
             ),
             (
-                "餐桌两侧的亲子之间留出一块可呼吸的空白空间",
-                "孩子把一个积木移向中央，家长身体稍稍后退，轻微视差",
+                "延续同一主体和空间，近景聚焦一个能够解释变化的动作或物件细节",
+                "镜头从整体关系缓慢推进到关键细节，保持轻微视差",
             ),
             (
-                "一株幼苗从成人手掌的阴影边缘朝暖光生长",
-                "手掌缓慢移开，幼苗舒展一片新叶，镜头轻柔下移",
+                "用主体、环境和关键物件的空间关系呈现本段机制",
+                "镜头在相关主体之间缓慢横移，以景深变化揭示关系",
             ),
             (
-                "孩子独自系鞋带，家长在一步之外安静蹲下陪伴",
-                "孩子完成最后一个动作并抬头，家长点头，缓慢推镜",
+                "延续统一视觉锚点，展示变化发生后的下一步动作或影响",
+                "主体完成一个明确动作，镜头轻缓跟随并停在新状态",
             ),
             (
-                "亲子一起走向开阔门廊，彼此保持自然的一步距离",
-                "门外暖光逐渐扩散，两人同步向前，镜头缓慢拉远",
+                "回到贯穿全片的核心主体或物件，呈现结果和仍待观察的信号",
+                "最后一个自然动作完成后，镜头缓慢拉远并保留观察空间",
             ),
         ]
         shots = []
@@ -210,11 +275,12 @@ class TemplateStoryboardProvider:
                 narration_excerpt="\n".join(segments[item].text for item in beat_ids),
                 visual_type=visual_types[index - 1],
                 visual_intent=(
-                    f"用连续家庭互动的第 {index} 个画面承载语义推进："
+                    f"用连续视觉叙事的第 {index} 个画面承载语义推进："
                     f"{segment.visual_direction}"
                 ),
                 first_frame_prompt=(
-                    f"{scene[0]}。竖屏中心构图，底部留出字幕安全区，无文字。"
+                    f"{segment.visual_direction}。{scene[0]}。"
+                    "竖屏构图，底部留出字幕安全区，无文字。"
                 ),
                 motion_prompt=scene[1],
             ))

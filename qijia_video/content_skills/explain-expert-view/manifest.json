@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "version": "1.0.0",
+  "display_name": "人物观点解读",
+  "input_mode": "person_viewpoint",
+  "compatible_formats": [
+    "person_idea_explainer",
+    "research_explainer",
+    "concept_explainer",
+    "book_explainer"
+  ],
+  "default_for_formats": [
+    "person_idea_explainer",
+    "research_explainer",
+    "concept_explainer",
+    "book_explainer"
+  ],
+  "research_mode": "person_viewpoint_optional",
+  "script_system_prompt": "你是严谨的知识短视频主编。严格区分来源事实、人物原话、合理解释和编辑角度，只返回符合约定的有效 JSON。",
+  "script_prompt_file": "references/script-prompt.md",
+  "visual_prompt_file": "references/visual-prompt.md",
+  "research_prompt_file": "references/research-prompt.md",
+  "policy_ids": [
+    "source-grounding",
+    "quote-integrity",
+    "education-psychology-safety",
+    "minor-safety"
+  ],
+  "quality_rules": [
+    "所有事实性旁白必须引用来源卡中的 fact 或 quote ID",
+    "用户输入的观点不得冒充人物逐字原话",
+    "不得诊断具体儿童或提供治疗建议",
+    "开场钩子不得依赖恐吓、羞辱或虚构危机"
+  ]
+}

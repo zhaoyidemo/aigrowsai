@@ -29,6 +29,7 @@ from qijia_video.contracts import (
     GenerationSettings,
     JobState,
     InterpretationBoundary,
+    NewsResearchBrief,
     PersonResearchBrief,
     ProviderTask,
     ProviderTaskState,
@@ -45,6 +46,7 @@ from qijia_video.contracts import (
     SourceCardInput,
     SourceEntry,
     SourceCardStatus,
+    SkillResearchMode,
     StoryboardPlan,
     StoryboardShot,
     ScreenTextCue,
@@ -83,6 +85,11 @@ from qijia_video.ports import (
 from qijia_video.prompts import (
     SCRIPT_HARD_MAX_CHARS,
     narration_char_count,
+)
+from qijia_video.skill_registry import (
+    ContentSkillRegistry,
+    SkillRegistryError,
+    default_skill_registry,
 )
 from qijia_video.tts_options import TTS_SCRIPT_CHARACTER_TARGETS
 
@@ -146,6 +153,7 @@ class QijiaVideoService:
         seedance_model_prices_per_million_tokens: dict[str, float] | None = None,
         tts_price_per_10000_characters: float = 5.0,
         tikhub_price_per_success_usd: float = 0.002,
+        skill_registry: ContentSkillRegistry | None = None,
     ):
         self.repository = repository
         self.script_provider = script_provider
@@ -158,6 +166,7 @@ class QijiaVideoService:
         self.quality_checker = quality_checker
         self.media_packager = media_packager
         self.douyin_performance_provider = douyin_performance_provider
+        self.skill_registry = skill_registry or default_skill_registry
         self.work_root = work_root.resolve()
         self.work_root.mkdir(parents=True, exist_ok=True)
         self.video_poll_interval_seconds = max(
@@ -370,7 +379,7 @@ class QijiaVideoService:
     @staticmethod
     def _validate_verified_card(card: SourceCard):
         if card.risk_level.value == "high":
-            raise QualityGateFailed("MVP 不处理高风险心理或危机主题")
+            raise QualityGateFailed("当前工作流不处理高风险或危机主题")
         serialized = json.dumps(card.model_dump(mode="json"), ensure_ascii=False)
         placeholder = next((item for item in FORBIDDEN_PLACEHOLDERS if item in serialized), "")
         if placeholder:
@@ -415,7 +424,7 @@ class QijiaVideoService:
     @staticmethod
     def _card_with_person_research(
         card: SourceCard,
-        brief: PersonResearchBrief,
+        brief: PersonResearchBrief | NewsResearchBrief,
     ) -> SourceCard:
         enriched = card.model_copy(deep=True)
         used_source_ids = {item.id for item in enriched.sources}
@@ -442,7 +451,11 @@ class QijiaVideoService:
                 source_id = next_id("research_source", used_source_ids)
                 enriched.sources.append(SourceEntry(
                     id=source_id,
-                    type="article",
+                    type=(
+                        "official"
+                        if evidence.source_kind == "official"
+                        else "article"
+                    ),
                     title=evidence.source_title,
                     url=evidence.source_url,
                     accessed_at=brief.generated_at[:10] or timestamp()[:10],
@@ -457,6 +470,29 @@ class QijiaVideoService:
                 source_refs=[source_id],
             ))
             existing_claims.add(evidence.claim)
+
+        if isinstance(brief, NewsResearchBrief):
+            # The original news topic is a query, not evidence. Remove its
+            # placeholder only after cited research facts have been appended.
+            enriched.verified_facts = [
+                item
+                for item in enriched.verified_facts
+                if item.id != "request_context_01"
+            ]
+            referenced_source_ids = {
+                source_id
+                for fact in enriched.verified_facts
+                for source_id in fact.source_refs
+            }
+            enriched.sources = [
+                item
+                for item in enriched.sources
+                if (
+                    item.id != "request_source_01"
+                    or item.id in referenced_source_ids
+                )
+            ]
+            return SourceCard.model_validate(enriched)
 
         legacy_boundary_text = (
             "只围绕用户输入的观点展开，不补造人物经历、逐字引语、"
@@ -487,7 +523,7 @@ class QijiaVideoService:
     @staticmethod
     def _script_prompt_for_settings(
         settings: GenerationSettings,
-        research_brief: PersonResearchBrief | None = None,
+        research_brief: PersonResearchBrief | NewsResearchBrief | None = None,
     ) -> str:
         minimum, maximum = TTS_SCRIPT_CHARACTER_TARGETS[
             settings.tts_speed_ratio
@@ -510,12 +546,27 @@ class QijiaVideoService:
             "interaction_opportunity": research_brief.interaction_opportunity,
             "uncertainties": research_brief.uncertainties,
         }
+        if isinstance(research_brief, NewsResearchBrief):
+            editorial_context.update({
+                "topic": research_brief.topic,
+                "research_as_of": research_brief.as_of,
+                "evidence_time_context": [
+                    {
+                        "claim": item.claim,
+                        "source_title": item.source_title,
+                        "source_kind": item.source_kind,
+                        "published_at": item.published_at,
+                        "event_at": item.event_at,
+                    }
+                    for item in research_brief.evidence
+                ],
+            })
         return (
             prompt
             + "\n\n【自动研究简报】\n"
             + json.dumps(editorial_context, ensure_ascii=False)
             + "\n研究证据已经作为 research_fact 加入本次来源卡。"
-            + "简报中的内容角度只用于编辑构思，不可冒充事实或人物原话；"
+            + "简报中的内容角度只用于编辑构思，不可冒充证据或逐字引语；"
             + "遇到 uncertainties 必须保留限定语，不要为了钩子抹掉边界。"
         )
 
@@ -571,7 +622,7 @@ class QijiaVideoService:
             " ".join(script.hashtags),
         ))
         brand = next((item for item in FORBIDDEN_BRAND_TEXT if item in text), "")
-        if brand:
+        if brand and card.content_format != ContentFormat.RECENT_NEWS:
             raise QualityGateFailed("初期知识视频不得加入齐家 AI 品牌或产品引导")
 
     def _apply_reviewed_script(
@@ -719,6 +770,13 @@ class QijiaVideoService:
         card = await self.get_source_card(source_card_id, actor)
         if card.status != SourceCardStatus.VERIFIED:
             raise QualityGateFailed("来源卡必须先核验")
+        try:
+            frozen_settings, skill_snapshot = self.skill_registry.freeze(
+                card,
+                generation_settings or GenerationSettings(),
+            )
+        except SkillRegistryError as exc:
+            raise QualityGateFailed(str(exc)) from exc
         now = timestamp()
         draft = VideoJob(
             id="pending",
@@ -726,16 +784,20 @@ class QijiaVideoService:
             source_card_id=card.id,
             source_card_revision=card.revision,
             source_card_snapshot=card.model_dump(mode="json"),
-            generation_settings=generation_settings or GenerationSettings(),
+            skill_snapshot=skill_snapshot,
+            generation_settings=frozen_settings,
             created_by=actor.username,
             created_at=now,
             updated_at=now,
         )
         saved = await self.repository.create(
-            "job", f"齐家 AI 短视频：{card.title}", actor,
+            "job", f"AI 短视频：{card.title}", actor,
             draft.model_dump(mode="json"),
         )
         return VideoJob.model_validate(saved)
+
+    def content_skills(self) -> list[dict]:
+        return self.skill_registry.public_catalog()
 
     async def list_jobs(self, actor: Actor, *, limit: int = 100) -> list[VideoJob]:
         return [
@@ -948,41 +1010,116 @@ class QijiaVideoService:
 
             self._report(
                 progress,
-                message="正在读取人物和核心观点…",
+                message="正在读取内容输入与来源边界…",
                 stage="material_confirmed",
                 percent=4,
             )
-            research_method = getattr(
-                self.script_provider, "research_person_viewpoint", None
+            if job.skill_snapshot:
+                research_mode = job.skill_snapshot.research_mode
+            elif card.content_format == ContentFormat.PERSON_IDEA:
+                research_mode = SkillResearchMode.PERSON_VIEWPOINT_OPTIONAL
+            else:
+                research_mode = SkillResearchMode.NONE
+            research_required = (
+                research_mode == SkillResearchMode.RECENT_NEWS_REQUIRED
             )
+            research_operation = {
+                SkillResearchMode.PERSON_VIEWPOINT_OPTIONAL: "person_research",
+                SkillResearchMode.RECENT_NEWS_REQUIRED: "recent_news_research",
+            }.get(research_mode, "")
             research_usage_exists = any(
-                item.operation == "person_research"
+                item.operation == research_operation
                 for item in job.usage_records
+            ) if research_operation else False
+            skill_research = getattr(
+                self.script_provider, "research_for_skill", None
             )
-            if (
-                card.content_format == ContentFormat.PERSON_IDEA
-                and job.research_brief
-            ):
+            specific_research = getattr(
+                self.script_provider,
+                (
+                    "research_recent_news"
+                    if research_required
+                    else "research_person_viewpoint"
+                ),
+                None,
+            )
+            if research_mode != SkillResearchMode.NONE and job.research_brief:
                 card = self._card_with_person_research(
                     card, job.research_brief
                 )
+            elif research_mode != SkillResearchMode.NONE and research_usage_exists:
+                if not job.research_warning:
+                    job.research_warning = (
+                        "上次最新新闻研究调用未形成完整简报；为避免重复计费，"
+                        "本次不会自动重新提交，且禁止降级生成脚本。"
+                        if research_required
+                        else (
+                            "上次自动研究调用未形成完整简报；为避免重复计费，"
+                            "本次直接使用原始人物观点继续生成。"
+                        )
+                    )
+                    job = await self._save_job(job, actor)
+                if research_required:
+                    raise QualityGateFailed(job.research_warning)
+            elif research_mode != SkillResearchMode.NONE and job.research_warning:
+                if research_required:
+                    raise QualityGateFailed(job.research_warning)
             elif (
-                card.content_format == ContentFormat.PERSON_IDEA
-                and callable(research_method)
-                and not job.research_warning
-                and not research_usage_exists
+                research_mode != SkillResearchMode.NONE
+                and (callable(skill_research) or callable(specific_research))
             ):
                 self._report(
                     progress,
-                    message="正在联网研究人物与主题，整理可追溯简报…",
-                    stage="person_research",
+                    message=(
+                        "正在检索最新公开动态并交叉核验来源…"
+                        if research_required
+                        else "正在联网研究人物与主题，整理可追溯简报…"
+                    ),
+                    stage=research_operation,
                     percent=7,
                 )
                 try:
-                    brief = await research_method(
-                        card,
-                        on_usage=persist_script_usage,
-                    )
+                    if callable(skill_research):
+                        brief = await skill_research(
+                            card,
+                            research_mode=research_mode.value,
+                            research_prompt=(
+                                job.skill_snapshot.research_prompt
+                                if job.skill_snapshot
+                                else ""
+                            ),
+                            research_as_of=(
+                                job.skill_snapshot.frozen_at
+                                if job.skill_snapshot
+                                else job.created_at
+                            ),
+                            on_usage=persist_script_usage,
+                        )
+                    else:
+                        research_kwargs = {
+                            "on_usage": persist_script_usage,
+                        }
+                        if research_required:
+                            research_kwargs["as_of"] = (
+                                job.skill_snapshot.frozen_at
+                                if job.skill_snapshot
+                                else job.created_at
+                            )
+                        brief = await specific_research(card, **research_kwargs)
+                    if (
+                        research_required
+                        and not isinstance(brief, NewsResearchBrief)
+                    ):
+                        raise ProviderUnavailable(
+                            "新闻研究 Provider 返回了错误的简报类型"
+                        )
+                    if (
+                        not research_required
+                        and not isinstance(brief, PersonResearchBrief)
+                    ):
+                        raise ProviderUnavailable(
+                            "人物研究 Provider 返回了错误的简报类型"
+                        )
                     card = self._card_with_person_research(card, brief)
                     job.research_brief = brief
                     job.research_warning = ""
@@ -990,20 +1127,29 @@ class QijiaVideoService:
                     job = await self._save_job(job, actor)
                 except Exception as research_error:
                     job.research_warning = (
-                        "自动研究暂未形成可追溯简报，已使用原始人物观点继续生成："
+                        (
+                            "最新新闻研究未形成两个独立、可追溯的来源，"
+                            "禁止降级生成脚本："
+                            if research_required
+                            else (
+                                "自动研究暂未形成可追溯简报，"
+                                "已使用原始人物观点继续生成："
+                            )
+                        )
                         + str(research_error)
                     )[:2000]
                     job = await self._save_job(job, actor)
-            elif (
-                card.content_format == ContentFormat.PERSON_IDEA
-                and research_usage_exists
-                and not job.research_warning
-            ):
+                    if research_required:
+                        raise QualityGateFailed(job.research_warning) from research_error
+            elif research_mode != SkillResearchMode.NONE:
                 job.research_warning = (
-                    "上次自动研究调用未形成完整简报；为避免重复计费，"
-                    "本次直接使用原始人物观点继续生成。"
+                    "当前脚本 Provider 不支持最新新闻研究，禁止生成脚本。"
+                    if research_required
+                    else "当前脚本 Provider 不支持人物研究，已使用原始观点继续生成。"
                 )
                 job = await self._save_job(job, actor)
+                if research_required:
+                    raise QualityGateFailed(job.research_warning)
 
             self._report(
                 progress,
@@ -1015,10 +1161,20 @@ class QijiaVideoService:
                 settings, job.research_brief
             )
 
+            generate_for_skill = getattr(
+                self.script_provider, "generate_for_skill", None
+            )
             generate_with_usage = getattr(
                 self.script_provider, "generate_with_usage", None
             )
-            if callable(generate_with_usage):
+            if callable(generate_for_skill) and job.skill_snapshot:
+                script = await generate_for_skill(
+                    card,
+                    script_prompt,
+                    system_prompt=job.skill_snapshot.script_system_prompt,
+                    on_usage=persist_script_usage,
+                )
+            elif callable(generate_with_usage):
                 script = await generate_with_usage(
                     card,
                     script_prompt,
@@ -1780,7 +1936,7 @@ class QijiaVideoService:
         return (
             f"{style_direction}\n"
             f"【静止首帧】{frame_prompt}\n"
-            "主体关系清楚，构图简洁，优先保证核心心理隐喻一眼可懂。\n"
+            "主体关系清楚，构图简洁，优先保证核心变化或信息关系一眼可懂。\n"
             "只生成一张竖屏 9:16 画面首帧。画面中不得出现任何文字、字幕、"
             "字母、数字、Logo、水印、可读书页、屏幕界面或品牌标识；"
             "底部保留干净的字幕安全区。"
@@ -2151,7 +2307,7 @@ class QijiaVideoService:
                 f"本镜头对应第 {shot_number}/{len(targets)} 段"
                 f"（{segment.segment_type}）。\n"
                 "下面的口播原文只用于理解画面语义，不是需要展示的台词。"
-                "画面只表现人物、动作、空间和象征物；不得把原文排版、书写或拼成"
+                "画面只表现主体、动作、空间、关系和必要的象征物；不得把原文排版、书写或拼成"
                 "任何可读文字，书本、纸张、屏幕和标牌也不要出现可读内容。\n"
                 f"【画面语义参考】{segment.text[:500]}"
             )
@@ -3686,6 +3842,17 @@ class QijiaVideoService:
             }, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        skill_path = support / "skill_snapshot.json"
+        skill_path.write_text(
+            json.dumps(
+                job.skill_snapshot.model_dump(mode="json")
+                if job.skill_snapshot
+                else None,
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         return [
             ("script.json", script_path, "application/json"),
             ("render_manifest.json", render_path, "application/json"),
@@ -3699,6 +3866,7 @@ class QijiaVideoService:
             ("video_tasks.json", video_tasks_path, "application/json"),
             ("storyboard_plan.json", storyboard_path, "application/json"),
             ("first_frame_manifest.json", first_frames_path, "application/json"),
+            ("skill_snapshot.json", skill_path, "application/json"),
         ]
 
     @staticmethod
@@ -3726,6 +3894,16 @@ class QijiaVideoService:
             "job_id": job.id,
             "source_card_id": job.source_card_id,
             "source_card_revision": job.source_card_revision,
+            "content_skill": (
+                job.skill_snapshot.model_dump(mode="json")
+                if job.skill_snapshot
+                else None
+            ),
+            "generation_settings_hash": (
+                content_hash(job.generation_settings)
+                if job.generation_settings
+                else ""
+            ),
             "script_provider": self.script_provider.name,
             "storyboard_provider": self.storyboard_provider.name,
             "tts_provider": self.tts_provider.name,

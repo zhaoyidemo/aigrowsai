@@ -216,7 +216,7 @@ class QijiaVideoRuntime:
         generation_defaults = GenerationSettings()
         return {
             "module": "qijia_video",
-            "mode": "minimal-real-workflow",
+            "mode": "skill-video-platform",
             "script_provider": self.script_provider.name,
             "storyboard_provider": self.storyboard_provider.name,
             "image_provider": self.image_provider.name,
@@ -232,6 +232,7 @@ class QijiaVideoRuntime:
             "production_ready": generation_ready and self.storage.name == "tos",
             "missing_configuration": missing,
             "generation_defaults": generation_defaults.model_dump(mode="json"),
+            "content_skills": self.service.content_skills(),
             "douyin_performance": {
                 "ready": self.douyin_performance_provider.configured,
                 "platform": "douyin",

@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "version": "1.0.0",
+  "display_name": "最新新闻口播",
+  "input_mode": "recent_news_topic",
+  "compatible_formats": ["recent_news_briefing"],
+  "default_for_formats": ["recent_news_briefing"],
+  "research_mode": "recent_news_required",
+  "script_system_prompt": "你是严谨的科技与商业新闻短视频主编。严格区分已证实事实、官方计划、第三方判断和未确认信息，只返回符合约定的有效 JSON。",
+  "script_prompt_file": "references/script-prompt.md",
+  "visual_prompt_file": "references/visual-prompt.md",
+  "research_prompt_file": "references/research-prompt.md",
+  "policy_ids": [
+    "source-grounding",
+    "news-freshness",
+    "event-publish-time-separation",
+    "uncertainty-labeling"
+  ],
+  "quality_rules": [
+    "至少使用两个不同站点、可与检索注释匹配的公开来源，并覆盖官方或原始来源与可信独立来源",
+    "明确检索截止时间，不把旧闻包装成刚发生",
+    "区分事件发生时间与文章发布时间",
+    "预测、计划和传闻不得表述为既成事实"
+  ]
+}

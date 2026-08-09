@@ -1,26 +1,4 @@
-"""共享提示词契约与旧版默认值的兼容入口。"""
-
-import re
-from pathlib import Path
-
-
-SCRIPT_TARGET_MIN_CHARS = 220
-SCRIPT_TARGET_MAX_CHARS = 300
-# This is only a technical safety ceiling. Whether a script fits the video is
-# decided by the real TTS duration before any paid visual generation starts.
-SCRIPT_HARD_MAX_CHARS = 600
-
-
-def narration_char_count(text: str) -> int:
-    """Count speakable characters while ignoring formatting whitespace."""
-
-    return len(re.sub(r"\s+", "", str(text or "")))
-
-MIN_IMAGE_CHAPTER_COUNT = 2
-MAX_IMAGE_CHAPTER_COUNT = 10
-DEFAULT_IMAGE_CHAPTER_COUNT = 10
-
-_LEGACY_DEFAULT_SCRIPT_PROMPT = """请把输入的人物和核心观点，写成一版面向家长的抖音知识短视频完整脚本，目标时长约 45-60 秒。
+请把输入的人物和核心观点，写成一版面向家长的抖音知识短视频完整脚本，目标时长约 45-60 秒。
 
 【创作目标】
 这不是人物简介，而是对一个观点的深入展开。一条视频只讲清一个核心观点，优先找到它与常见直觉、习惯做法或主流判断之间真实存在的张力。要有冲突感和非共识价值，但不能为了吸引注意故意曲解观点或制造对立。语言自然、具体，有思考感但不说教，整篇口播要像一次自然推进的思考。系统会根据本任务所选配音语速追加口播字数建议，内容完整和节奏自然优先，不要为了凑字数破坏表达。
@@ -59,51 +37,4 @@ closing 优先回到一个家长下次就会遇到的具体选择，允许留下
 旁白按真实口语设计听感：开场短句先落冲突，长短句交替；关键反转前用自然标点留出一次短停顿，解释段避免连续堆叠并列概念。标点只服务于语义和停连，不输出方括号情绪指令、舞台提示、拟声词或会被 TTS 误读的符号。
 
 【来源规则】
-只围绕用户输入的人物、观点和本次来源卡列出的已核验事实展开。自动研究加入的 research_fact 可以按其来源安全转述；研究简报中的内容角度只是编辑辅助，不能冒充事实。不得补造人物经历、逐字引语、研究数据、著作内容或来源出处；来源卡没有提供的信息就不要添加。可以解释观点、推演逻辑和设计日常场景，但不能把推演或用户观点写成该人物说过的原话。不诊断具体儿童，不提供治疗建议，不出现齐家 AI 品牌或关注引导。"""
-
-
-_LEGACY_DEFAULT_SEEDANCE_PROMPT = (
-    "竖屏 9:16，高品质现代编辑插画动画，服务于家庭教育与心理学内容。"
-    "统一采用米白纸张背景、低饱和海军蓝与陶土橙配色、干净线条和细腻颗粒纹理，"
-    "整体温暖、克制、有思考感。所有章节讲述同一组虚构东亚家庭成员的一次连续互动，"
-    "人物外貌、年龄、发型、服装、家庭空间、光线与配色始终一致。不要逐字图解口播，"
-    "要用具体动作、空间关系和少量心理隐喻推进冲突、理解、改变与结果。"
-    "人物表情真实含蓄，采用 2D 手绘结合 2.5D 景深与轻微视差；视频镜头只安排一个"
-    "清楚可信的动作和一种克制运镜，图片镜头保持有呼吸感的静态构图，底部留出字幕安全区。"
-    "不出现文字、字幕、Logo、水印、名人、真实品牌、手机界面或医疗诊断场景；"
-    "避免夸张表演、突然变形、肢体错误和焦虑化表达。"
-)
-
-
-_CONTENT_SKILL_ROOT = Path(__file__).resolve().parent / "content_skills"
-
-
-def _skill_prompt(skill_id: str, filename: str, fallback: str) -> str:
-    """Load the default prompt from its versioned Skill package."""
-
-    path = _CONTENT_SKILL_ROOT / skill_id / "references" / filename
-    try:
-        value = path.read_text(encoding="utf-8").strip()
-    except OSError:
-        # Keep partially upgraded/source-only deployments readable. Packaged
-        # releases always include the Skill references.
-        return fallback.strip()
-    return value or fallback.strip()
-
-
-DEFAULT_SCRIPT_PROMPT = _skill_prompt(
-    "explain-expert-view",
-    "script-prompt.md",
-    _LEGACY_DEFAULT_SCRIPT_PROMPT,
-)
-DEFAULT_SEEDANCE_PROMPT = _skill_prompt(
-    "explain-expert-view",
-    "visual-prompt.md",
-    _LEGACY_DEFAULT_SEEDANCE_PROMPT,
-)
-
-
-SCRIPT_OUTPUT_CONTRACT = """【系统输出格式】
-输出严格 JSON，不要 Markdown。字段为 schema_version、video_title、cover_text、hook、closing、caption、hashtags、beats。schema_version 固定为 "2.0"。beats 按语义自然划分为 5-8 段，依次使用 id n01、n02……；第一段 role 为 hook，最后一段为 closing，中间按内容使用 suspense、context、reframe、explanation、example 或 application。每段包含 id、role、narration、visual_direction、on_screen_text、source_refs、quote_ref。
-
-narration 是唯一会送入 TTS 的口播，所有 narration 合计字数遵循系统在本任务末尾追加的语速目标；visual_direction 只描述画面中可见的人物、动作、场景与情绪，不包含字幕、文字、Logo 或排版指令；on_screen_text 是由 Remotion 后期叠加的少量强调文字，不会送入 TTS，也不会送给画面模型，不需要时填空字符串。每段 source_refs 至少填写一个明确列出的可用 fact/quote ID，绝不能填写 source ID 或自行创造 ID；没有直接引文时 quote_ref 填 null。hook 与第一段 narration 相同，closing 与最后一段 narration 相同；hashtags 输出 3-5 个不带 # 的词。"""
+只围绕用户输入的人物、观点和本次来源卡列出的已核验事实展开。自动研究加入的 research_fact 可以按其来源安全转述；研究简报中的内容角度只是编辑辅助，不能冒充事实。不得补造人物经历、逐字引语、研究数据、著作内容或来源出处；来源卡没有提供的信息就不要添加。可以解释观点、推演逻辑和设计日常场景，但不能把推演或用户观点写成该人物说过的原话。不诊断具体儿童，不提供治疗建议，不出现齐家 AI 品牌或关注引导。

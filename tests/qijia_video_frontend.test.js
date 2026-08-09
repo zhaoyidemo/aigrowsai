@@ -33,6 +33,22 @@ test('qijia video uses an independent page and API namespace', () => {
   assert.match(login, /autocomplete="current-password"/);
 });
 
+test('content Skills select versioned expert or recent-news workflows', () => {
+  assert.match(page, /id="content-skill"/);
+  assert.match(page, /id="news-topic-form"/);
+  assert.match(page, /TERALAB|TERA LAB/);
+  assert.match(page, /主题只是检索请求，不会被当作事实/);
+  assert.match(page, /两个不同站点的可追溯证据/);
+  assert.match(app, /qijia-video-generation-settings-v2/);
+  assert.match(app, /DEFAULT_CONTENT_SKILL_ID = 'explain-expert-view'/);
+  assert.match(app, /NEWS_CONTENT_SKILL_ID = 'brief-recent-news'/);
+  assert.match(app, /skill_id: requestedSkill\.skill_id/);
+  assert.match(app, /skill_version: requestedSkill\.version/);
+  assert.match(app, /\/source-cards\/news-topic/);
+  assert.match(app, /recent_news_research: 1/);
+  assert.match(app, /job\.skill_snapshot\?\.display_name/);
+});
+
 test('administrator can manage bounded colleague access without exposing passwords', () => {
   assert.match(page, /id="account-management-link"/);
   assert.match(accountsPage, /同事账号与使用权限/);
@@ -145,12 +161,12 @@ test('person viewpoint research is visible, cited, and non-blocking', () => {
   assert.match(page, /会先自动研究可追溯资料/);
   assert.match(page, /没有可靠来源时会使用原始观点继续/);
   assert.match(page, /id="person-research-brief"/);
-  assert.match(app, /function renderPersonResearchBrief\(job\)/);
+  assert.match(app, /function renderResearchBrief\(job\)/);
   assert.match(app, /人物主题自动研究简报/);
   assert.match(app, /自动研究已降级/);
   assert.match(app, /research_warning/);
   assert.match(app, /rel="noopener noreferrer"/);
-  assert.match(app, /renderPersonResearchBrief\(job\)/);
+  assert.match(app, /renderResearchBrief\(job\)/);
 });
 
 test('topic research is Douyin-only, cost-bounded, and human-gated', () => {
@@ -344,7 +360,7 @@ test('person viewpoint flow starts a real job and polling resumes after refresh'
 test('script and Seedance prompts are configurable without exposing transport contracts', () => {
   assert.match(page, /id="script-generation-prompt"/);
   assert.match(page, /id="seedance-generation-prompt"/);
-  assert.match(page, /人物、观点和 JSON 输出结构由系统自动附加/);
+  assert.match(page, /来源卡和 JSON 输出结构由系统自动附加/);
   assert.match(page, /上传参考图后，由参考图接管画风与人物造型/);
   assert.match(page, /为每个视觉章节生成 1 张画面/);
   assert.match(page, /id="job-seedance-prompt"/);

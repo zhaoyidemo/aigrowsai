@@ -21,6 +21,7 @@ from qijia_video import MODULE_VERSION
 from qijia_video.contracts import (
     AssetRef,
     GenerationSettings,
+    NewsTopicInput,
     PersonViewpointInput,
     QuickSourceCardInput,
     SeedanceModelId,
@@ -237,6 +238,13 @@ async def capabilities(user: dict = Depends(get_current_user)):
     })
 
 
+@api_router.get("/skills")
+@boundary
+async def list_content_skills(user: dict = Depends(get_current_user)):
+    del user
+    return ok(runtime.service.content_skills())
+
+
 @api_router.post("/source-cards")
 @boundary
 async def create_source_card(
@@ -272,6 +280,24 @@ async def create_person_viewpoint(
     )
     card = await runtime.service.verify_source_card(card.id, card.revision, actor)
     return ok(card.model_dump(mode="json"), "人物观点已确认，开始创作")
+
+
+@api_router.post("/source-cards/news-topic")
+@boundary
+async def create_news_topic(
+    body: NewsTopicInput, user: dict = Depends(get_current_user)
+):
+    actor = actor_from_user(user)
+    card = await runtime.service.create_source_card(
+        body.to_source_card_input(), actor
+    )
+    card = await runtime.service.verify_source_card(
+        card.id, card.revision, actor
+    )
+    return ok(
+        card.model_dump(mode="json"),
+        "新闻主题已冻结，任务创建后将先检索并核验最新公开来源",
+    )
 
 
 @api_router.post("/source-cards/idea-with-reference")

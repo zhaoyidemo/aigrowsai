@@ -12,6 +12,7 @@ import httpx
 from pydantic import ValidationError
 
 from qijia_video.contracts import (
+    NewsResearchBrief,
     PersonResearchBrief,
     ProviderUsageRecord,
     ScriptDraft,
@@ -33,9 +34,11 @@ from qijia_video.prompts import (
 SCRIPT_PROMPT_VERSION = "qijia_script_v12_research_interaction"
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v8_max_reasoning"
 PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_research_v1"
+NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v1"
 OPENROUTER_REASONING_EFFORT = "max"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 PERSON_RESEARCH_MAX_COMPLETION_TOKENS = 48_000
+NEWS_RESEARCH_MAX_COMPLETION_TOKENS = 48_000
 STORYBOARD_MAX_COMPLETION_TOKENS = 128_000
 UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
 
@@ -156,6 +159,68 @@ _PERSON_RESEARCH_RESPONSE_SCHEMA = {
     "additionalProperties": False,
 }
 
+_NEWS_RESEARCH_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "core_tension": {"type": "string"},
+        "audience_relevance": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "content_angles": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "interaction_opportunity": {"type": "string"},
+        "evidence": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "source_title": {"type": "string"},
+                    "source_url": {"type": "string"},
+                    "source_kind": {
+                        "type": "string",
+                        "enum": [
+                            "official",
+                            "primary",
+                            "independent",
+                            "other",
+                        ],
+                    },
+                    "published_at": {"type": "string"},
+                    "event_at": {"type": "string"},
+                },
+                "required": [
+                    "claim",
+                    "source_title",
+                    "source_url",
+                    "source_kind",
+                    "published_at",
+                    "event_at",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "uncertainties": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+    },
+    "required": [
+        "summary",
+        "core_tension",
+        "audience_relevance",
+        "content_angles",
+        "interaction_opportunity",
+        "evidence",
+        "uncertainties",
+    ],
+    "additionalProperties": False,
+}
+
 _STORYBOARD_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -198,51 +263,49 @@ class _OpenRouterJsonResponse:
 
 _STORYBOARD_FALLBACKS = (
     {
-        "role": "冲突钩子",
+        "role": "关键变化钩子",
         "first_frame_prompt": (
-            "同一组虚构东亚家庭成员，傍晚的家庭学习区，孩子面对尚未完成的任务，"
-            "家长俯身伸手准备接管，孩子身体微微后退；中景双人构图，前景手势形成张力，"
-            "暖色侧光，底部留出字幕安全区，画面中无文字"
+            "核心主体正处于关键动作或状态变化的起点，中景构图，前中后景关系清楚，"
+            "底部留出字幕安全区，画面中无文字"
         ),
         "motion_prompt": (
-            "开场即发生动作：家长伸出的手立即在半空停住，孩子马上抬眼回应；"
-            "镜头克制推近，在前两秒内让冲突关系清楚"
+            "开场动作从第一帧立即发生，镜头克制推近，在前两秒内让核心变化清楚"
         ),
     },
     {
-        "role": "情绪特写",
+        "role": "主体细节",
         "first_frame_prompt": (
-            "延续同一家庭、服装和学习区，孩子低头握住手中的物件，家长的手停在前景；"
-            "近景聚焦孩子含蓄而复杂的表情，前中后景清楚，柔和窗光，画面中无文字"
+            "延续同一主体、空间、材质和光线，近景聚焦能够解释变化的动作或物件细节，"
+            "层次清楚，画面中无文字"
         ),
-        "motion_prompt": "从家长停住的手缓慢推进到孩子的眼神，保持静态呼吸感",
+        "motion_prompt": "从整体关系缓慢推进到关键细节，保持克制、可信的运动",
     },
     {
-        "role": "心理机制",
+        "role": "关系与机制",
         "first_frame_prompt": (
-            "延续同一家庭空间，前景是家长逐渐收回的手，中景留出一块让孩子自己尝试的"
-            "空间，孩子专注处理眼前任务；门框与桌沿形成温和边界，层次分明，画面中无文字"
+            "延续同一视觉空间，用主体、环境和关键物件的前中后景关系呈现变化机制，"
+            "构图简洁、因果关系可理解，画面中无文字"
         ),
-        "motion_prompt": "镜头从前景的手缓慢横移到独立尝试的孩子，轻微景深变化",
+        "motion_prompt": "镜头在相关主体之间缓慢横移，以轻微景深变化揭示信息关系",
     },
     {
-        "role": "行为改变",
+        "role": "影响展开",
         "first_frame_prompt": (
-            "延续同一人物、服装与光线，家长退后半步并放松双手，孩子重新抬头准备自己"
-            "完成下一步；双人中景，空间关系从压迫转为支持，画面中无文字"
+            "延续同一主体与视觉锚点，清楚展示变化发生后的下一步动作或影响，"
+            "中景构图，状态差异可见，画面中无文字"
         ),
         "motion_prompt": (
-            "家长自然退后并放下手，孩子开始完成一个明确动作；镜头轻缓跟随孩子"
+            "主体完成一个明确动作，镜头轻缓跟随并停在新的可观察状态"
         ),
     },
     {
-        "role": "结果回报",
+        "role": "结果与观察",
         "first_frame_prompt": (
-            "延续同一家庭故事，孩子完成任务后抬头与家长对视，家长站在稍远处露出克制的"
-            "认可表情；室内暖光变得开阔，构图有余韵，底部留出字幕安全区，画面中无文字"
+            "回到贯穿全片的核心主体、空间或物件，呈现可观察的结果与仍待关注的信号，"
+            "构图有余韵，底部留出字幕安全区，画面中无文字"
         ),
         "motion_prompt": (
-            "孩子完成最后一个动作并抬头，家长轻轻点头；镜头缓慢拉远呈现更松弛的空间"
+            "完成最后一个自然动作后缓慢拉远，让结果与后续观察空间同时可见"
         ),
     },
 )
@@ -318,8 +381,20 @@ def _normalize_storyboard_rows(
             / max(1, len(target_segments) - 1)
         )
         fallback = _STORYBOARD_FALLBACKS[fallback_index]
+        segment_direction = str(
+            getattr(segment, "visual_direction", "") or ""
+        ).strip()
         semantic_intent = (
-            f"{fallback['role']}：用连续家庭互动承载本段观点的语义转折"
+            f"{fallback['role']}："
+            + (
+                segment_direction
+                or "用连续视觉叙事承载本段信息变化"
+            )
+        )
+        fallback_frame = (
+            f"{segment_direction}；{fallback['first_frame_prompt']}"
+            if segment_direction
+            else fallback["first_frame_prompt"]
         )
         normalized.append({
             "segment_id": segment.id,
@@ -328,7 +403,7 @@ def _normalize_storyboard_rows(
             ),
             "first_frame_prompt": _storyboard_text(
                 raw.get("first_frame_prompt"),
-                fallback["first_frame_prompt"],
+                fallback_frame,
                 1800,
             ),
             "motion_prompt": _storyboard_text(
@@ -753,10 +828,38 @@ class OpenRouterScriptProvider:
             and self.base_url.startswith("https://")
         )
 
+    async def research_for_skill(
+        self,
+        card: SourceCard,
+        *,
+        research_mode: str,
+        research_prompt: str,
+        research_as_of: str = "",
+        on_usage: UsageRecorder | None = None,
+    ) -> PersonResearchBrief | NewsResearchBrief:
+        """Dispatch research through the workflow frozen on the job."""
+
+        mode = str(research_mode or "").strip()
+        if mode == "person_viewpoint_optional":
+            return await self.research_person_viewpoint(
+                card,
+                research_prompt=research_prompt,
+                on_usage=on_usage,
+            )
+        if mode == "recent_news_required":
+            return await self.research_recent_news(
+                card,
+                research_prompt=research_prompt,
+                as_of=research_as_of,
+                on_usage=on_usage,
+            )
+        raise ProviderUnavailable(f"脚本 Provider 不支持研究模式：{mode}")
+
     async def research_person_viewpoint(
         self,
         card: SourceCard,
         *,
+        research_prompt: str = "",
         on_usage: UsageRecorder | None = None,
     ) -> PersonResearchBrief:
         """Build a cited editorial brief without turning research into a gate."""
@@ -773,7 +876,12 @@ class OpenRouterScriptProvider:
             f"研究日期（UTC）：{research_date}\n"
             f"人物：{person_name}\n"
             f"用户给出的主题观点：{viewpoint}\n\n"
-            "研究目标：确认人物的专业背景与该主题相关的概念脉络，找到它对当代家长真正有用的"
+            + (
+                f"【本 Skill 的研究规则】\n{research_prompt.strip()}\n\n"
+                if research_prompt.strip()
+                else ""
+            )
+            + "研究目标：确认人物的专业背景与该主题相关的概念脉络，找到它对当代家长真正有用的"
             "冲突、边界和现实场景。用户写下的观点只是创作命题，除非来源逐字支持，绝不能把它"
             "写成该人物的原话。不要为了完整而补造履历、引语、书名、研究结论或因果关系。\n\n"
             "检索时优先原始著作的可靠版本、大学/研究机构、专业协会、同行评议论文、权威出版社"
@@ -876,6 +984,153 @@ class OpenRouterScriptProvider:
                 "人物主题研究返回内容不符合研究简报契约，已降级使用原始观点"
             ) from exc
 
+    async def research_recent_news(
+        self,
+        card: SourceCard,
+        *,
+        research_prompt: str = "",
+        as_of: str = "",
+        on_usage: UsageRecorder | None = None,
+    ) -> NewsResearchBrief:
+        """Research current news and require two independently cited sources."""
+
+        if not self.configured:
+            raise ProviderUnavailable(
+                "最新新闻研究未配置：请设置 OPENROUTER_API_KEY"
+            )
+        topic = card.subject.name
+        frozen_as_of = str(as_of or timestamp()).strip()
+        prompt = (
+            "请为一条中文知识短视频完成最新新闻联网研究。必须先检索，再输出中文 JSON。\n\n"
+            f"检索截止时间（Asia/Shanghai）：{frozen_as_of}\n"
+            f"主题：{topic}\n"
+            f"用户关注角度：{card.core_idea}\n"
+            f"目标受众：{card.target_audience}\n\n"
+            + (
+                f"【本 Skill 的研究规则】\n{research_prompt.strip()}\n\n"
+                if research_prompt.strip()
+                else ""
+            )
+            + "至少使用两个不同站点的可追溯来源，并同时覆盖官方或原始材料与可信独立来源。"
+            "每条 evidence 只写来源能够直接支持的一个事实，source_url 必须原样使用本次检索"
+            "结果中的 URL。published_at 写页面标注的发布时间，event_at 写事件发生时间；未知时"
+            "填写空字符串，不得猜测。source_kind 只能是 official、primary、independent 或"
+            " other。summary 概括最新且最重要的变化；core_tension 写清它为什么值得现在关注；"
+            "audience_relevance、content_angles 各写 2-4 条；无法确认、来源冲突或可能同名混淆"
+            "的内容写入 uncertainties。只返回 schema 要求的 JSON。"
+        )
+        response = await _openrouter_json_request(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是严谨的科技与商业新闻研究员。区分事件时间、发布时间、"
+                        "既成事实、官方计划、第三方判断和传闻，只返回有效 JSON。"
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            label="最新新闻研究",
+            schema_name="recent_news_research_v1",
+            response_schema=_NEWS_RESEARCH_RESPONSE_SCHEMA,
+            max_completion_tokens=NEWS_RESEARCH_MAX_COMPLETION_TOKENS,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+            operation="recent_news_research",
+            on_usage=on_usage,
+            tools=[{
+                "type": "openrouter:web_search",
+                "parameters": {
+                    "engine": "exa",
+                    "mode": "deep-lite",
+                    "max_results": 6,
+                    "max_uses": 3,
+                    "max_total_results": 12,
+                    "max_characters": 5000,
+                    "excluded_domains": [
+                        "douyin.com",
+                        "xiaohongshu.com",
+                        "zhihu.com",
+                    ],
+                },
+            }],
+            max_tool_calls=3,
+        )
+        citations = _citation_catalog(response.message)
+        grounded_evidence: list[dict[str, str]] = []
+        seen_urls: set[str] = set()
+        source_hosts: set[str] = set()
+        for raw in response.data.get("evidence") or []:
+            if not isinstance(raw, dict):
+                continue
+            normalized_url = _normalized_citation_url(raw.get("source_url"))
+            citation = citations.get(normalized_url)
+            claim = str(raw.get("claim") or "").strip()
+            if (
+                not citation
+                or not claim
+                or normalized_url in seen_urls
+                or len(citation["url"]) > 2000
+            ):
+                continue
+            host = (urlsplit(citation["url"]).hostname or "").lower()
+            if not host:
+                continue
+            source_kind = str(raw.get("source_kind") or "other").strip()
+            if source_kind not in {
+                "official",
+                "primary",
+                "independent",
+                "other",
+            }:
+                source_kind = "other"
+            seen_urls.add(normalized_url)
+            source_hosts.add(host)
+            grounded_evidence.append({
+                "claim": claim[:1200],
+                "source_title": (
+                    citation.get("title")
+                    or str(raw.get("source_title") or "").strip()
+                    or citation["url"]
+                )[:500],
+                "source_url": citation["url"],
+                "source_kind": source_kind,
+                "published_at": str(raw.get("published_at") or "").strip()[:64],
+                "event_at": str(raw.get("event_at") or "").strip()[:64],
+            })
+        if len(grounded_evidence) < 2 or len(source_hosts) < 2:
+            raise ProviderUnavailable(
+                "最新新闻研究没有形成两个不同站点的可追溯来源，禁止降级生成脚本"
+            )
+        generated = dict(response.data)
+
+        def bounded_list(key: str, maximum: int) -> list:
+            value = generated.get(key)
+            return list(value[:maximum]) if isinstance(value, list) else []
+
+        generated.update({
+            "schema_version": "1.0",
+            "kind": "recent_news",
+            "topic": topic,
+            "as_of": frozen_as_of,
+            "audience_relevance": bounded_list("audience_relevance", 6),
+            "content_angles": bounded_list("content_angles", 5),
+            "evidence": grounded_evidence[:10],
+            "uncertainties": bounded_list("uncertainties", 10),
+            "model_id": response.model_id,
+            "prompt_version": NEWS_RESEARCH_PROMPT_VERSION,
+            "generated_at": timestamp(),
+        })
+        try:
+            return NewsResearchBrief.model_validate(generated)
+        except (TypeError, ValidationError) as exc:
+            raise ProviderUnavailable(
+                "最新新闻研究返回内容不符合研究简报契约，禁止降级生成脚本"
+            ) from exc
+
     def _prompt(self, card: SourceCard, prompt: str | None = None) -> str:
         sources = [item.model_dump(mode="json") for item in card.sources]
         facts = [item.model_dump(mode="json") for item in card.verified_facts]
@@ -895,7 +1150,8 @@ class OpenRouterScriptProvider:
             f"内容形式：{card.content_format.value}\n"
             f"主题对象：{json.dumps(card.subject.model_dump(mode='json'), ensure_ascii=False)}\n"
             f"选题：{card.title}\n"
-            f"家长问题：{card.parent_question}\n"
+            f"目标受众：{card.target_audience}\n"
+            f"受众问题：{card.parent_question}\n"
             f"核心材料：{card.core_idea}\n"
             f"来源信息：{json.dumps(sources, ensure_ascii=False)}\n"
             f"已核验事实：{json.dumps(facts, ensure_ascii=False)}\n"
@@ -1005,11 +1261,27 @@ class OpenRouterScriptProvider:
     ) -> ScriptDraft:
         return await self.generate_with_usage(card, prompt)
 
+    async def generate_for_skill(
+        self,
+        card: SourceCard,
+        prompt: str,
+        *,
+        system_prompt: str,
+        on_usage: UsageRecorder | None = None,
+    ) -> ScriptDraft:
+        return await self.generate_with_usage(
+            card,
+            prompt,
+            system_prompt=system_prompt,
+            on_usage=on_usage,
+        )
+
     async def generate_with_usage(
         self,
         card: SourceCard,
         prompt: str | None = None,
         *,
+        system_prompt: str | None = None,
         on_usage: UsageRecorder | None = None,
     ) -> ScriptDraft:
         if not self.configured:
@@ -1019,8 +1291,8 @@ class OpenRouterScriptProvider:
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "你是面向家长的教育与心理学短视频主编。"
+                "content": system_prompt or (
+                    "你是严谨的知识短视频主编。"
                     "严格遵守来源边界，只返回有效 JSON。"
                 ),
             },
@@ -1194,10 +1466,10 @@ class OpenRouterStoryboardProvider:
             ],
         }, ensure_ascii=False)
         prompt = (
-            f"把下面的完整脚本设计成一条连续的竖屏家庭微故事。脚本已经被确定性地分成 {shot_count} 个"
-            "视觉章节，每章可能承载一个或多个相邻叙事段；不得遗漏任何叙事段。所有章节使用同一组虚构"
-            "东亚家庭成员，人物外貌、年龄、发型、服装、家庭空间、光线和配色保持一致，"
-            "但每个章节仍须单独成立、无需依赖字幕才能看懂。\n\n"
+            f"把下面的完整脚本设计成一条连续的竖屏视觉叙事。脚本已经被确定性地分成 {shot_count} 个"
+            "视觉章节，每章可能承载一个或多个相邻叙事段；不得遗漏任何叙事段。严格遵循统一基础"
+            "风格，并在内容允许时复用同一核心主体、空间和关键物件；如果出现人物，其外貌、服装"
+            "与身份必须连续。每个章节仍须单独成立、无需依赖字幕才能看懂。\n\n"
             "各章媒介已经根据真实旁白时长确定，不得自行更改："
             + "；".join(
                 f"第 {index} 章为 {visual_type}"
@@ -1208,7 +1480,7 @@ class OpenRouterStoryboardProvider:
             "同一个叙事段可能连续分配给多个视觉章节；这些章节必须沿时间顺序设计成"
             "不同动作阶段、景别或视角，彼此承接但不得重复同一构图。\n\n"
             "第一章同时承担抖音开场：首帧就要看见正在发生的冲突、反常识结果或关键选择，"
-            "不能先给空镜、人物入场或环境介绍。动作从第一帧立即开始，前 2 秒内让人物关系"
+            "不能先给空镜、主体入场或环境介绍。动作从第一帧立即开始，前 2 秒内让主体关系"
             "和矛盾一眼可懂，前 5 秒内通过动作反应或构图变化再提供一层新信息；画面不能依赖"
             "字幕解释，也不能用夸张惊吓、焦虑表演或虚假危机吸引注意。\n\n"
             "优先使用每段给出的 visual_direction，把同一章内相邻段落合并成一个清楚、可拍摄的视觉动作。"
@@ -1246,7 +1518,7 @@ class OpenRouterStoryboardProvider:
                 {
                     "role": "system",
                     "content": (
-                        "你是教育与心理学短视频的分镜导演。"
+                        "你是知识短视频的分镜导演。"
                         "只返回符合要求的 JSON，不在画面中设计任何可读文字。"
                     ),
                 },
