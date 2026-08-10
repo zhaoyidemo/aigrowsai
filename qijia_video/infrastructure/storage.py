@@ -7,10 +7,12 @@ import shutil
 from pathlib import Path, PurePosixPath
 
 from qijia_video.contracts import AssetRef
-from qijia_video.errors import ProviderUnavailable
+from qijia_video.errors import ProviderUnavailable, QualityGateFailed
 
 
 TOS_SOCKET_TIMEOUT_SECONDS = 300
+TOS_CONTROL_TIMEOUT_SECONDS = 20
+TOS_DIRECT_UPLOAD_EXPIRES_SECONDS = 15 * 60
 TOS_DOWNLOAD_ATTEMPTS = 3
 TOS_DOWNLOAD_PART_SIZE_BYTES = 4 * 1024 * 1024
 TOS_DOWNLOAD_TASK_COUNT = 2
@@ -95,6 +97,35 @@ class LocalArtifactStorage:
     async def signed_get_url(self, asset: AssetRef, *, expires: int = 3600) -> str:
         return f"local://{asset.object_key}"
 
+    async def create_direct_upload(
+        self,
+        *,
+        object_key: str,
+        asset_id: str,
+        media_type: str,
+        sha256: str,
+        size_bytes: int,
+        expires: int = TOS_DIRECT_UPLOAD_EXPIRES_SECONDS,
+    ) -> dict | None:
+        del object_key, asset_id, media_type, sha256, size_bytes, expires
+        # Local development has no browser-addressable private object store.
+        return None
+
+    async def complete_direct_upload(
+        self,
+        *,
+        object_key: str,
+        asset_id: str,
+        media_type: str,
+        sha256: str,
+        size_bytes: int,
+    ) -> AssetRef:
+        del object_key, asset_id, media_type, sha256, size_bytes
+        raise ProviderUnavailable("本地存储不支持浏览器直传确认")
+
+    async def delete_object(self, object_key: str) -> None:
+        await asyncio.to_thread(self._path(object_key).unlink, missing_ok=True)
+
 
 class TosArtifactStorage:
     name = "tos"
@@ -121,7 +152,12 @@ class TosArtifactStorage:
             and self.region
         )
 
-    def _client(self):
+    def _client(
+        self,
+        *,
+        timeout_seconds: int = TOS_SOCKET_TIMEOUT_SECONDS,
+        max_retry_count: int = 3,
+    ):
         if not self.configured:
             raise ProviderUnavailable("TOS 配置不完整")
         import tos
@@ -131,9 +167,15 @@ class TosArtifactStorage:
             self.secret_access_key,
             f"tos-{self.region}.volces.com",
             self.region,
-            max_retry_count=3,
-            request_timeout=TOS_SOCKET_TIMEOUT_SECONDS,
-            socket_timeout=TOS_SOCKET_TIMEOUT_SECONDS,
+            max_retry_count=max(0, int(max_retry_count)),
+            request_timeout=max(1, int(timeout_seconds)),
+            socket_timeout=max(1, int(timeout_seconds)),
+        )
+
+    def _control_client(self):
+        return self._client(
+            timeout_seconds=TOS_CONTROL_TIMEOUT_SECONDS,
+            max_retry_count=0,
         )
 
     async def put_file(
@@ -228,6 +270,126 @@ class TosArtifactStorage:
         if not url.startswith("https://"):
             raise RuntimeError("TOS 未返回有效的 HTTPS 下载地址")
         return url
+
+    async def create_direct_upload(
+        self,
+        *,
+        object_key: str,
+        asset_id: str,
+        media_type: str,
+        sha256: str,
+        size_bytes: int,
+        expires: int = TOS_DIRECT_UPLOAD_EXPIRES_SECONDS,
+    ) -> dict | None:
+        """Issue a short-lived browser PUT without exposing TOS credentials."""
+
+        import tos
+
+        key = _safe_key(object_key)
+        lifetime = max(60, min(int(expires), TOS_DIRECT_UPLOAD_EXPIRES_SECONDS))
+        headers = {
+            "Content-Type": media_type,
+            "x-tos-meta-asset-id": asset_id,
+            "x-tos-meta-sha256": sha256,
+            "x-tos-meta-size-bytes": str(int(size_bytes)),
+        }
+
+        def sign():
+            return self._client().pre_signed_url(
+                tos.HttpMethodType.Http_Method_Put,
+                self.bucket,
+                key,
+                expires=lifetime,
+                header=headers,
+                is_signed_all_headers=True,
+            )
+
+        try:
+            signed = await asyncio.to_thread(sign)
+        except Exception as exc:
+            raise ProviderUnavailable(f"TOS 直传凭证生成失败：{exc}") from exc
+        url = str(getattr(signed, "signed_url", "") or "")
+        if not url.startswith("https://"):
+            raise ProviderUnavailable("TOS 未返回有效的 HTTPS 上传地址")
+        signed_headers = {
+            str(name): str(value)
+            for name, value in dict(
+                getattr(signed, "signed_header", {}) or headers
+            ).items()
+            if str(name).lower() != "host"
+        }
+        return {
+            "url": url,
+            "method": "PUT",
+            "headers": signed_headers,
+            "expires_in_seconds": lifetime,
+        }
+
+    async def complete_direct_upload(
+        self,
+        *,
+        object_key: str,
+        asset_id: str,
+        media_type: str,
+        sha256: str,
+        size_bytes: int,
+    ) -> AssetRef:
+        """Verify that the exact signed object reached TOS before queuing work."""
+
+        key = _safe_key(object_key)
+
+        def inspect():
+            return self._control_client().head_object(self.bucket, key)
+
+        try:
+            output = await asyncio.wait_for(
+                asyncio.to_thread(inspect),
+                timeout=TOS_CONTROL_TIMEOUT_SECONDS + 5,
+            )
+        except TimeoutError as exc:
+            raise ProviderUnavailable("TOS 上传确认超时，请直接重试确认") from exc
+        except Exception as exc:
+            raise ProviderUnavailable("TOS 尚未收到完整素材，请重新上传") from exc
+
+        actual_type = str(getattr(output, "content_type", "") or "").split(";", 1)[0]
+        actual_size = int(getattr(output, "content_length", -1) or 0)
+        metadata = {
+            str(name).lower(): str(value)
+            for name, value in dict(getattr(output, "meta", {}) or {}).items()
+        }
+        if actual_size != int(size_bytes):
+            raise QualityGateFailed("上传素材大小校验失败，请重新选择文件")
+        if actual_type.lower() != str(media_type).lower():
+            raise QualityGateFailed("上传素材类型校验失败，请重新选择文件")
+        if metadata.get("asset-id") != asset_id:
+            raise QualityGateFailed("上传素材身份校验失败，请重新上传")
+        if metadata.get("sha256") != sha256:
+            raise QualityGateFailed("上传素材完整性信息不一致，请重新上传")
+        if metadata.get("size-bytes") != str(int(size_bytes)):
+            raise QualityGateFailed("上传素材大小信息不一致，请重新上传")
+        return AssetRef(
+            asset_id=asset_id,
+            object_key=key,
+            sha256=sha256,
+            size_bytes=int(size_bytes),
+            media_type=media_type,
+        )
+
+    async def delete_object(self, object_key: str) -> None:
+        key = _safe_key(object_key)
+
+        def delete():
+            return self._control_client().delete_object(self.bucket, key)
+
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(delete),
+                timeout=TOS_CONTROL_TIMEOUT_SECONDS + 5,
+            )
+        except TimeoutError as exc:
+            raise ProviderUnavailable("TOS 临时素材清理超时") from exc
+        except Exception as exc:
+            raise ProviderUnavailable(f"TOS 临时素材清理失败：{exc}") from exc
 
 
 def storage_from_settings(project_root: Path, settings):

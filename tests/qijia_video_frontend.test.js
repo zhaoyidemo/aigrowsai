@@ -368,7 +368,13 @@ test('storyboard supports editor images and videos without losing AI versions', 
   assert.match(app, /data-shot-upload/);
   assert.match(app, /image\/jpeg,image\/png,image\/webp/);
   assert.match(app, /video\/quicktime,video\/webm/);
-  assert.match(app, /apiMultipart\([\s\S]*\/media/);
+  assert.match(app, /sha256File\(file\)/);
+  assert.match(app, /uploadFileDirect\(grant, file/);
+  assert.match(app, /`\$\{uploadPath\}\/uploads`/);
+  assert.match(app, /`\$\{uploadPath\}\/uploads\/complete`/);
+  assert.match(app, /`\$\{uploadPath\}\/uploads\/cancel`/);
+  assert.match(app, /apiMultipart\(uploadPath, body\)/);
+  assert.match(app, /正在直传素材… \$\{percent\}%/);
   assert.match(app, /restore-generated-media/);
   assert.match(app, /data-preview-upload/);
   assert.match(app, /selectedUploadedMedia/);

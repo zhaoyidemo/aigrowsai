@@ -95,6 +95,7 @@ from qijia_video.skill_registry import (
     default_skill_registry,
 )
 from qijia_video.tts_options import TTS_SCRIPT_CHARACTER_TARGETS
+from qijia_video.upload_media import detect_shot_media_format
 
 
 FORBIDDEN_PLACEHOLDERS = ("<仅示意", "仅填写已经核验")
@@ -3628,6 +3629,24 @@ class QijiaVideoService:
             source_path = await self.storage.materialize(
                 raw_asset, workspace / "source.upload"
             )
+            if source_path.stat().st_size != raw_asset.size_bytes:
+                raise QualityGateFailed("上传素材大小与确认信息不一致")
+            try:
+                actual_kind, _, actual_media_type = detect_shot_media_format(
+                    source_path
+                )
+            except ValueError as exc:
+                raise QualityGateFailed(str(exc)) from exc
+            iso_video_types = {"video/mp4", "video/quicktime"}
+            compatible_media_type = (
+                actual_media_type == raw_asset.media_type
+                or {
+                    actual_media_type,
+                    raw_asset.media_type,
+                } <= iso_video_types
+            )
+            if actual_kind != media_kind or not compatible_media_type:
+                raise QualityGateFailed("上传素材类型与文件内容不一致")
             if media_kind == "video":
                 destination = workspace / "uploaded.timeline.mp4"
                 prepare_upload = getattr(

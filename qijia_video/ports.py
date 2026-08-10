@@ -206,6 +206,29 @@ class ArtifactStorage(Protocol):
 
     async def signed_get_url(self, asset: AssetRef, *, expires: int = 3600) -> str: ...
 
+    async def create_direct_upload(
+        self,
+        *,
+        object_key: str,
+        asset_id: str,
+        media_type: str,
+        sha256: str,
+        size_bytes: int,
+        expires: int = 900,
+    ) -> dict | None: ...
+
+    async def complete_direct_upload(
+        self,
+        *,
+        object_key: str,
+        asset_id: str,
+        media_type: str,
+        sha256: str,
+        size_bytes: int,
+    ) -> AssetRef: ...
+
+    async def delete_object(self, object_key: str) -> None: ...
+
 
 class Renderer(Protocol):
     name: str

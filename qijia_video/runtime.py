@@ -19,6 +19,7 @@ from qijia_video.contracts import (
     SEEDANCE_RETIRED_MODEL,
 )
 from qijia_video.cost_analysis import USD_TO_CNY_RATE
+from qijia_video.errors import InvalidTransition
 from qijia_video.infrastructure.media import FfmpegMediaPackager
 from qijia_video.infrastructure.postgres_repository import (
     PostgresAggregateRepository,
@@ -466,10 +467,11 @@ async def _execute(
                 progress=report,
             )
         elif action == "replace_shot_media":
+            raw_asset = AssetRef.model_validate(parameters.get("raw_asset") or {})
             job = await runtime.service.replace_shot_media(
                 job_id,
                 str(parameters.get("shot_id") or ""),
-                AssetRef.model_validate(parameters.get("raw_asset") or {}),
+                raw_asset,
                 str(parameters.get("media_kind") or ""),
                 str(parameters.get("media_id") or ""),
                 str(parameters.get("original_filename") or ""),
@@ -477,6 +479,16 @@ async def _execute(
                 actor,
                 progress=report,
             )
+            delete_object = getattr(runtime.storage, "delete_object", None)
+            if callable(delete_object):
+                try:
+                    await delete_object(raw_asset.object_key)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to clean staged shot upload key=%s error=%s",
+                        raw_asset.object_key,
+                        exc,
+                    )
         elif action == "select_shot_media":
             job = await runtime.service.select_shot_media(
                 job_id,
@@ -638,6 +650,17 @@ async def start_run(
         job_payload=payload,
         recoverable=True,
     )
+    if reused:
+        existing = await task_service.get_task_async(task_id, refresh=True)
+        existing_payload = dict((existing or {}).get("job_payload") or {})
+        same_operation = (
+            existing_payload.get("action") == action
+            and existing_payload.get("job_id") == job_id
+            and dict(existing_payload.get("parameters") or {})
+            == dict(parameters or {})
+        )
+        if not same_operation:
+            raise InvalidTransition("另一个镜头调整正在处理中，请等待完成后再试")
     if not reused:
         await runtime.service.set_last_run_task(job_id, task_id, actor)
         mode = settings.QIJIA_VIDEO_EXECUTION_MODE.strip().lower()

@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
+import json
 import logging
 import mimetypes
 import secrets
@@ -29,18 +32,29 @@ from qijia_video.contracts import (
     SourceCardInput,
 )
 from qijia_video.errors import ProviderUnavailable, QijiaVideoError
-from qijia_video.infrastructure.storage import LocalArtifactStorage
+from qijia_video.infrastructure.storage import (
+    TOS_DIRECT_UPLOAD_EXPIRES_SECONDS,
+    LocalArtifactStorage,
+)
 from qijia_video.runtime import actor_from_user, runtime, start_run
+from qijia_video.settings import settings
 from qijia_video.topic_runtime import topic_runtime
 from qijia_video.service import RELEASE_ARCHIVE_NAME
 from qijia_video.tts_options import TtsSpeedRatio, TtsVoiceId
 from qijia_video.auth import get_current_user, require_permission
+from qijia_video.upload_media import (
+    MAX_SHOT_IMAGE_BYTES,
+    MAX_SHOT_VIDEO_BYTES,
+    declared_shot_media_format,
+    detect_shot_media_format,
+    safe_upload_filename,
+    validate_shot_media_size,
+)
 
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
-MAX_SHOT_IMAGE_BYTES = 20 * 1024 * 1024
-MAX_SHOT_VIDEO_BYTES = 200 * 1024 * 1024
+SHOT_MEDIA_UPLOAD_TOKEN_VERSION = 1
 logger = logging.getLogger(__name__)
 api_router = APIRouter(
     prefix="/api/qijia-video",
@@ -96,6 +110,42 @@ class StrictRequest(BaseModel):
 
 class RevisionRequest(StrictRequest):
     expected_revision: int = Field(ge=1)
+
+
+class ShotMediaUploadInitiateRequest(RevisionRequest):
+    original_filename: str = Field(min_length=1, max_length=255)
+    media_kind: Literal["image", "video"]
+    size_bytes: int = Field(ge=1)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ShotMediaUploadTokenRequest(StrictRequest):
+    upload_token: str = Field(min_length=32, max_length=8192)
+
+
+class ShotMediaUploadClaims(StrictRequest):
+    version: Literal[SHOT_MEDIA_UPLOAD_TOKEN_VERSION]
+    user_id: int | None
+    username: str = Field(min_length=1, max_length=160)
+    job_id: str = Field(min_length=1, max_length=64)
+    shot_id: str = Field(min_length=1, max_length=64)
+    media_id: str = Field(pattern=r"^[A-Za-z0-9_-]+$", max_length=96)
+    object_key: str = Field(min_length=1, max_length=1024)
+    media_kind: Literal["image", "video"]
+    media_type: Literal[
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "video/mp4",
+        "video/quicktime",
+        "video/webm",
+    ]
+    original_filename: str = Field(min_length=1, max_length=255)
+    size_bytes: int = Field(ge=1, le=MAX_SHOT_VIDEO_BYTES)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    expected_revision: int = Field(ge=1)
+    expected_selected_media_id: str = Field(default="", max_length=96)
+    expires_at: int = Field(gt=0)
 
 
 class CreateJobRequest(StrictRequest):
@@ -159,6 +209,62 @@ class DouyinPerformanceRefreshRequest(RevisionRequest):
     confirm_cost: Literal[True]
 
 
+def _shot_media_upload_signature(payload: bytes) -> str:
+    secret = str(settings.SESSION_SECRET or "")
+    if len(secret) < 32:
+        raise ProviderUnavailable("上传签名配置不可用")
+    return hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
+
+def _create_shot_media_upload_token(claims: ShotMediaUploadClaims) -> str:
+    payload = json.dumps(
+        claims.model_dump(mode="json"),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    return f"{encoded}.{_shot_media_upload_signature(payload)}"
+
+
+def _decode_shot_media_upload_token(token: str) -> ShotMediaUploadClaims:
+    try:
+        encoded, signature = str(token or "").split(".", 1)
+        payload = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        if not hmac.compare_digest(
+            signature,
+            _shot_media_upload_signature(payload),
+        ):
+            raise ValueError("signature mismatch")
+        claims = ShotMediaUploadClaims.model_validate_json(payload)
+        if claims.expires_at < int(time.time()):
+            raise ValueError("expired")
+        return claims
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="上传凭证无效或已过期，请重新选择文件",
+        ) from exc
+
+
+def _bound_shot_media_upload_claims(
+    token: str,
+    *,
+    job_id: str,
+    shot_id: str,
+    actor,
+) -> ShotMediaUploadClaims:
+    claims = _decode_shot_media_upload_token(token)
+    if (
+        claims.job_id != job_id
+        or claims.shot_id != shot_id
+        or claims.user_id != actor.user_id
+        or claims.username != actor.username
+    ):
+        raise HTTPException(status_code=403, detail="上传凭证不属于当前任务或用户")
+    return claims
+
+
 async def asset_response(
     asset: AssetRef,
     *,
@@ -215,29 +321,14 @@ async def _store_reference_image(upload: UploadFile) -> AssetRef:
 
 
 def _uploaded_shot_media_format(path: Path) -> tuple[str, str, str]:
-    with path.open("rb") as handle:
-        header = handle.read(64)
-    if header.startswith(bytes.fromhex("89504e470d0a1a0a")):
-        return "image", ".png", "image/png"
-    if header.startswith(bytes.fromhex("ffd8ff")):
-        return "image", ".jpg", "image/jpeg"
-    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
-        return "image", ".webp", "image/webp"
-    if len(header) >= 12 and header[4:8] == b"ftyp":
-        media_type = "video/quicktime" if header[8:12] == b"qt  " else "video/mp4"
-        return "video", ".mov" if media_type == "video/quicktime" else ".mp4", media_type
-    if header.startswith(bytes.fromhex("1a45dfa3")):
-        return "video", ".webm", "video/webm"
-    raise HTTPException(
-        status_code=422,
-        detail="镜头素材只支持 JPG、PNG、WebP、MP4、MOV 或 WebM 格式",
-    )
+    try:
+        return detect_shot_media_format(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _safe_upload_filename(value: str | None) -> str:
-    normalized = str(value or "未命名素材").replace(chr(92), "/").split("/")[-1]
-    cleaned = "".join(char for char in normalized if ord(char) >= 32).strip()
-    return (cleaned or "未命名素材")[:255]
+    return safe_upload_filename(value)
 
 
 async def _store_shot_media(
@@ -814,6 +905,177 @@ async def regenerate_shot(
     }, "已开始生成这个镜头的新版本")
 
 
+@api_router.post("/jobs/{job_id}/shots/{shot_id}/media/uploads")
+@boundary
+async def initiate_shot_media_upload(
+    job_id: str,
+    shot_id: str,
+    body: ShotMediaUploadInitiateRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Validate first, then issue a short-lived direct-to-TOS upload grant."""
+
+    actor = actor_from_user(user)
+    original_filename = safe_upload_filename(body.original_filename)
+    try:
+        validate_shot_media_size(body.media_kind, body.size_bytes)
+        _, extension, media_type = declared_shot_media_format(
+            original_filename,
+            body.media_kind,
+        )
+    except ValueError as exc:
+        status_code = 413 if "不能超过" in str(exc) else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    selected_media_id = await runtime.service.validate_shot_media_action(
+        job_id,
+        shot_id,
+        body.expected_revision,
+        actor,
+    )
+    create_direct_upload = getattr(
+        runtime.storage,
+        "create_direct_upload",
+        None,
+    )
+    if not callable(create_direct_upload):
+        return ok({"upload_mode": "multipart"})
+
+    media_id = f"upload_{secrets.token_hex(12)}"
+    asset_id = f"raw_shot_media_{media_id}"
+    object_key = (
+        f"qijia-video/staged-uploads/{job_id}/{shot_id}/"
+        f"{media_id}{extension}"
+    )
+    grant = await create_direct_upload(
+        object_key=object_key,
+        asset_id=asset_id,
+        media_type=media_type,
+        sha256=body.sha256,
+        size_bytes=body.size_bytes,
+        expires=TOS_DIRECT_UPLOAD_EXPIRES_SECONDS,
+    )
+    if grant is None:
+        return ok({"upload_mode": "multipart"})
+    expires_in_seconds = int(
+        grant.get("expires_in_seconds") or TOS_DIRECT_UPLOAD_EXPIRES_SECONDS
+    )
+    claims = ShotMediaUploadClaims(
+        version=SHOT_MEDIA_UPLOAD_TOKEN_VERSION,
+        user_id=actor.user_id,
+        username=actor.username,
+        job_id=job_id,
+        shot_id=shot_id,
+        media_id=media_id,
+        object_key=object_key,
+        media_kind=body.media_kind,
+        media_type=media_type,
+        original_filename=original_filename,
+        size_bytes=body.size_bytes,
+        sha256=body.sha256,
+        expected_revision=body.expected_revision,
+        expected_selected_media_id=selected_media_id,
+        expires_at=int(time.time()) + expires_in_seconds,
+    )
+    return ok({
+        "upload_mode": "direct",
+        "upload_url": grant["url"],
+        "upload_method": grant.get("method") or "PUT",
+        "upload_headers": grant.get("headers") or {},
+        "upload_token": _create_shot_media_upload_token(claims),
+        "expires_in_seconds": expires_in_seconds,
+    })
+
+
+@api_router.post("/jobs/{job_id}/shots/{shot_id}/media/uploads/complete")
+@boundary
+async def complete_shot_media_upload(
+    job_id: str,
+    shot_id: str,
+    body: ShotMediaUploadTokenRequest,
+    user: dict = Depends(get_current_user),
+):
+    actor = actor_from_user(user)
+    claims = _bound_shot_media_upload_claims(
+        body.upload_token,
+        job_id=job_id,
+        shot_id=shot_id,
+        actor=actor,
+    )
+    selected_media_id = await runtime.service.validate_shot_media_action(
+        job_id,
+        shot_id,
+        claims.expected_revision,
+        actor,
+    )
+    if selected_media_id != claims.expected_selected_media_id:
+        raise HTTPException(
+            status_code=409,
+            detail="该镜头素材已被其他操作更新，请刷新后重试",
+        )
+    complete_direct_upload = getattr(
+        runtime.storage,
+        "complete_direct_upload",
+        None,
+    )
+    if not callable(complete_direct_upload):
+        raise ProviderUnavailable("当前存储不支持浏览器直传确认")
+    raw_asset = await complete_direct_upload(
+        object_key=claims.object_key,
+        asset_id=f"raw_shot_media_{claims.media_id}",
+        media_type=claims.media_type,
+        sha256=claims.sha256,
+        size_bytes=claims.size_bytes,
+    )
+    run = await start_run(
+        "replace_shot_media",
+        job_id,
+        actor,
+        {
+            "shot_id": shot_id,
+            "raw_asset": raw_asset.model_dump(mode="json"),
+            "media_kind": claims.media_kind,
+            "media_id": claims.media_id,
+            "original_filename": claims.original_filename,
+            "expected_selected_media_id": selected_media_id,
+        },
+    )
+    return ok({
+        "job": public_job_payload(
+            await runtime.service.get_job(job_id, actor), user
+        ),
+        "task_id": run.task_id,
+        "reused": run.reused,
+    }, "素材已安全上传，正在更新这个镜头和成片")
+
+
+@api_router.post("/jobs/{job_id}/shots/{shot_id}/media/uploads/cancel")
+@boundary
+async def cancel_shot_media_upload(
+    job_id: str,
+    shot_id: str,
+    body: ShotMediaUploadTokenRequest,
+    user: dict = Depends(get_current_user),
+):
+    actor = actor_from_user(user)
+    claims = _bound_shot_media_upload_claims(
+        body.upload_token,
+        job_id=job_id,
+        shot_id=shot_id,
+        actor=actor,
+    )
+    # Refuse deletion once any shot edit has moved the aggregate into producing.
+    await runtime.service.validate_shot_media_action(
+        job_id,
+        shot_id,
+        claims.expected_revision,
+        actor,
+    )
+    delete_object = getattr(runtime.storage, "delete_object", None)
+    if callable(delete_object):
+        await delete_object(claims.object_key)
+    return ok(None, "未完成的临时上传已清理")
+
+
 @api_router.post("/jobs/{job_id}/shots/{shot_id}/media")
 @boundary
 async def upload_shot_media(
@@ -824,6 +1086,11 @@ async def upload_shot_media(
     user: dict = Depends(get_current_user),
 ):
     actor = actor_from_user(user)
+    if getattr(runtime.storage, "name", "") == "tos":
+        raise HTTPException(
+            status_code=409,
+            detail="上传链路已升级，请刷新页面后重新选择素材",
+        )
     selected_media_id = await runtime.service.validate_shot_media_action(
         job_id,
         shot_id,

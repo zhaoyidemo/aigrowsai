@@ -686,6 +686,52 @@ async function apiMultipart(path, body) {
   return payload.data;
 }
 
+
+async function sha256File(file) {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error('当前浏览器不支持安全文件校验，请升级浏览器后重试。');
+  }
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    await file.arrayBuffer(),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function uploadFileDirect(grant, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open(grant.upload_method || 'PUT', grant.upload_url, true);
+    Object.entries(grant.upload_headers || {}).forEach(([name, value]) => {
+      if (String(name).toLowerCase() !== 'host') {
+        request.setRequestHeader(name, String(value));
+      }
+    });
+    request.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable && typeof onProgress === 'function') {
+        onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+      }
+    });
+    request.addEventListener('load', () => {
+      if (request.status >= 200 && request.status < 300) {
+        resolve();
+        return;
+      }
+      reject(new Error(`素材存储上传失败（HTTP ${request.status || '未知'}）`));
+    });
+    request.addEventListener('error', () => {
+      reject(new Error('无法直传素材，请检查网络或素材存储跨域配置后重试。'));
+    });
+    request.addEventListener('abort', () => {
+      reject(new Error('素材上传已取消。'));
+    });
+    request.send(file);
+  });
+}
+
+
 function clearReferenceImage() {
   if (state.referenceImagePreviewUrl) URL.revokeObjectURL(state.referenceImagePreviewUrl);
   state.referenceImageFile = null;
@@ -1812,7 +1858,7 @@ function renderShotInspector(job) {
           <input type="file" data-shot-upload accept=".mp4,.mov,.webm,video/mp4,video/quicktime,video/webm" data-media-kind="video" ${canManageMedia ? '' : 'disabled'}>
         </label>
       </div>
-      <p>图片支持 JPG、PNG、WebP，最大 20 MB；视频支持 MP4、MOV、WebM，最大 200 MB。视频从开头使用、自动静音和匹配章节时长；原 AI 素材会完整保留。</p>
+      <p>图片支持 JPG、PNG、WebP，最大 20 MB；视频支持 MP4、MOV、WebM，最大 200 MB。素材会安全直传并显示进度；视频从开头使用、自动静音和匹配章节时长，原 AI 素材会完整保留。</p>
     </section>
     ${frameButtons ? `<section class="frame-candidate-section"><div class="frame-candidate-heading"><strong>${isImage ? '图片候选' : '首帧候选'}</strong><span>${isImage ? '系统已推荐当前成片使用的图片，可点击查看另一构图' : '系统已自动推荐，可人工改选后重生成本镜头'}</span></div><div class="frame-candidate-grid">${frameButtons}</div></section>` : ''}
     ${isImage ? '' : `<section class="ai-shot-panel"><div class="shot-source-heading"><div><strong>AI 生成方案</strong><span>需要新构图或复杂动作时，可继续生成并自动切回 AI 素材</span></div></div>
@@ -3183,8 +3229,9 @@ $('#shot-inspector').addEventListener('change', (event) => {
 $('#shot-inspector').addEventListener('change', async (event) => {
   const input = event.target.closest('[data-shot-upload]');
   const job = state.selectedJob;
+  const shotId = state.selectedShotId;
   const file = input?.files?.[0];
-  if (!input || !job || !file) return;
+  if (!input || !job || !shotId || !file) return;
   const mediaKind = input.dataset.mediaKind;
   const extension = file.name.toLowerCase().split('.').pop() || '';
   const validImage = mediaKind === 'image'
@@ -3212,15 +3259,48 @@ $('#shot-inspector').addEventListener('change', async (event) => {
     input.value = '';
     return;
   }
-  const body = new FormData();
-  body.append('expected_revision', String(job.revision));
-  body.append('media', file, file.name);
-  setBusy(true); notify('');
+  const uploadPath = `/jobs/${encodeURIComponent(job.id)}/shots/${encodeURIComponent(shotId)}/media`;
+  setBusy(true); notify('正在安全校验素材…');
   try {
-    const result = await apiMultipart(
-      `/jobs/${encodeURIComponent(job.id)}/shots/${encodeURIComponent(state.selectedShotId)}/media`,
-      body,
+    const sha256 = await sha256File(file);
+    const grant = await api(
+      'POST',
+      `${uploadPath}/uploads`,
+      {
+        expected_revision: job.revision,
+        original_filename: file.name,
+        media_kind: mediaKind,
+        size_bytes: file.size,
+        sha256,
+      },
     );
+    let result;
+    if (grant.upload_mode === 'direct') {
+      notify('正在直传素材… 0%');
+      try {
+        await uploadFileDirect(grant, file, (percent) => {
+          notify(`正在直传素材… ${percent}%`);
+        });
+      } catch (uploadError) {
+        api(
+          'POST',
+          `${uploadPath}/uploads/cancel`,
+          {upload_token: grant.upload_token},
+        ).catch(() => {});
+        throw uploadError;
+      }
+      notify('素材已上传，正在确认完整性…');
+      result = await api(
+        'POST',
+        `${uploadPath}/uploads/complete`,
+        {upload_token: grant.upload_token},
+      );
+    } else {
+      const body = new FormData();
+      body.append('expected_revision', String(job.revision));
+      body.append('media', file, file.name);
+      result = await apiMultipart(uploadPath, body);
+    }
     await loadAll({selectJobId: job.id});
     setBusy(false);
     await pollTask(result.task_id, job.id);
@@ -3233,6 +3313,17 @@ $('#shot-inspector').addEventListener('change', async (event) => {
     notify(`${mediaKind === 'image' ? '图片' : '视频'}已用于这个镜头，原 AI 素材仍可随时恢复。`);
   } catch (error) {
     await loadAll({selectJobId: job.id}).catch(() => {});
+    const refreshed = state.selectedJob;
+    if (
+      refreshed?.id === job.id
+      && refreshed.state === 'producing'
+      && refreshed.last_run_task_id
+    ) {
+      setBusy(false);
+      notify('素材已进入后台处理，正在恢复任务进度…');
+      await pollTask(refreshed.last_run_task_id, job.id);
+      return;
+    }
     notify(error.message, true);
   } finally {
     setBusy(false);

@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
-from fastapi import FastAPI, UploadFile
+from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -75,6 +75,7 @@ from qijia_video.infrastructure.script_providers import (
     STORYBOARD_MAX_COMPLETION_TOKENS,
 )
 from qijia_video.infrastructure.storage import (
+    TOS_CONTROL_TIMEOUT_SECONDS,
     TOS_DOWNLOAD_ATTEMPTS,
     TOS_DOWNLOAD_PART_SIZE_BYTES,
     TOS_DOWNLOAD_TASK_COUNT,
@@ -996,6 +997,124 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["max_retry_count"], 3)
         self.assertEqual(kwargs["socket_timeout"], TOS_SOCKET_TIMEOUT_SECONDS)
         self.assertEqual(kwargs["request_timeout"], TOS_SOCKET_TIMEOUT_SECONDS)
+
+        with patch("tos.TosClientV2") as client_class:
+            storage._control_client()
+        control_kwargs = client_class.call_args.kwargs
+        self.assertEqual(control_kwargs["max_retry_count"], 0)
+        self.assertEqual(
+            control_kwargs["socket_timeout"],
+            TOS_CONTROL_TIMEOUT_SECONDS,
+        )
+
+    async def test_tos_direct_upload_signs_and_verifies_exact_object_metadata(self):
+        storage = TosArtifactStorage(
+            access_key_id="test-ak",
+            secret_access_key="test-sk",
+            bucket="test-bucket",
+            region="cn-shanghai",
+        )
+        digest = hashlib.sha256(b"uploaded-video").hexdigest()
+
+        class Signed:
+            signed_url = "https://test-bucket.tos-cn-shanghai.volces.com/staged.mp4"
+            signed_header = {
+                "host": "test-bucket.tos-cn-shanghai.volces.com",
+                "Content-Type": "video/mp4",
+                "x-tos-meta-asset-id": "raw_upload_01",
+                "x-tos-meta-sha256": digest,
+                "x-tos-meta-size-bytes": "14",
+            }
+
+        class Head:
+            content_type = "video/mp4"
+            content_length = 14
+            meta = {
+                "asset-id": "raw_upload_01",
+                "sha256": digest,
+                "size-bytes": "14",
+            }
+
+        class Client:
+            def __init__(self):
+                self.presign_args = None
+                self.presign_kwargs = None
+
+            def pre_signed_url(self, *args, **kwargs):
+                self.presign_args = args
+                self.presign_kwargs = kwargs
+                return Signed()
+
+            def head_object(self, bucket, key):
+                self.head = (bucket, key)
+                return Head()
+
+        client = Client()
+        with patch.object(storage, "_client", return_value=client):
+            grant = await storage.create_direct_upload(
+                object_key="qijia-video/staged-uploads/job/shot/upload.mp4",
+                asset_id="raw_upload_01",
+                media_type="video/mp4",
+                sha256=digest,
+                size_bytes=14,
+            )
+            asset = await storage.complete_direct_upload(
+                object_key="qijia-video/staged-uploads/job/shot/upload.mp4",
+                asset_id="raw_upload_01",
+                media_type="video/mp4",
+                sha256=digest,
+                size_bytes=14,
+            )
+
+        self.assertEqual(grant["method"], "PUT")
+        self.assertNotIn("host", {
+            name.lower(): value for name, value in grant["headers"].items()
+        })
+        self.assertTrue(client.presign_kwargs["is_signed_all_headers"])
+        self.assertEqual(
+            client.presign_kwargs["header"]["x-tos-meta-sha256"],
+            digest,
+        )
+        self.assertEqual(asset.sha256, digest)
+        self.assertEqual(asset.size_bytes, 14)
+        self.assertEqual(
+            client.head,
+            (
+                "test-bucket",
+                "qijia-video/staged-uploads/job/shot/upload.mp4",
+            ),
+        )
+
+    async def test_tos_direct_upload_rejects_tampered_size(self):
+        storage = TosArtifactStorage(
+            access_key_id="test-ak",
+            secret_access_key="test-sk",
+            bucket="test-bucket",
+            region="cn-shanghai",
+        )
+        digest = hashlib.sha256(b"uploaded-video").hexdigest()
+
+        class Head:
+            content_type = "video/mp4"
+            content_length = 13
+            meta = {
+                "asset-id": "raw_upload_01",
+                "sha256": digest,
+                "size-bytes": "14",
+            }
+
+        client = type("Client", (), {
+            "head_object": lambda self, bucket, key: Head(),
+        })()
+        with patch.object(storage, "_client", return_value=client):
+            with self.assertRaisesRegex(QualityGateFailed, "大小校验失败"):
+                await storage.complete_direct_upload(
+                    object_key="qijia-video/staged-uploads/job/shot/upload.mp4",
+                    asset_id="raw_upload_01",
+                    media_type="video/mp4",
+                    sha256=digest,
+                    size_bytes=14,
+                )
 
     async def test_tos_download_resumes_with_checkpoint_after_read_timeouts(self):
         payload = b"seedance-video" * 1024
@@ -2430,6 +2549,124 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("X-Api-Key", headers)
 
 
+class QijiaVideoUploadApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_direct_upload_init_and_complete_only_queue_after_head_verification(self):
+        user = {
+            "id": 7,
+            "username": "editor",
+            "role": "member",
+            "permissions": ["qijia_video"],
+        }
+        digest = hashlib.sha256(b"uploaded-video").hexdigest()
+        service = type("Service", (), {})()
+        service.validate_shot_media_action = AsyncMock(return_value="")
+        service.get_job = AsyncMock(return_value=object())
+        storage = type("Storage", (), {})()
+        storage.create_direct_upload = AsyncMock(return_value={
+            "url": "https://test-bucket.tos-cn-shanghai.volces.com/upload.mp4",
+            "method": "PUT",
+            "headers": {
+                "Content-Type": "video/mp4",
+                "x-tos-meta-sha256": digest,
+            },
+            "expires_in_seconds": 900,
+        })
+        raw_asset = AssetRef(
+            asset_id="raw_pending",
+            object_key="qijia-video/staged-uploads/job/shot/upload.mp4",
+            sha256=digest,
+            size_bytes=14,
+            media_type="video/mp4",
+        )
+        storage.complete_direct_upload = AsyncMock(return_value=raw_asset)
+        start = AsyncMock(return_value=type("Run", (), {
+            "task_id": "task_upload_01",
+            "reused": False,
+        })())
+
+        with (
+            patch.object(qijia_api.runtime, "service", service),
+            patch.object(qijia_api.runtime, "storage", storage),
+            patch.object(qijia_api, "start_run", start),
+            patch.object(qijia_api, "public_job_payload", return_value={"id": "job"}),
+            patch.object(qijia_api.settings, "SESSION_SECRET", "s" * 48),
+        ):
+            initiated = await qijia_api.initiate_shot_media_upload(
+                "job",
+                "shot",
+                qijia_api.ShotMediaUploadInitiateRequest(
+                    expected_revision=8,
+                    original_filename="clip.mp4",
+                    media_kind="video",
+                    size_bytes=14,
+                    sha256=digest,
+                ),
+                user,
+            )
+            grant = initiated["data"]
+            completed = await qijia_api.complete_shot_media_upload(
+                "job",
+                "shot",
+                qijia_api.ShotMediaUploadTokenRequest(
+                    upload_token=grant["upload_token"]
+                ),
+                user,
+            )
+
+        self.assertEqual(grant["upload_mode"], "direct")
+        self.assertEqual(completed["data"]["task_id"], "task_upload_01")
+        storage.complete_direct_upload.assert_awaited_once()
+        start.assert_awaited_once()
+        parameters = start.await_args.args[3]
+        self.assertEqual(parameters["media_kind"], "video")
+        self.assertEqual(parameters["raw_asset"]["sha256"], digest)
+        self.assertEqual(service.validate_shot_media_action.await_count, 2)
+
+    async def test_local_storage_upload_init_keeps_multipart_fallback(self):
+        service = type("Service", (), {})()
+        service.validate_shot_media_action = AsyncMock(return_value="")
+        storage = type("Storage", (), {})()
+        storage.create_direct_upload = AsyncMock(return_value=None)
+        user = {"id": 7, "username": "editor", "role": "member"}
+        with (
+            patch.object(qijia_api.runtime, "service", service),
+            patch.object(qijia_api.runtime, "storage", storage),
+        ):
+            result = await qijia_api.initiate_shot_media_upload(
+                "job",
+                "shot",
+                qijia_api.ShotMediaUploadInitiateRequest(
+                    expected_revision=8,
+                    original_filename="clip.mp4",
+                    media_kind="video",
+                    size_bytes=14,
+                    sha256=hashlib.sha256(b"uploaded-video").hexdigest(),
+                ),
+                user,
+            )
+
+        self.assertEqual(result["data"], {"upload_mode": "multipart"})
+
+    async def test_tos_rejects_legacy_sync_upload_before_second_storage_hop(self):
+        storage = type("Storage", (), {"name": "tos"})()
+        upload = UploadFile(
+            filename="clip.mp4",
+            file=io.BytesIO(bytes.fromhex("000000186674797069736f6d")),
+        )
+        with patch.object(qijia_api.runtime, "storage", storage):
+            with self.assertRaises(HTTPException) as rejected:
+                await qijia_api.upload_shot_media(
+                    "job",
+                    "shot",
+                    8,
+                    upload,
+                    {"id": 7, "username": "editor", "role": "member"},
+                )
+
+        self.assertEqual(rejected.exception.status_code, 409)
+        self.assertIn("链路已升级", rejected.exception.detail)
+
+
 class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -3214,6 +3451,57 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(video.object_key.endswith(".mov"))
         self.assertLessEqual(video.size_bytes, qijia_api.MAX_SHOT_VIDEO_BYTES)
 
+    async def test_direct_upload_token_binds_user_job_file_and_expiry(self):
+        claims = qijia_api.ShotMediaUploadClaims(
+            version=qijia_api.SHOT_MEDIA_UPLOAD_TOKEN_VERSION,
+            user_id=self.actor.user_id,
+            username=self.actor.username,
+            job_id="job_upload_test",
+            shot_id="shot_02",
+            media_id="upload_video_test",
+            object_key=(
+                "qijia-video/staged-uploads/job_upload_test/shot_02/"
+                "upload_video_test.mov"
+            ),
+            media_kind="video",
+            media_type="video/quicktime",
+            original_filename="采访.mov",
+            size_bytes=1024,
+            sha256=hashlib.sha256(b"video").hexdigest(),
+            expected_revision=8,
+            expected_selected_media_id="",
+            expires_at=int(qijia_api.time.time()) + 900,
+        )
+        with patch.object(qijia_api.settings, "SESSION_SECRET", "s" * 48):
+            token = qijia_api._create_shot_media_upload_token(claims)
+            decoded = qijia_api._bound_shot_media_upload_claims(
+                token,
+                job_id="job_upload_test",
+                shot_id="shot_02",
+                actor=self.actor,
+            )
+            with self.assertRaises(HTTPException) as tampered:
+                qijia_api._decode_shot_media_upload_token(
+                    token[:-1] + ("0" if token[-1] != "0" else "1")
+                )
+            with self.assertRaises(HTTPException) as wrong_job:
+                qijia_api._bound_shot_media_upload_claims(
+                    token,
+                    job_id="another_job",
+                    shot_id="shot_02",
+                    actor=self.actor,
+                )
+            expired_token = qijia_api._create_shot_media_upload_token(
+                claims.model_copy(update={"expires_at": int(qijia_api.time.time()) - 1})
+            )
+            with self.assertRaises(HTTPException) as expired:
+                qijia_api._decode_shot_media_upload_token(expired_token)
+
+        self.assertEqual(decoded.object_key, claims.object_key)
+        self.assertEqual(tampered.exception.status_code, 422)
+        self.assertEqual(wrong_job.exception.status_code, 403)
+        self.assertEqual(expired.exception.status_code, 422)
+
     async def test_global_reference_image_reaches_all_seedream_requests(self):
         class RecordingStoryboardProvider(TemplateStoryboardProvider):
             base_style = ""
@@ -3763,7 +4051,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         ))
 
         video_source = self.root / "editor-video.mov"
-        video_source.write_bytes(b"editor-video")
+        video_source.write_bytes(
+            bytes.fromhex("000000186674797071742020") + b"editor-video"
+        )
         raw_video = await self.storage.put_file(
             object_key="tests/raw-editor-video.mov",
             path=video_source,
@@ -3883,7 +4173,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         shot_id = job.visual_requests[0].request_id
 
         video_source = self.root / "broken-editor-video.mov"
-        video_source.write_bytes(b"broken-editor-video")
+        video_source.write_bytes(
+            bytes.fromhex("000000186674797071742020") + b"broken-editor-video"
+        )
         raw_video = await self.storage.put_file(
             object_key="tests/broken-editor-video.mov",
             path=video_source,
