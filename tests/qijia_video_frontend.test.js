@@ -64,8 +64,8 @@ test('content Skills select versioned expert or recent-news workflows', () => {
 
 test('visual styles are selected and frozen independently from content Skills and models', () => {
   assert.match(page, /id="visual-style"/);
-  assert.match(page, /只决定画面采用什么艺术语言/);
-  assert.match(page, /不改写内容语义，也不直接编排镜头/);
+  assert.match(page, /输入 02 · 视觉语言/);
+  assert.match(page, /只补全外观，不改写内容语义/);
   assert.match(app, /DEFAULT_VISUAL_STYLE_ID = 'content-skill-default'/);
   assert.doesNotMatch(app, /function visualStyleGenerationDefaults/);
   assert.match(app, /visual_style_id: requestedStyle\.style_id/);
@@ -74,18 +74,37 @@ test('visual styles are selected and frozen independently from content Skills an
   assert.match(styles, /\.visual-style-setting/);
 });
 
-test('the automatic prompt-writing profile is visible without becoming another selector', () => {
+test('H3 is shown as the compiler between independent inputs and media prompts', () => {
+  assert.match(page, /id="generation-orchestration"/);
+  assert.match(page, /内容、视觉与可选参考，由 H3 编译为三类镜头指令/);
+  assert.match(page, /输入 01 · 内容约束/);
+  assert.match(page, /输入 02 · 视觉语言/);
+  assert.match(page, /可选输入 · 参考图/);
+  assert.match(page, /id="orchestration-reference-action"/);
+  assert.match(page, /不提供事实，也不覆盖镜头语义/);
+  assert.match(page, /合并，但不互相覆盖/);
   assert.match(page, /id="prompt-profile-name"/);
   assert.match(page, /id="prompt-profile-version">自动启用/);
-  assert.match(page, /H3 是唯一编排层/);
+  assert.match(page, /唯一编排层/);
+  assert.match(page, /事实与安全[\s\S]*镜头语义[\s\S]*参考图属性[\s\S]*视觉风格补全[\s\S]*Provider 语法/);
+  assert.match(page, /分镜语义[\s\S]*首帧提示词[\s\S]*I2V 动作提示词/);
+  assert.match(page, /模型只执行最终提示词，不参与内容 Skill 与提示词方法的职责分配/);
   assert.match(page, /id="job-generation-methods"/);
   assert.match(app, /function promptWritingProfile/);
+  assert.match(app, /function renderOrchestrationSelection/);
+  assert.match(app, /参考图属性（已接管）/);
+  assert.match(app, /当前内容 Skill 不使用参考图/);
+  assert.match(app, /selectedContentSkill\(\)\?\.input_mode !== 'recent_news_topic'/);
   assert.match(app, /state\.capabilities\?\.prompt_writing_profile/);
   assert.match(app, /job\.prompt_writing_profile_snapshot/);
   assert.match(app, /已随任务冻结/);
+  assert.match(app, /任务冻结的唯一编排层/);
+  assert.match(app, /job-orchestration-core/);
   assert.doesNotMatch(page, /<select id="prompt-profile/);
-  assert.match(styles, /\.prompt-profile-setting/);
+  assert.match(styles, /\.generation-orchestration/);
+  assert.match(styles, /\.orchestration-core/);
   assert.match(styles, /\.job-generation-methods/);
+  assert.match(styles, /\.job-orchestration-core/);
 });
 
 test('administrator can manage bounded colleague access without exposing passwords', () => {

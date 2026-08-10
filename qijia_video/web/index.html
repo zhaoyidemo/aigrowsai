@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.20.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.21.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -109,30 +109,80 @@
             <div><p class="step">01</p><h2>开始一条视频</h2></div>
             <button id="new-card-button" class="button secondary" type="button">新建</button>
           </div>
-          <label class="video-quality-setting skill-setting" for="content-skill">
-            <span class="video-quality-copy">
-              <strong>内容 Skill</strong>
-              <small id="content-skill-description">决定讲什么、依据什么，以及哪些内容不能被视觉化；不再决定画风和运镜。</small>
-            </span>
-            <select id="content-skill" aria-label="内容 Skill"></select>
-          </label>
-          <label class="video-quality-setting visual-style-setting" for="visual-style">
-            <span class="video-quality-copy">
-              <strong>视觉表现</strong>
-              <small id="visual-style-description">只决定画面采用什么艺术语言；不改写内容语义，也不直接编排镜头。</small>
-            </span>
-            <select id="visual-style" aria-label="视觉表现"></select>
-          </label>
-          <section class="video-quality-setting prompt-profile-setting" aria-labelledby="prompt-profile-label">
-            <span class="video-quality-copy">
-              <strong id="prompt-profile-label">提示词总编排</strong>
-              <small id="prompt-profile-description">H3 是唯一编排层：统一生成分镜、首帧和首帧驱动视频提示词，不需要手动选择。</small>
-            </span>
-            <span class="prompt-profile-value" aria-live="polite">
-              <strong id="prompt-profile-name">正在读取当前方法</strong>
-              <small id="prompt-profile-version">自动启用</small>
-            </span>
+          <section id="generation-orchestration" class="generation-orchestration" aria-labelledby="generation-orchestration-title">
+            <div class="orchestration-heading">
+              <div>
+                <p class="step">生成架构</p>
+                <h3 id="generation-orchestration-title">内容、视觉与可选参考，由 H3 编译为三类镜头指令</h3>
+              </div>
+              <span class="orchestration-lock">编排层固定</span>
+            </div>
+            <div class="orchestration-inputs">
+              <label class="orchestration-input skill-setting" for="content-skill">
+                <span class="orchestration-node-label">输入 01 · 内容约束</span>
+                <strong>讲什么，以及什么不能乱讲</strong>
+                <select id="content-skill" aria-label="内容 Skill"></select>
+                <small id="content-skill-description">决定事实依据、叙事目标与视觉禁区。</small>
+                <span class="orchestration-responsibility">只负责内容，不提供画风和运镜</span>
+              </label>
+              <label class="orchestration-input visual-style-setting" for="visual-style">
+                <span class="orchestration-node-label">输入 02 · 视觉语言</span>
+                <strong>这条内容应该长什么样</strong>
+                <select id="visual-style" aria-label="视觉表现"></select>
+                <small id="visual-style-description">决定艺术语言、材质、色彩与造型倾向。</small>
+                <span class="orchestration-responsibility">只补全外观，不改写内容语义</span>
+              </label>
+            </div>
+            <div class="orchestration-reference-input">
+              <span>可选输入 · 参考图</span>
+              <div>
+                <strong id="orchestration-reference-name" aria-live="polite">未上传参考图</strong>
+                <small>只接管图片已经定义的人物、色彩和画面属性，不提供事实，也不覆盖镜头语义。</small>
+              </div>
+              <button id="orchestration-reference-action" type="button">上传参考图</button>
+            </div>
+            <div class="orchestration-merge" aria-hidden="true">
+              <span></span><strong>合并，但不互相覆盖</strong><span></span>
+            </div>
+            <section class="orchestration-core prompt-profile-setting" aria-labelledby="prompt-profile-label">
+              <div class="orchestration-core-heading">
+                <div>
+                  <span id="prompt-profile-label">唯一编排层</span>
+                  <strong id="prompt-profile-name">正在读取 H3</strong>
+                </div>
+                <small id="prompt-profile-version">自动启用</small>
+              </div>
+              <p id="prompt-profile-description">H3 统一判断每个镜头该呈现什么，再生成首帧和首帧驱动视频提示词。</p>
+              <p class="orchestration-selection" aria-live="polite">
+                <span id="orchestration-content-name">正在读取内容 Skill</span>
+                <b>+</b>
+                <span id="orchestration-style-name">正在读取视觉风格</span>
+                <b>→</b>
+                <strong id="orchestration-profile-summary">H3 统一编排</strong>
+              </p>
+              <ol class="orchestration-priority" aria-label="提示词冲突优先级">
+                <li>事实与安全</li>
+                <li>镜头语义</li>
+                <li id="reference-priority-state">参考图属性（未上传）</li>
+                <li>视觉风格补全</li>
+                <li>Provider 语法</li>
+              </ol>
+            </section>
+            <div class="orchestration-output">
+              <span class="orchestration-output-label">编译输出</span>
+              <div class="orchestration-output-grid">
+                <article><span>01</span><strong>分镜语义</strong><small>每个镜头表达什么</small></article>
+                <article><span>02</span><strong>首帧提示词</strong><small>直接交给 Seedream</small></article>
+                <article><span>03</span><strong>I2V 动作提示词</strong><small>锚定首帧驱动 Seedance</small></article>
+              </div>
+            </div>
+            <p class="orchestration-boundary">Seedream、Seedance 等模型只执行最终提示词，不参与内容 Skill 与提示词方法的职责分配。</p>
           </section>
+          <section class="production-specs" aria-labelledby="production-specs-title">
+            <div class="production-specs-heading">
+              <strong id="production-specs-title">生产规格</strong>
+              <small>影响成本、时长与成片规格，不参与提示词职责分配</small>
+            </div>
           <label class="video-quality-setting" for="video-resolution">
             <span class="video-quality-copy">
               <strong>视频画质</strong>
@@ -173,6 +223,7 @@
                 </select>
               </label>
             </div>
+          </section>
           </section>
           <section id="topic-handoff" class="topic-handoff" hidden>
             <div class="topic-handoff-heading">
@@ -504,6 +555,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.20.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.21.0"></script>
 </body>
 </html>

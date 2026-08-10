@@ -246,6 +246,7 @@ function updateContentSkillIntake() {
     : '输入一个人物和他的核心观点，系统会先自动研究可追溯资料，再把观点中的冲突、反直觉与现实意义展开成完整视频脚本。';
   $('#source-card-form').hidden = handoffOpen || isNews;
   $('#news-topic-form').hidden = handoffOpen || !isNews;
+  renderOrchestrationSelection();
 }
 
 function renderContentSkillSelector(preferredSkillId = '') {
@@ -294,6 +295,7 @@ function updateVisualStyleDescription() {
   $('#visual-style-description').textContent = style
     ? `${style.description} · v${style.version}`
     : '视觉风格与内容 Skill、生成模型相互独立。';
+  renderOrchestrationSelection();
 }
 
 function renderVisualStyleSelector(preferredStyleId = '') {
@@ -312,6 +314,39 @@ function promptWritingProfile() {
   return profile && typeof profile === 'object' ? profile : null;
 }
 
+function renderOrchestrationSelection() {
+  const contentNode = $('#orchestration-content-name');
+  const styleNode = $('#orchestration-style-name');
+  const profileNode = $('#orchestration-profile-summary');
+  const referenceNode = $('#reference-priority-state');
+  const referenceNameNode = $('#orchestration-reference-name');
+  const referenceAction = $('#orchestration-reference-action');
+  if (
+    !contentNode || !styleNode || !profileNode
+    || !referenceNode || !referenceNameNode || !referenceAction
+  ) return;
+  contentNode.textContent = selectedContentSkill()?.display_name || '内容 Skill';
+  styleNode.textContent = selectedVisualStyle()?.display_name || '视觉风格';
+  profileNode.textContent = promptWritingProfile()?.display_name || 'H3 统一编排';
+  const supportsReference = selectedContentSkill()?.input_mode !== 'recent_news_topic';
+  const hasReference = supportsReference && !!state.referenceImageFile;
+  referenceNode.textContent = !supportsReference
+    ? '参考图属性（当前 Skill 不使用）'
+    : hasReference
+      ? '参考图属性（已接管）'
+      : '参考图属性（未上传）';
+  referenceNode.classList.toggle('active', hasReference);
+  referenceNameNode.textContent = !supportsReference
+    ? '当前内容 Skill 不使用参考图'
+    : hasReference
+      ? `已启用 · ${state.referenceImageFile.name || '参考图'}`
+      : '未上传 · 由视觉风格补全外观';
+  referenceAction.textContent = !supportsReference
+    ? '当前不可用'
+    : hasReference ? '更换参考图' : '上传参考图';
+  referenceAction.disabled = state.busy || !supportsReference;
+}
+
 function renderPromptWritingProfile() {
   const profile = promptWritingProfile();
   $('#prompt-profile-name').textContent = profile?.display_name || 'H3 提示词编排';
@@ -320,6 +355,7 @@ function renderPromptWritingProfile() {
     : '自动启用';
   $('#prompt-profile-description').textContent = profile?.description
     || 'H3 是唯一编排层：统一生成分镜、首帧和首帧驱动视频提示词。';
+  renderOrchestrationSelection();
 }
 
 const SEEDANCE_EFFICIENT_MODEL = 'doubao-seedance-1-0-pro-fast-251015';
@@ -810,6 +846,7 @@ function clearReferenceImage() {
   $('#reference-preview').hidden = true;
   $('#reference-empty').hidden = false;
   $('#remove-reference-image').hidden = true;
+  renderOrchestrationSelection();
 }
 
 function setReferenceImage(file) {
@@ -832,6 +869,7 @@ function setReferenceImage(file) {
   $('#reference-preview').hidden = false;
   $('#reference-empty').hidden = true;
   $('#remove-reference-image').hidden = false;
+  renderOrchestrationSelection();
   notify('');
 }
 
@@ -885,6 +923,7 @@ function setBusy(busy) {
     renderTopicDetail();
     applyJobReadOnly(state.selectedJob);
   }
+  renderOrchestrationSelection();
 }
 
 const stateLabels = {
@@ -2607,7 +2646,7 @@ function applyJobReadOnly(job) {
     || job.state !== 'final_review_required';
 }
 
-function jobGenerationMethodCard(label, snapshot, legacyName) {
+function jobGenerationInputCard(label, responsibility, snapshot, legacyName) {
   const frozen = !!snapshot;
   const name = snapshot?.display_name || legacyName;
   const status = frozen
@@ -2617,20 +2656,56 @@ function jobGenerationMethodCard(label, snapshot, legacyName) {
     '<article class="job-generation-method">',
     '<span>' + escapeHtml(label) + '</span>',
     '<strong>' + escapeHtml(name) + '</strong>',
+    '<p>' + escapeHtml(responsibility) + '</p>',
     '<small>' + escapeHtml(status) + '</small>',
     '</article>',
   ].join('');
 }
 
 function renderJobGenerationMethods(job) {
+  const profile = job.prompt_writing_profile_snapshot;
+  const hasReference = (job.source_card_snapshot?.reference_assets || []).length > 0;
+  const profileName = profile?.display_name || '旧版提示词逻辑';
+  const profileStatus = profile
+    ? 'v' + (profile.version || '未知') + ' · 已随任务冻结'
+    : '兼容模式 · 未使用新版快照';
+  const profileDescription = profile?.description
+    || '该任务创建于 H3 编排快照启用前，继续使用历史提示词逻辑。';
   $('#job-generation-methods').innerHTML = [
-    jobGenerationMethodCard('内容方法', job.skill_snapshot, '旧版内容流程'),
-    jobGenerationMethodCard('视觉表现', job.visual_style_snapshot, '旧版视觉逻辑'),
-    jobGenerationMethodCard(
-      '提示词方法',
-      job.prompt_writing_profile_snapshot,
-      '旧版提示词逻辑',
+    '<div class="job-orchestration-heading">',
+    '<div><span>本任务的生成架构</span><strong>输入已冻结，重试不会漂移方法</strong></div>',
+    '<small>' + escapeHtml(hasReference ? '参考图优先级已启用' : '未使用参考图') + '</small>',
+    '</div>',
+    '<div class="job-orchestration-inputs">',
+    jobGenerationInputCard(
+      '输入 01 · 内容约束',
+      '冻结事实依据、叙事目标与视觉禁区',
+      job.skill_snapshot,
+      '旧版内容流程',
     ),
+    jobGenerationInputCard(
+      '输入 02 · 视觉语言',
+      '只补全画风、材质、色彩与造型',
+      job.visual_style_snapshot,
+      '旧版视觉逻辑',
+    ),
+    '</div>',
+    '<div class="job-orchestration-merge" aria-hidden="true"><span></span><strong>交给编排层</strong><span></span></div>',
+    '<article class="job-orchestration-core' + (profile ? '' : ' legacy') + '">',
+    '<div><span>' + escapeHtml(profile ? '任务冻结的唯一编排层' : '历史兼容编排') + '</span>',
+    '<strong>' + escapeHtml(profileName) + '</strong>',
+    '<small>' + escapeHtml(profileStatus) + '</small></div>',
+    '<p>' + escapeHtml(profileDescription) + '</p>',
+    '<ol aria-label="本任务提示词冲突优先级">',
+    '<li>事实与安全</li><li>镜头语义</li>',
+    '<li>' + escapeHtml(hasReference ? '参考图属性' : '无参考图') + '</li>',
+    '<li>视觉风格补全</li><li>Provider 语法</li>',
+    '</ol>',
+    '</article>',
+    '<div class="job-orchestration-outputs">',
+    '<span>最终产物</span>',
+    '<div><strong>分镜语义</strong><strong>首帧提示词</strong><strong>I2V 动作提示词</strong></div>',
+    '</div>',
   ].join('');
 }
 
@@ -4082,6 +4157,11 @@ $('#restore-prompt-defaults').addEventListener('click', () => {
 });
 $('#reference-image-input').addEventListener('change', (event) => {
   setReferenceImage(event.target.files?.[0]);
+});
+$('#orchestration-reference-action').addEventListener('click', () => {
+  if (!state.busy && selectedContentSkill()?.input_mode !== 'recent_news_topic') {
+    $('#reference-image-input').click();
+  }
 });
 $('#reference-dropzone').addEventListener('click', () => {
   if (!state.busy) $('#reference-image-input').click();
