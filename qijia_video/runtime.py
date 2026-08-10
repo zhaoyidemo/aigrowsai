@@ -12,6 +12,7 @@ from pathlib import Path
 from qijia_video import run_service as task_service
 from qijia_video.contracts import (
     Actor,
+    AssetRef,
     GenerationSettings,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
@@ -461,6 +462,27 @@ async def _execute(
                 actor,
                 progress=report,
             )
+        elif action == "replace_shot_media":
+            job = await runtime.service.replace_shot_media(
+                job_id,
+                str(parameters.get("shot_id") or ""),
+                AssetRef.model_validate(parameters.get("raw_asset") or {}),
+                str(parameters.get("media_kind") or ""),
+                str(parameters.get("media_id") or ""),
+                str(parameters.get("original_filename") or ""),
+                str(parameters.get("expected_selected_media_id") or ""),
+                actor,
+                progress=report,
+            )
+        elif action == "select_shot_media":
+            job = await runtime.service.select_shot_media(
+                job_id,
+                str(parameters.get("shot_id") or ""),
+                str(parameters.get("media_id") or ""),
+                str(parameters.get("expected_selected_media_id") or ""),
+                actor,
+                progress=report,
+            )
         else:
             raise RuntimeError("未知的齐家短视频后台动作")
         terminal = {
@@ -474,6 +496,16 @@ async def _execute(
             ),
             "select_shot_version": (
                 "镜头版本已切换，等待你确认成片",
+                "confirm_final",
+                90,
+            ),
+            "replace_shot_media": (
+                "上传素材已应用，等待你确认成片",
+                "confirm_final",
+                90,
+            ),
+            "select_shot_media": (
+                "镜头素材已切换，等待你确认成片",
                 "confirm_final",
                 90,
             ),
@@ -548,7 +580,12 @@ async def _monitor_worker(
     task_service.fail_task(task_id, error, {"job_id": job_id, "action": action})
     await task_service.flush_task_async(task_id)
     try:
-        if action in ("regenerate_shot", "select_shot_version"):
+        if action in (
+            "regenerate_shot",
+            "select_shot_version",
+            "replace_shot_media",
+            "select_shot_media",
+        ):
             await runtime.service.mark_shot_edit_failed(job_id, error, actor)
         else:
             await runtime.service.mark_execution_failed(
@@ -571,11 +608,18 @@ async def start_run(
         "package",
         "regenerate_shot",
         "select_shot_version",
+        "replace_shot_media",
+        "select_shot_media",
     ):
         raise ValueError("不支持的后台动作")
     run_group = (
         "shot-edit"
-        if action in ("regenerate_shot", "select_shot_version")
+        if action in (
+            "regenerate_shot",
+            "select_shot_version",
+            "replace_shot_media",
+            "select_shot_media",
+        )
         else action
     )
     name = f"齐家短视频:{run_group}:{job_id}"

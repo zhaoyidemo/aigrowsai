@@ -48,9 +48,9 @@ class FfmpegMediaPackager:
         try:
             duration = float(output.strip().splitlines()[-1])
         except (ValueError, IndexError) as exc:
-            raise ProviderUnavailable("无法读取 Seedance 视频实际时长") from exc
+            raise ProviderUnavailable("无法读取视频实际时长") from exc
         if duration <= 0:
-            raise ProviderUnavailable("Seedance 视频实际时长无效")
+            raise ProviderUnavailable("视频实际时长无效")
         return duration
 
     async def prepare_video_for_timeline(
@@ -97,6 +97,52 @@ class FfmpegMediaPackager:
         prepared_duration = await self._probe_duration(destination)
         if prepared_duration + (1 / 30) < minimum:
             raise ProviderUnavailable("Seedance 时间轴视频仍短于对应旁白章节")
+        return destination, prepared_duration
+
+    async def prepare_uploaded_video_for_timeline(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        chapter_duration_seconds: float,
+    ) -> tuple[Path, float]:
+        """Normalize untrusted editor footage into a silent timeline-safe MP4."""
+
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise ProviderUnavailable("未找到 FFmpeg")
+        actual_duration = await self._probe_duration(source)
+        chapter_duration = max(0.001, float(chapter_duration_seconds))
+        target_duration = chapter_duration + (1 / 30)
+        padding = max(0.0, target_duration - actual_duration)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        await self._run(
+            ffmpeg,
+            "-y",
+            "-i", str(source),
+            "-map", "0:v:0",
+            "-an",
+            "-sn",
+            "-dn",
+            "-map_metadata", "-1",
+            "-vf", (
+                "scale=1080:-2,"
+                "fps=30,"
+                f"tpad=stop_mode=clone:stop_duration={padding:.6f}"
+            ),
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-t", f"{target_duration:.6f}",
+            str(destination),
+        )
+        if not destination.is_file() or destination.stat().st_size == 0:
+            raise ProviderUnavailable("未能准备上传视频")
+        prepared_duration = await self._probe_duration(destination)
+        if prepared_duration + (1 / 30) < chapter_duration:
+            raise ProviderUnavailable("上传视频处理后仍短于对应旁白章节")
         return destination, prepared_duration
 
     async def normalize(self, source: Path, destination: Path) -> Path:

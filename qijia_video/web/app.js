@@ -18,6 +18,7 @@ const state = {
   busy: false,
   selectedShotId: '',
   previewVersionId: '',
+  previewUploadId: '',
   previewFrameCandidateId: '',
   storyboardKey: '',
   inspectorKey: '',
@@ -761,6 +762,9 @@ function setDouyinRefreshFeedback(jobId, tone, message) {
 function setBusy(busy) {
   state.busy = busy;
   document.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
+  document.querySelectorAll('[data-shot-upload]').forEach((input) => {
+    input.disabled = busy || !canEditResource(state.selectedJob);
+  });
   if (!busy) {
     updateScriptLengthStatus();
     renderTopicControls();
@@ -1382,6 +1386,26 @@ function storyboardShotFor(job, shotId) {
   ) || null;
 }
 
+function uploadedMediaForShot(job, shotId) {
+  return (job?.shot_media_versions || [])
+    .filter((item) => item.shot_id === shotId && item.asset)
+    .sort((left, right) => left.version - right.version);
+}
+
+function selectedUploadedMedia(job, shotId) {
+  const selectedId = storyboardShotFor(job, shotId)?.selected_media_id || '';
+  return uploadedMediaForShot(job, shotId).find(
+    (item) => item.media_id === selectedId,
+  ) || null;
+}
+
+function uploadedMediaUrl(job, media) {
+  if (!media?.asset) return '';
+  return API + '/jobs/' + encodeURIComponent(job.id)
+    + '/shots/' + encodeURIComponent(media.shot_id)
+    + '/uploads/' + encodeURIComponent(media.media_id) + '/media';
+}
+
 function frameCandidatesForShot(job, shotId) {
   return (job.first_frame_candidates || [])
     .filter((candidate) => candidate.shot_id === shotId && candidate.asset)
@@ -1578,6 +1602,19 @@ function renderShotInspector(job) {
 
   const request = requests[requestIndex];
   const isImage = request.visual_type === 'image';
+  const uploads = uploadedMediaForShot(job, request.request_id);
+  const activeUpload = selectedUploadedMedia(job, request.request_id);
+  if (!state.previewUploadId) {
+    state.previewUploadId = activeUpload?.media_id || '__generated';
+  }
+  let previewUpload = state.previewUploadId === '__generated'
+    ? null
+    : uploads.find((item) => item.media_id === state.previewUploadId) || null;
+  if (!previewUpload && state.previewUploadId !== '__generated') {
+    state.previewUploadId = activeUpload?.media_id || '__generated';
+    previewUpload = activeUpload;
+  }
+
   const versions = versionsForShot(job, request);
   const currentVersion = currentVersionForShot(job, request);
   const currentKey = currentVersion?.version_id || '__current';
@@ -1590,16 +1627,19 @@ function renderShotInspector(job) {
     previewKey = currentKey;
   }
   state.previewVersionId = previewKey;
-  const previewIsCurrent = isImage || (previewVersion
-    && requestSignature(previewVersion.request) === requestSignature(request));
+  const previewIsCurrent = previewUpload
+    ? previewUpload.media_id === activeUpload?.media_id
+    : !activeUpload && (isImage || (previewVersion
+      && requestSignature(previewVersion.request) === requestSignature(request)));
+
   const frameCandidates = frameCandidatesForShot(job, request.request_id);
-  const showFrameChoices = frameCandidates.length > 1;
+  const showFrameChoices = !previewUpload && frameCandidates.length > 1;
   const frameSelection = frameSelectionForShot(job, request.request_id);
   const previewRequest = previewVersion?.request || request;
   const previewFrame = frameCandidates.find(
     (candidate) => candidate.asset?.asset_id === previewRequest.first_frame_asset_id,
   ) || currentFrameCandidate(job, request);
-  let chosenFrame = frameCandidates.find(
+  const chosenFrame = frameCandidates.find(
     (candidate) => candidate.candidate_id === state.previewFrameCandidateId,
   ) || previewFrame
     || frameCandidates.find(
@@ -1611,18 +1651,25 @@ function renderShotInspector(job) {
   const chosenFrameIsCurrent = !!chosenFrame
     && chosenFrame.asset?.asset_id === request.first_frame_asset_id;
   const taskRunning = activeJobTaskRunning(job);
-  const canEdit = !isImage
-    && canEditResource(job)
+  const canManageMedia = canEditResource(job)
     && job.state === 'final_review_required'
     && !taskRunning
     && !state.busy;
+  const canEditAi = !isImage && canManageMedia;
   const key = JSON.stringify({
     job: job.id,
     shot: request.request_id,
     preview: previewKey,
+    previewUpload: state.previewUploadId,
+    selectedUpload: activeUpload?.media_id || '',
     previewFrame: state.previewFrameCandidateId,
     current: requestSignature(request),
     taskRunning,
+    uploads: uploads.map((item) => [
+      item.media_id,
+      item.asset?.sha256 || '',
+      item.original_filename || '',
+    ]),
     versions: versions.map((version) => [
       version.version_id,
       version.task?.state,
@@ -1640,7 +1687,12 @@ function renderShotInspector(job) {
   if (state.inspectorKey === key) return;
   state.inspectorKey = key;
 
-  const mediaUrl = isImage ? '' : shotMediaUrl(job, request, previewVersion);
+  const mediaUrl = previewUpload
+    ? uploadedMediaUrl(job, previewUpload)
+    : (isImage ? '' : shotMediaUrl(job, request, previewVersion));
+  const previewIsImage = previewUpload
+    ? previewUpload.media_kind === 'image'
+    : isImage;
   const selectedModelId = seedanceModelForRequest(
     job,
     previewRequest,
@@ -1654,30 +1706,59 @@ function renderShotInspector(job) {
     return `<option value="${escapeHtml(model.id)}" ${model.id === selectedModelId ? 'selected' : ''}>${escapeHtml(model.label + suffix)}</option>`;
   }).join('');
   const selectedModelCost = estimatedSeedanceCost(previewRequest, selectedModelId);
-  const previewLabel = isImage
-    ? '动态图片'
-    : previewVersion ? `v${previewVersion.version}` : '当前版本';
+  const previewLabel = previewUpload
+    ? `上传 v${previewUpload.version}`
+    : isImage
+      ? 'AI 动态图片'
+      : previewVersion ? `AI v${previewVersion.version}` : 'AI 当前版本';
+
+  const generatedImageButton = isImage
+    ? `<button class="version-pill ${!previewUpload ? 'previewing' : ''}" type="button" data-preview-generated>AI 动态图片${!activeUpload ? ' · 成片' : ''}</button>`
+    : '';
   const versionButtons = versions.map((version) => {
     const versionKey = version.version_id || '__current';
     const usable = !!version.asset && version.task?.state === 'succeeded';
-    const selected = versionKey === previewKey;
-    const isCurrent = requestSignature(version.request) === requestSignature(request);
+    const selected = !previewUpload && versionKey === previewKey;
+    const isCurrent = !activeUpload
+      && requestSignature(version.request) === requestSignature(request);
     const suffix = isCurrent ? ' · 成片' : usable ? '' : ` · ${version.task?.state || '处理中'}`;
     const versionModel = seedanceModelInfo(
       seedanceModelForRequest(job, version.request, version.task),
     );
-    return `<button class="version-pill ${selected ? 'previewing' : ''}" type="button" data-preview-version="${escapeHtml(versionKey)}" ${usable ? '' : 'disabled'}>v${version.version} · ${escapeHtml(versionModel?.short_label || 'Seedance')}${escapeHtml(suffix)}</button>`;
+    return `<button class="version-pill ${selected ? 'previewing' : ''}" type="button" data-preview-version="${escapeHtml(versionKey)}" ${usable ? '' : 'disabled'}>AI v${version.version} · ${escapeHtml(versionModel?.short_label || 'Seedance')}${escapeHtml(suffix)}</button>`;
   }).join('');
-  const applyButton = !previewIsCurrent && previewVersion?.asset
-    ? `<button class="button secondary" type="button" data-select-version="${escapeHtml(previewVersion.version_id)}" ${canEdit ? '' : 'disabled'}>将 ${escapeHtml(previewLabel)} 用于成片</button>`
-    : '';
+  const uploadButtons = uploads.map((item) => {
+    const selected = previewUpload?.media_id === item.media_id;
+    const current = activeUpload?.media_id === item.media_id;
+    const kind = item.media_kind === 'video' ? '视频' : '图片';
+    return `<button class="version-pill uploaded ${selected ? 'previewing' : ''}" type="button" data-preview-upload="${escapeHtml(item.media_id)}">上传 v${item.version} · ${kind}${current ? ' · 成片' : ''}</button>`;
+  }).join('');
+  const historyButtons = [generatedImageButton || versionButtons, uploadButtons]
+    .filter(Boolean)
+    .join('');
+
+  let applyButton = '';
+  if (previewUpload && !previewIsCurrent) {
+    applyButton = `<button class="button secondary" type="button" data-select-upload="${escapeHtml(previewUpload.media_id)}" ${canManageMedia ? '' : 'disabled'}>将上传 v${previewUpload.version} 用于成片</button>`;
+  } else if (!previewUpload && activeUpload) {
+    const previewIsOlderAiVersion = !isImage
+      && previewVersion?.asset
+      && requestSignature(previewVersion.request) !== requestSignature(request);
+    applyButton = previewIsOlderAiVersion
+      ? `<button class="button secondary" type="button" data-select-version="${escapeHtml(previewVersion.version_id)}" ${canEditAi ? '' : 'disabled'}>将 ${escapeHtml(previewLabel)} 用于成片</button>`
+      : `<button class="button secondary" type="button" data-restore-generated ${canManageMedia ? '' : 'disabled'}>恢复使用 AI 素材</button>`;
+  } else if (!previewUpload && !previewIsCurrent && previewVersion?.asset) {
+    applyButton = `<button class="button secondary" type="button" data-select-version="${escapeHtml(previewVersion.version_id)}" ${canEditAi ? '' : 'disabled'}>将 ${escapeHtml(previewLabel)} 用于成片</button>`;
+  }
+
   const frameEvaluations = new Map(
     (frameSelection?.evaluations || []).map((item) => [item.candidate_id, item]),
   );
   const frameButtons = showFrameChoices ? frameCandidates.map((candidate) => {
     const isPreviewing = candidate.candidate_id === state.previewFrameCandidateId;
     const isRecommended = candidate.candidate_id === frameSelection?.recommended_candidate_id;
-    const isCurrent = candidate.asset?.asset_id === request.first_frame_asset_id;
+    const isCurrent = !activeUpload
+      && candidate.asset?.asset_id === request.first_frame_asset_id;
     const evaluation = frameEvaluations.get(candidate.candidate_id);
     const badges = [
       isRecommended ? '<span>AI 推荐</span>' : '',
@@ -1689,36 +1770,65 @@ function renderShotInspector(job) {
       <div>${badges}</div>
     </button>`;
   }).join('') : '';
-  const framePreviewUrl = frameCandidateMediaUrl(job, chosenFrame);
+  const framePreviewUrl = previewUpload ? '' : frameCandidateMediaUrl(job, chosenFrame);
   const regenerateLabel = chosenFrame && !chosenFrameIsCurrent
     ? '用这张首帧换一版'
     : '按当前首帧换一版';
-  const mediaKind = isImage ? '动态图片' : 'Seedance 视频';
+  const mediaKind = previewUpload
+    ? `自有${previewUpload.media_kind === 'video' ? '视频' : '图片'}`
+    : isImage ? 'AI 动态图片' : 'Seedance 视频';
+  const headerDetail = previewUpload
+    ? `${escapeHtml(previewUpload.original_filename || previewLabel)} · 成片约 ${request.duration_seconds} 秒`
+    : isImage
+      ? `${escapeHtml(previewLabel)} · 成片约 ${request.duration_seconds} 秒 · Remotion 动态取景`
+      : `${escapeHtml(previewLabel)} · ${request.duration_seconds} 秒 · ${escapeHtml(request.resolution)} · ${escapeHtml(selectedModel?.short_label || 'Seedance')}`;
+
   inspector.innerHTML = `
     <div class="shot-inspector-header">
-      <div><h4>镜头 ${requestIndex + 1} · ${mediaKind}</h4><p>${isImage ? `${escapeHtml(previewLabel)} · 成片约 ${request.duration_seconds} 秒 · Remotion 动态取景` : `${escapeHtml(previewLabel)} · ${request.duration_seconds} 秒 · ${escapeHtml(request.resolution)} · ${escapeHtml(selectedModel?.short_label || 'Seedance')}`}</p></div>
+      <div><h4>镜头 ${requestIndex + 1} · ${mediaKind}</h4><p>${headerDetail}</p></div>
       <button class="icon-button" type="button" data-close-inspector aria-label="关闭镜头设置">×</button>
     </div>
-    ${mediaUrl
+    ${mediaUrl && !previewIsImage
       ? `<video class="inspector-video" src="${mediaUrl}" controls preload="metadata" playsinline></video>`
-      : framePreviewUrl
-        ? `<div class="inspector-frame-wrap"><img class="inspector-frame-preview" src="${framePreviewUrl}" alt="当前首帧预览"><span>${isImage ? '成片中会自动添加缓慢取景运动' : 'Seedance 视频生成后会替换此预览'}</span></div>`
-        : '<div class="inspector-empty">首帧和视频生成后可在这里预览</div>'}
-    ${isImage ? '' : `<div class="version-row" aria-label="镜头历史版本">${versionButtons || '<span class="field-hint">首个版本生成后会保留在这里</span>'}</div>`}
+      : mediaUrl && previewIsImage
+        ? `<div class="inspector-frame-wrap"><img class="inspector-frame-preview" src="${mediaUrl}" alt="上传图片预览"><span>成片中会自动裁切为竖屏并添加缓慢取景运动</span></div>`
+        : framePreviewUrl
+          ? `<div class="inspector-frame-wrap"><img class="inspector-frame-preview" src="${framePreviewUrl}" alt="当前首帧预览"><span>${isImage ? '成片中会自动添加缓慢取景运动' : 'Seedance 视频生成后会替换此预览'}</span></div>`
+          : '<div class="inspector-empty">素材生成或上传后可在这里预览</div>'}
+    ${historyButtons ? `<div class="version-row source-version-row" aria-label="镜头素材历史">${historyButtons}</div>` : ''}
+    ${applyButton ? `<div class="shot-source-selection-actions">${applyButton}</div>` : ''}
+    <section class="shot-source-panel" aria-label="上传自己的镜头素材">
+      <div class="shot-source-heading">
+        <div><strong>换成自己的素材</strong><span>适合产品实拍、人物采访、操作录屏、品牌与数据画面</span></div>
+        ${activeUpload ? '<span class="source-active-badge">当前使用自有素材</span>' : ''}
+      </div>
+      <div class="shot-source-actions">
+        <label class="button secondary shot-upload-button ${canManageMedia ? '' : 'disabled'}">
+          上传图片
+          <input type="file" data-shot-upload accept="image/jpeg,image/png,image/webp" data-media-kind="image" ${canManageMedia ? '' : 'disabled'}>
+        </label>
+        <label class="button secondary shot-upload-button ${canManageMedia ? '' : 'disabled'}">
+          上传视频
+          <input type="file" data-shot-upload accept=".mp4,.mov,.webm,video/mp4,video/quicktime,video/webm" data-media-kind="video" ${canManageMedia ? '' : 'disabled'}>
+        </label>
+      </div>
+      <p>图片支持 JPG、PNG、WebP，最大 20 MB；视频支持 MP4、MOV、WebM，最大 200 MB。视频从开头使用、自动静音和匹配章节时长；原 AI 素材会完整保留。</p>
+    </section>
     ${frameButtons ? `<section class="frame-candidate-section"><div class="frame-candidate-heading"><strong>${isImage ? '图片候选' : '首帧候选'}</strong><span>${isImage ? '系统已推荐当前成片使用的图片，可点击查看另一构图' : '系统已自动推荐，可人工改选后重生成本镜头'}</span></div><div class="frame-candidate-grid">${frameButtons}</div></section>` : ''}
-    ${isImage ? '' : `<label class="shot-prompt-field">这个镜头想呈现什么
-      <textarea id="shot-prompt-editor" rows="7" maxlength="4000" spellcheck="false" ${canEdit ? '' : 'readonly'}>${escapeHtml(previewVersion?.request?.prompt || request.prompt)}</textarea>
-    </label>
-    <label class="shot-model-field">生成模型
-      <select id="shot-seedance-model" ${canEdit ? '' : 'disabled'}>${modelOptions}</select>
-      <span class="field-hint">默认 1.0 Pro Fast 保持原生 1080P；仅在复杂动作、人物一致性不理想时升级 2.0。</span>
-    </label>
-    <div class="shot-inspector-actions">
-      ${applyButton}
-      <button class="button primary" type="button" data-regenerate-shot ${canEdit ? '' : 'disabled'}>${regenerateLabel}</button>
-    </div>
-    <p class="cost-note" data-shot-model-cost>本次只会新增 1 次 ${previewRequest.duration_seconds} 秒、${escapeHtml(previewRequest.resolution)} ${escapeHtml(selectedModel?.label || 'Seedance')} 调用${selectedModelCost === null ? '' : `，刊例价预估约 ¥${selectedModelCost.toFixed(2)}`}；不会重做旁白、图片章节或其他视频镜头。</p>`}
-    ${isImage ? '<p class="cost-note">这个章节直接使用 Seedream 图片，由 Remotion 添加轻微推进或横移，不产生 Seedance 视频费用。</p>' : ''}`;
+    ${isImage ? '' : `<section class="ai-shot-panel"><div class="shot-source-heading"><div><strong>AI 生成方案</strong><span>需要新构图或复杂动作时，可继续生成并自动切回 AI 素材</span></div></div>
+      <label class="shot-prompt-field">这个镜头想呈现什么
+        <textarea id="shot-prompt-editor" rows="7" maxlength="4000" spellcheck="false" ${canEditAi ? '' : 'readonly'}>${escapeHtml(previewVersion?.request?.prompt || request.prompt)}</textarea>
+      </label>
+      <label class="shot-model-field">生成模型
+        <select id="shot-seedance-model" ${canEditAi ? '' : 'disabled'}>${modelOptions}</select>
+        <span class="field-hint">默认 1.0 Pro Fast 保持原生 1080P；仅在复杂动作、人物一致性不理想时升级 2.0。</span>
+      </label>
+      <div class="shot-inspector-actions">
+        <button class="button primary" type="button" data-regenerate-shot ${canEditAi ? '' : 'disabled'}>${regenerateLabel}</button>
+      </div>
+      <p class="cost-note" data-shot-model-cost>本次只会新增 1 次 ${previewRequest.duration_seconds} 秒、${escapeHtml(previewRequest.resolution)} ${escapeHtml(selectedModel?.label || 'Seedance')} 调用${selectedModelCost === null ? '' : `，刊例价预估约 ¥${selectedModelCost.toFixed(2)}`}；不会重做旁白、图片章节或其他视频镜头。</p>
+    </section>`}
+    ${isImage ? '<p class="cost-note">AI 图片章节由 Remotion 添加轻微推进或横移，不产生 Seedance 视频费用。</p>' : ''}`;
 }
 
 function renderShotStoryboard(job) {
@@ -1739,31 +1849,42 @@ function renderShotStoryboard(job) {
   ) {
     state.selectedShotId = '';
     state.previewVersionId = '';
+    state.previewUploadId = '';
     state.previewFrameCandidateId = '';
   }
 
   const rows = requests.map((request, index) => {
-    const isImage = request.visual_type === 'image';
+    const activeUpload = selectedUploadedMedia(job, request.request_id);
+    const isImage = activeUpload
+      ? activeUpload.media_kind === 'image'
+      : request.visual_type === 'image';
     const versions = versionsForShot(job, request);
     const currentVersion = currentVersionForShot(job, request);
     const currentFrame = currentFrameCandidate(job, request)
       || frameCandidatesForShot(job, request.request_id)[0]
       || null;
-    const currentAsset = isImage
-      ? currentFrame?.asset || null
-      : currentVersion?.asset || renderedVisualAsset(job, request);
+    const currentAsset = activeUpload?.asset || (
+      isImage
+        ? currentFrame?.asset || null
+        : currentVersion?.asset || renderedVisualAsset(job, request)
+    );
     const latestVersion = versions.at(-1) || null;
     const latestIsCandidate = latestVersion
       && requestSignature(latestVersion.request) !== requestSignature(request);
-    let status = isImage && currentAsset
-      ? {label: '动态图片已就绪', className: 'succeeded'}
-      : shotStatus(currentTaskForShot(job, request), !!currentAsset);
+    let status = activeUpload
+      ? {label: '已使用上传素材', className: 'succeeded'}
+      : isImage && currentAsset
+        ? {label: '动态图片已就绪', className: 'succeeded'}
+        : shotStatus(currentTaskForShot(job, request), !!currentAsset);
     if (latestIsCandidate && !latestVersion.asset) {
       status = ['failed', 'cancelled'].includes(latestVersion.task?.state)
         ? {label: '新版本失败，当前版保留', className: 'failed'}
         : {label: '正在生成新版本', className: 'running'};
     }
-    return {request, index, isImage, versions, currentVersion, currentAsset, currentFrame, status};
+    return {
+      request, index, isImage, versions, currentVersion,
+      currentAsset, currentFrame, activeUpload, status,
+    };
   });
   const readyCount = rows.filter((row) => row.currentAsset).length;
   const frameReadyCount = rows.filter((row) => row.currentFrame).length;
@@ -1784,6 +1905,7 @@ function renderShotStoryboard(job) {
       request: requestSignature(row.request),
       task: currentTaskForShot(job, row.request)?.state || '',
       asset: row.currentAsset?.sha256 || '',
+      upload: row.activeUpload?.media_id || '',
       frame: row.currentFrame?.asset?.sha256 || '',
       status: row.status.label,
       versions: row.versions.map((version) => [
@@ -1797,11 +1919,15 @@ function renderShotStoryboard(job) {
     state.storyboardKey = key;
     $('#shot-grid').innerHTML = rows.map((row) => {
       const mediaUrl = !row.isImage && row.currentAsset
-        ? shotMediaUrl(job, row.request, row.currentVersion || {
-          version_id: '', asset: row.currentAsset,
-        })
+        ? row.activeUpload
+          ? uploadedMediaUrl(job, row.activeUpload)
+          : shotMediaUrl(job, row.request, row.currentVersion || {
+            version_id: '', asset: row.currentAsset,
+          })
         : '';
-      const frameUrl = frameCandidateMediaUrl(job, row.currentFrame);
+      const frameUrl = row.activeUpload?.media_kind === 'image'
+        ? uploadedMediaUrl(job, row.activeUpload)
+        : frameCandidateMediaUrl(job, row.currentFrame);
       const versionNumber = row.currentVersion?.version || 1;
       const selected = state.selectedShotId === row.request.request_id;
       const placeholderClass = row.status.className === 'failed'
@@ -1810,7 +1936,7 @@ function renderShotStoryboard(job) {
       return `<article class="shot-card ${selected ? 'selected' : ''}" data-shot-id="${escapeHtml(row.request.request_id)}" role="listitem" tabindex="0" aria-label="镜头 ${row.index + 1}，${escapeHtml(row.status.label)}">
         <div class="shot-preview">
           <span class="shot-number">${String(row.index + 1).padStart(2, '0')}</span>
-          <span class="shot-version-badge">${row.isImage ? '动态图片' : `v${versionNumber}${row.versions.length > 1 ? ` · ${row.versions.length} 版` : ''}`}</span>
+          <span class="shot-version-badge">${row.activeUpload ? `自有${row.isImage ? '图片' : '视频'}` : row.isImage ? '动态图片' : `v${versionNumber}${row.versions.length > 1 ? ` · ${row.versions.length} 版` : ''}`}</span>
           ${mediaUrl
             ? `<video src="${mediaUrl}" muted loop playsinline preload="metadata" aria-label="镜头 ${row.index + 1} 预览"></video>`
             : frameUrl
@@ -1818,7 +1944,7 @@ function renderShotStoryboard(job) {
             : `<div class="shot-placeholder ${placeholderClass}">${escapeHtml(row.status.label)}</div>`}
         </div>
         <div class="shot-copy">
-          <strong>镜头 ${row.index + 1} · ${row.isImage ? '图片' : '视频'}</strong>
+          <strong>镜头 ${row.index + 1} · ${row.activeUpload ? '自有' : 'AI '}${row.isImage ? '图片' : '视频'}</strong>
           <p>${escapeHtml(shotDescription(job, row.request))}</p>
           <span class="shot-status ${escapeHtml(row.status.className)}">${escapeHtml(row.status.label)}</span>
         </div>
@@ -2190,6 +2316,9 @@ function applyJobReadOnly(job) {
   document.querySelectorAll('#shot-inspector select').forEach((node) => {
     node.disabled = readOnly || state.busy;
   });
+  document.querySelectorAll('#shot-inspector [data-shot-upload]').forEach((node) => {
+    node.disabled = readOnly || state.busy;
+  });
   document.querySelectorAll('#script-review select').forEach((node) => {
     node.disabled = readOnly || state.busy;
   });
@@ -2218,6 +2347,8 @@ function applyJobReadOnly(job) {
   document.querySelectorAll([
     '[data-regenerate-shot]',
     '[data-select-version]',
+    '[data-select-upload]',
+    '[data-restore-generated]',
     '#approve-final-button',
   ].join(',')).forEach((node) => { node.disabled = true; });
 }
@@ -2409,6 +2540,7 @@ async function loadAll({selectJobId = ''} = {}) {
     clearTtsPreview();
     state.selectedShotId = '';
     state.previewVersionId = '';
+    state.previewUploadId = '';
     state.previewFrameCandidateId = '';
     state.storyboardKey = '';
     state.inspectorKey = '';
@@ -2816,6 +2948,7 @@ $('#job-list').addEventListener('click', async (event) => {
     }
     state.selectedShotId = '';
     state.previewVersionId = '';
+    state.previewUploadId = '';
     state.previewFrameCandidateId = '';
     state.storyboardKey = '';
     state.inspectorKey = '';
@@ -3002,6 +3135,7 @@ $('#shot-grid').addEventListener('click', (event) => {
   if (!card || !state.selectedJob) return;
   state.selectedShotId = card.dataset.shotId;
   state.previewVersionId = '';
+  state.previewUploadId = '';
   const request = storyboardRequests(state.selectedJob).find(
     (item) => item.request_id === state.selectedShotId,
   );
@@ -3046,12 +3180,72 @@ $('#shot-inspector').addEventListener('change', (event) => {
   note.textContent = `本次只会新增 1 次 ${request.duration_seconds} 秒、${request.resolution} ${model?.label || 'Seedance'} 调用${cost === null ? '' : `，刊例价预估约 ¥${cost.toFixed(2)}`}；不会重做旁白、图片章节或其他视频镜头。`;
 });
 
+$('#shot-inspector').addEventListener('change', async (event) => {
+  const input = event.target.closest('[data-shot-upload]');
+  const job = state.selectedJob;
+  const file = input?.files?.[0];
+  if (!input || !job || !file) return;
+  const mediaKind = input.dataset.mediaKind;
+  const extension = file.name.toLowerCase().split('.').pop() || '';
+  const validImage = mediaKind === 'image'
+    && ['jpg', 'jpeg', 'png', 'webp'].includes(extension);
+  const validVideo = mediaKind === 'video'
+    && ['mp4', 'mov', 'webm'].includes(extension);
+  if (!validImage && !validVideo) {
+    notify(
+      mediaKind === 'image'
+        ? '请选择 JPG、PNG 或 WebP 图片。'
+        : '请选择 MP4、MOV 或 WebM 视频。',
+      true,
+    );
+    input.value = '';
+    return;
+  }
+  const maxBytes = mediaKind === 'image' ? 20 * 1024 * 1024 : 200 * 1024 * 1024;
+  if (file.size <= 0 || file.size > maxBytes) {
+    notify(
+      mediaKind === 'image'
+        ? '图片必须小于 20 MB。'
+        : '视频必须小于 200 MB。',
+      true,
+    );
+    input.value = '';
+    return;
+  }
+  const body = new FormData();
+  body.append('expected_revision', String(job.revision));
+  body.append('media', file, file.name);
+  setBusy(true); notify('');
+  try {
+    const result = await apiMultipart(
+      `/jobs/${encodeURIComponent(job.id)}/shots/${encodeURIComponent(state.selectedShotId)}/media`,
+      body,
+    );
+    await loadAll({selectJobId: job.id});
+    setBusy(false);
+    await pollTask(result.task_id, job.id);
+    state.previewUploadId = '';
+    state.previewVersionId = '';
+    state.previewFrameCandidateId = '';
+    state.storyboardKey = '';
+    state.inspectorKey = '';
+    renderDetail();
+    notify(`${mediaKind === 'image' ? '图片' : '视频'}已用于这个镜头，原 AI 素材仍可随时恢复。`);
+  } catch (error) {
+    await loadAll({selectJobId: job.id}).catch(() => {});
+    notify(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+});
+
 $('#shot-inspector').addEventListener('click', async (event) => {
   const job = state.selectedJob;
   if (!job) return;
   if (event.target.closest('[data-close-inspector]')) {
     state.selectedShotId = '';
     state.previewVersionId = '';
+    state.previewUploadId = '';
     state.previewFrameCandidateId = '';
     state.storyboardKey = '';
     state.inspectorKey = '';
@@ -3061,6 +3255,23 @@ $('#shot-inspector').addEventListener('click', async (event) => {
   const preview = event.target.closest('[data-preview-version]');
   if (preview) {
     state.previewVersionId = preview.dataset.previewVersion;
+    state.previewUploadId = '__generated';
+    state.previewFrameCandidateId = '';
+    state.inspectorKey = '';
+    renderShotInspector(job);
+    return;
+  }
+  if (event.target.closest('[data-preview-generated]')) {
+    state.previewUploadId = '__generated';
+    state.previewVersionId = '';
+    state.previewFrameCandidateId = '';
+    state.inspectorKey = '';
+    renderShotInspector(job);
+    return;
+  }
+  const previewUpload = event.target.closest('[data-preview-upload]');
+  if (previewUpload) {
+    state.previewUploadId = previewUpload.dataset.previewUpload;
     state.previewFrameCandidateId = '';
     state.inspectorKey = '';
     renderShotInspector(job);
@@ -3068,9 +3279,63 @@ $('#shot-inspector').addEventListener('click', async (event) => {
   }
   const frameCandidate = event.target.closest('[data-frame-candidate]');
   if (frameCandidate) {
+    state.previewUploadId = '__generated';
     state.previewFrameCandidateId = frameCandidate.dataset.frameCandidate;
     state.inspectorKey = '';
     renderShotInspector(job);
+    return;
+  }
+  const selectUpload = event.target.closest('[data-select-upload]');
+  if (selectUpload) {
+    setBusy(true); notify('');
+    try {
+      const result = await api(
+        'POST',
+        `/jobs/${encodeURIComponent(job.id)}/shots/${encodeURIComponent(state.selectedShotId)}/uploads/${encodeURIComponent(selectUpload.dataset.selectUpload)}/actions/select`,
+        {expected_revision: job.revision},
+      );
+      await loadAll({selectJobId: job.id});
+      setBusy(false);
+      await pollTask(result.task_id, job.id);
+      state.previewUploadId = selectUpload.dataset.selectUpload;
+      state.previewVersionId = '';
+      state.previewFrameCandidateId = '';
+      state.storyboardKey = '';
+      state.inspectorKey = '';
+      renderDetail();
+      notify('上传素材版本已切换，成片也已同步更新。');
+    } catch (error) {
+      await loadAll({selectJobId: job.id}).catch(() => {});
+      notify(error.message, true);
+    } finally {
+      setBusy(false);
+    }
+    return;
+  }
+  if (event.target.closest('[data-restore-generated]')) {
+    setBusy(true); notify('');
+    try {
+      const result = await api(
+        'POST',
+        `/jobs/${encodeURIComponent(job.id)}/shots/${encodeURIComponent(state.selectedShotId)}/actions/restore-generated-media`,
+        {expected_revision: job.revision},
+      );
+      await loadAll({selectJobId: job.id});
+      setBusy(false);
+      await pollTask(result.task_id, job.id);
+      state.previewUploadId = '__generated';
+      state.previewVersionId = '';
+      state.previewFrameCandidateId = '';
+      state.storyboardKey = '';
+      state.inspectorKey = '';
+      renderDetail();
+      notify('已恢复 AI 素材，上传版本仍保留在镜头历史中。');
+    } catch (error) {
+      await loadAll({selectJobId: job.id}).catch(() => {});
+      notify(error.message, true);
+    } finally {
+      setBusy(false);
+    }
     return;
   }
   const select = event.target.closest('[data-select-version]');
@@ -3086,6 +3351,7 @@ $('#shot-inspector').addEventListener('click', async (event) => {
       setBusy(false);
       await pollTask(result.task_id, job.id);
       state.previewVersionId = select.dataset.selectVersion;
+      state.previewUploadId = '__generated';
       state.previewFrameCandidateId = '';
       state.storyboardKey = '';
       state.inspectorKey = '';
@@ -3126,6 +3392,7 @@ $('#shot-inspector').addEventListener('click', async (event) => {
     setBusy(false);
     await pollTask(result.task_id, job.id);
     state.previewVersionId = '';
+    state.previewUploadId = '__generated';
     state.previewFrameCandidateId = '';
     state.storyboardKey = '';
     state.inspectorKey = '';

@@ -161,6 +161,16 @@ class FakeMediaPackager:
         shutil.copyfile(source, destination)
         return destination, minimum_duration_seconds + (1 / 30)
 
+    async def prepare_uploaded_video_for_timeline(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        chapter_duration_seconds: float,
+    ) -> tuple[Path, float]:
+        shutil.copyfile(source, destination)
+        return destination, chapter_duration_seconds + (1 / 30)
+
 class PassingQualityChecker:
     name = "fake-ffprobe"
 
@@ -904,6 +914,56 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("tpad=stop_mode=clone", " ".join(arguments))
         self.assertIn("libx264", arguments)
         self.assertNotIn("setpts", " ".join(arguments))
+
+    async def test_media_packager_normalizes_uploaded_video_for_timeline(self):
+        packager = FfmpegMediaPackager()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "editor.webm"
+            destination = root / "timeline.mp4"
+            source.write_bytes(b"editor-video")
+
+            async def fake_run(*args, **kwargs):
+                del kwargs
+                Path(args[-1]).write_bytes(b"prepared")
+                return "ok"
+
+            runner = AsyncMock(side_effect=fake_run)
+            with (
+                patch(
+                    "qijia_video.infrastructure.media.shutil.which",
+                    return_value="ffmpeg",
+                ),
+                patch.object(
+                    packager,
+                    "_probe_duration",
+                    AsyncMock(side_effect=[2.0, 6.05]),
+                ),
+                patch.object(packager, "_run", runner),
+            ):
+                result, duration = (
+                    await packager.prepare_uploaded_video_for_timeline(
+                        source,
+                        destination,
+                        chapter_duration_seconds=6.0,
+                    )
+                )
+
+        self.assertEqual(result, destination)
+        self.assertEqual(duration, 6.05)
+        arguments = runner.await_args.args
+        self.assertEqual(arguments[arguments.index("-map") + 1], "0:v:0")
+        self.assertIn("-an", arguments)
+        self.assertIn("-sn", arguments)
+        self.assertIn("-dn", arguments)
+        video_filter = arguments[arguments.index("-vf") + 1]
+        self.assertIn("scale=1080:-2", video_filter)
+        self.assertIn("fps=30", video_filter)
+        self.assertIn("tpad=stop_mode=clone", video_filter)
+        self.assertNotIn("setpts", video_filter)
+        self.assertEqual(arguments[arguments.index("-c:v") + 1], "libx264")
+        self.assertEqual(arguments[arguments.index("-pix_fmt") + 1], "yuv420p")
+        self.assertIn("+faststart", arguments)
 
     async def test_tts_limit_fallback_uses_minimum_chunks(self):
         texts = ["甲" * 200 + "。", "乙" * 200 + "。"]
@@ -3111,6 +3171,46 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("style.png", asset.object_key)
         self.assertTrue(self.storage.path_for(asset.object_key).is_file())
 
+    async def test_shot_media_upload_uses_magic_bytes_and_private_object_keys(self):
+        image_upload = UploadFile(
+            filename="../产品界面.png",
+            file=io.BytesIO(MockImageProvider._PNG),
+        )
+        with patch.object(qijia_api.runtime, "storage", self.storage):
+            image, image_kind, image_name = await qijia_api._store_shot_media(
+                image_upload,
+                job_id="job_upload_test",
+                shot_id="shot_01",
+                media_id="upload_image_test",
+            )
+        self.assertEqual((image_kind, image.media_type), ("image", "image/png"))
+        self.assertEqual(image_name, "产品界面.png")
+        self.assertNotIn("产品界面", image.object_key)
+        self.assertLessEqual(image.size_bytes, qijia_api.MAX_SHOT_IMAGE_BYTES)
+
+        mov_bytes = (
+            bytes.fromhex("000000186674797071742020")
+            + b"editor-video-fixture"
+        )
+        video_upload = UploadFile(
+            filename="folder\\采访.mov",
+            file=io.BytesIO(mov_bytes),
+        )
+        with patch.object(qijia_api.runtime, "storage", self.storage):
+            video, video_kind, video_name = await qijia_api._store_shot_media(
+                video_upload,
+                job_id="job_upload_test",
+                shot_id="shot_02",
+                media_id="upload_video_test",
+            )
+        self.assertEqual(
+            (video_kind, video.media_type),
+            ("video", "video/quicktime"),
+        )
+        self.assertEqual(video_name, "采访.mov")
+        self.assertTrue(video.object_key.endswith(".mov"))
+        self.assertLessEqual(video.size_bytes, qijia_api.MAX_SHOT_VIDEO_BYTES)
+
     async def test_global_reference_image_reaches_all_seedream_requests(self):
         class RecordingStoryboardProvider(TemplateStoryboardProvider):
             base_style = ""
@@ -3576,6 +3676,260 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             item for item in job.visual_versions if item.shot_id == shot_id
         ]), 2)
         self.assertEqual(len(self.service._all_video_tasks(job)), 4)
+
+    async def test_editor_media_can_mix_images_and_videos_and_restore_ai(self):
+        card = await self.service.create_source_card(valid_card(), self.actor)
+        card = await self.service.verify_source_card(
+            card.id, card.revision, self.actor
+        )
+        job = await self.service.create_job(card.id, self.actor)
+        job = await self.service.generate_script(job.id, self.actor)
+        job = await self.service.approve_script(
+            job.id, job.revision, job.script_hash, self.actor
+        )
+        job = await self.service.produce(job.id, self.actor)
+
+        video_shot_id = job.visual_requests[0].request_id
+        image_shot_id = next(
+            item.shot_id
+            for item in job.storyboard_plan.shots
+            if item.visual_type == "image"
+        )
+        original_video_asset = self.service._generated_visual_asset_for_shot(
+            job, video_shot_id
+        )
+        original_image_candidate = next(
+            item
+            for item in job.first_frame_candidates
+            if item.shot_id == image_shot_id
+            and item.candidate_id == next(
+                shot.selected_candidate_id
+                for shot in job.storyboard_plan.shots
+                if shot.shot_id == image_shot_id
+            )
+        )
+
+        image_source = self.root / "editor-image.png"
+        image_source.write_bytes(
+            bytes.fromhex("89504e470d0a1a0a") + b"editor-image"
+        )
+        raw_image = await self.storage.put_file(
+            object_key="tests/raw-editor-image.png",
+            path=image_source,
+            asset_id="raw_editor_image",
+            media_type="image/png",
+        )
+        events = []
+        job = await self.service.replace_shot_media(
+            job.id,
+            video_shot_id,
+            raw_image,
+            "image",
+            "upload_image_01",
+            "产品界面.png",
+            "",
+            self.actor,
+            progress=events.append,
+        )
+
+        selected_video_shot = next(
+            item
+            for item in job.storyboard_plan.shots
+            if item.shot_id == video_shot_id
+        )
+        image_override = next(
+            item
+            for item in job.shot_media_versions
+            if item.media_id == "upload_image_01"
+        )
+        video_block = next(
+            item
+            for item in job.render_manifest.visual_blocks
+            if item.shot_id == video_shot_id
+        )
+        self.assertEqual(selected_video_shot.selected_media_id, "upload_image_01")
+        self.assertEqual(image_override.original_filename, "产品界面.png")
+        self.assertEqual(video_block.type, "generated_image")
+        self.assertEqual(video_block.asset_id, image_override.asset.asset_id)
+        self.assertEqual(
+            self.service.visual_asset_for_shot(job, video_shot_id),
+            image_override.asset,
+        )
+        self.assertTrue(any(
+            event.get("stage") == "media_prepare" for event in events
+        ))
+
+        video_source = self.root / "editor-video.mov"
+        video_source.write_bytes(b"editor-video")
+        raw_video = await self.storage.put_file(
+            object_key="tests/raw-editor-video.mov",
+            path=video_source,
+            asset_id="raw_editor_video",
+            media_type="video/quicktime",
+        )
+        job = await self.service.replace_shot_media(
+            job.id,
+            image_shot_id,
+            raw_video,
+            "video",
+            "upload_video_01",
+            "采访片段.mov",
+            "",
+            self.actor,
+        )
+
+        selected_image_shot = next(
+            item
+            for item in job.storyboard_plan.shots
+            if item.shot_id == image_shot_id
+        )
+        video_override = next(
+            item
+            for item in job.shot_media_versions
+            if item.media_id == "upload_video_01"
+        )
+        image_block = next(
+            item
+            for item in job.render_manifest.visual_blocks
+            if item.shot_id == image_shot_id
+        )
+        self.assertEqual(selected_image_shot.selected_media_id, "upload_video_01")
+        self.assertEqual(video_override.asset.media_type, "video/mp4")
+        self.assertEqual(image_block.type, "generated_video")
+        self.assertEqual(image_block.asset_id, video_override.asset.asset_id)
+        self.assertEqual(len(job.shot_media_versions), 2)
+
+        job = await self.service.select_shot_media(
+            job.id,
+            video_shot_id,
+            "",
+            "upload_image_01",
+            self.actor,
+        )
+        restored_video_shot = next(
+            item
+            for item in job.storyboard_plan.shots
+            if item.shot_id == video_shot_id
+        )
+        restored_video_block = next(
+            item
+            for item in job.render_manifest.visual_blocks
+            if item.shot_id == video_shot_id
+        )
+        self.assertEqual(restored_video_shot.selected_media_id, "")
+        self.assertEqual(restored_video_block.type, "generated_video")
+        self.assertEqual(restored_video_block.asset_id, original_video_asset.asset_id)
+
+        job = await self.service.select_shot_media(
+            job.id,
+            image_shot_id,
+            "",
+            "upload_video_01",
+            self.actor,
+        )
+        restored_image_shot = next(
+            item
+            for item in job.storyboard_plan.shots
+            if item.shot_id == image_shot_id
+        )
+        restored_image_block = next(
+            item
+            for item in job.render_manifest.visual_blocks
+            if item.shot_id == image_shot_id
+        )
+        self.assertEqual(restored_image_shot.selected_media_id, "")
+        self.assertEqual(restored_image_block.type, "generated_image")
+        self.assertEqual(
+            restored_image_block.asset_id,
+            original_image_candidate.asset.asset_id,
+        )
+
+        job = await self.service.select_shot_media(
+            job.id,
+            video_shot_id,
+            "upload_image_01",
+            "",
+            self.actor,
+        )
+        self.assertEqual(
+            next(
+                item.selected_media_id
+                for item in job.storyboard_plan.shots
+                if item.shot_id == video_shot_id
+            ),
+            "upload_image_01",
+        )
+        self.assertEqual(len(job.shot_media_versions), 2)
+        self.assertEqual([item.kind for item in job.approvals], ["script"])
+
+    async def test_failed_uploaded_video_keeps_the_reviewable_draft(self):
+        card = await self.service.create_source_card(valid_card(), self.actor)
+        card = await self.service.verify_source_card(
+            card.id, card.revision, self.actor
+        )
+        job = await self.service.create_job(card.id, self.actor)
+        job = await self.service.generate_script(job.id, self.actor)
+        job = await self.service.approve_script(
+            job.id, job.revision, job.script_hash, self.actor
+        )
+        job = await self.service.produce(job.id, self.actor)
+        original_bundle = job.review_bundle_hash
+        original_artifacts = [
+            (item.name, item.asset.asset_id) for item in job.artifacts
+        ]
+        shot_id = job.visual_requests[0].request_id
+
+        video_source = self.root / "broken-editor-video.mov"
+        video_source.write_bytes(b"broken-editor-video")
+        raw_video = await self.storage.put_file(
+            object_key="tests/broken-editor-video.mov",
+            path=video_source,
+            asset_id="raw_broken_editor_video",
+            media_type="video/quicktime",
+        )
+
+        class FailingUploadPackager(FakeMediaPackager):
+            async def prepare_uploaded_video_for_timeline(
+                self,
+                source,
+                destination,
+                *,
+                chapter_duration_seconds,
+            ):
+                del source, destination, chapter_duration_seconds
+                raise ProviderUnavailable("测试中的上传视频处理失败")
+
+        self.service.media_packager = FailingUploadPackager()
+        with self.assertRaisesRegex(ProviderUnavailable, "上传视频处理失败"):
+            await self.service.replace_shot_media(
+                job.id,
+                shot_id,
+                raw_video,
+                "video",
+                "upload_broken_01",
+                "损坏视频.mov",
+                "",
+                self.actor,
+            )
+
+        latest = await self.service.get_job(job.id, self.actor)
+        current_shot = next(
+            item
+            for item in latest.storyboard_plan.shots
+            if item.shot_id == shot_id
+        )
+        self.assertEqual(latest.state, JobState.FINAL_REVIEW_REQUIRED)
+        self.assertEqual(latest.review_bundle_hash, original_bundle)
+        self.assertEqual(
+            [(item.name, item.asset.asset_id) for item in latest.artifacts],
+            original_artifacts,
+        )
+        self.assertEqual(current_shot.selected_media_id, "")
+        self.assertFalse(any(
+            item.media_id == "upload_broken_01"
+            for item in latest.shot_media_versions
+        ))
+        self.assertIn("原成片仍然保留", latest.error)
 
     async def test_failed_shot_regeneration_keeps_the_reviewable_draft(self):
         card = await self.service.create_source_card(valid_card(), self.actor)

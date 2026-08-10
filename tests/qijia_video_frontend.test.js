@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
 const page = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'app.js'), 'utf8');
+const styles = fs.readFileSync(path.join(root, 'qijia_video', 'web', 'app.css'), 'utf8');
 const host = fs.readFileSync(path.join(root, 'main.py'), 'utf8');
 const renderer = fs.readFileSync(path.join(root, 'video_renderer', 'src', 'KnowledgeVideoV1.tsx'), 'utf8');
 const renderEntry = fs.readFileSync(path.join(root, 'video_renderer', 'render.mjs'), 'utf8');
@@ -324,7 +325,7 @@ test('AI shots are visible storyboard cards with isolated version controls', () 
   assert.match(app, /renderShotStoryboard\(job\)/);
   assert.match(app, /data-regenerate-shot/);
   assert.match(app, /data-frame-candidate/);
-  assert.match(app, /const showFrameChoices = frameCandidates\.length > 1/);
+  assert.match(app, /const showFrameChoices = !previewUpload && frameCandidates\.length > 1/);
   assert.match(app, /data-select-version/);
   assert.match(app, /用这张首帧换一版/);
   assert.match(app, /id="shot-seedance-model"/);
@@ -359,6 +360,21 @@ test('final video mixes generated videos and motion images without narration tex
   assert.match(renderer, /whiteSpace: 'nowrap'/);
   assert.match(renderer, /padding: '0 74px 220px'/);
   assert.match(renderer, /Array\.from\(cue\.text\)\.length/);
+});
+
+test('storyboard supports editor images and videos without losing AI versions', () => {
+  assert.match(page, /混合制作故事板/);
+  assert.match(page, /上传自己的图片或视频，也可随时恢复 AI 素材/);
+  assert.match(app, /data-shot-upload/);
+  assert.match(app, /image\/jpeg,image\/png,image\/webp/);
+  assert.match(app, /video\/quicktime,video\/webm/);
+  assert.match(app, /apiMultipart\([\s\S]*\/media/);
+  assert.match(app, /restore-generated-media/);
+  assert.match(app, /data-preview-upload/);
+  assert.match(app, /selectedUploadedMedia/);
+  assert.match(app, /原 AI 素材会完整保留/);
+  assert.match(styles, /\.shot-source-panel/);
+  assert.match(styles, /\.shot-upload-button/);
 });
 
 test('person viewpoint flow starts a real job and polling resumes after refresh', () => {

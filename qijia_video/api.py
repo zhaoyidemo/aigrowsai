@@ -39,6 +39,8 @@ from qijia_video.auth import get_current_user, require_permission
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_SHOT_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_SHOT_VIDEO_BYTES = 200 * 1024 * 1024
 logger = logging.getLogger(__name__)
 api_router = APIRouter(
     prefix="/api/qijia-video",
@@ -210,6 +212,82 @@ async def _store_reference_image(upload: UploadFile) -> AssetRef:
             asset_id=f"reference_image_{token}",
             media_type=media_type,
         )
+
+
+def _uploaded_shot_media_format(path: Path) -> tuple[str, str, str]:
+    with path.open("rb") as handle:
+        header = handle.read(64)
+    if header.startswith(bytes.fromhex("89504e470d0a1a0a")):
+        return "image", ".png", "image/png"
+    if header.startswith(bytes.fromhex("ffd8ff")):
+        return "image", ".jpg", "image/jpeg"
+    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        return "image", ".webp", "image/webp"
+    if len(header) >= 12 and header[4:8] == b"ftyp":
+        media_type = "video/quicktime" if header[8:12] == b"qt  " else "video/mp4"
+        return "video", ".mov" if media_type == "video/quicktime" else ".mp4", media_type
+    if header.startswith(bytes.fromhex("1a45dfa3")):
+        return "video", ".webm", "video/webm"
+    raise HTTPException(
+        status_code=422,
+        detail="镜头素材只支持 JPG、PNG、WebP、MP4、MOV 或 WebM 格式",
+    )
+
+
+def _safe_upload_filename(value: str | None) -> str:
+    normalized = str(value or "未命名素材").replace(chr(92), "/").split("/")[-1]
+    cleaned = "".join(char for char in normalized if ord(char) >= 32).strip()
+    return (cleaned or "未命名素材")[:255]
+
+
+async def _store_shot_media(
+    upload: UploadFile,
+    *,
+    job_id: str,
+    shot_id: str,
+    media_id: str,
+) -> tuple[AssetRef, str, str]:
+    with tempfile.TemporaryDirectory(prefix="qijia-video-shot-upload-") as directory:
+        local_path = Path(directory) / "source.media"
+        size = 0
+        with local_path.open("wb") as handle:
+            while chunk := await upload.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_SHOT_VIDEO_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="上传视频不能超过 200 MB",
+                    )
+                handle.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=422, detail="上传素材不能为空")
+        media_kind, extension, media_type = _uploaded_shot_media_format(local_path)
+        if media_kind == "image" and size > MAX_SHOT_IMAGE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="上传图片不能超过 20 MB",
+            )
+        asset = await runtime.storage.put_file(
+            object_key=(
+                f"qijia-video/{job_id}/uploads/{shot_id}/"
+                f"raw-{media_id}{extension}"
+            ),
+            path=local_path,
+            asset_id=f"raw_shot_media_{media_id}",
+            media_type=media_type,
+        )
+        return asset, media_kind, _safe_upload_filename(upload.filename)
+
+
+def _asset_extension(asset: AssetRef) -> str:
+    return {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+        "video/mp4": ".mp4",
+        "video/quicktime": ".mov",
+        "video/webm": ".webm",
+    }.get(asset.media_type, ".media")
 
 
 @page_router.get(
@@ -736,6 +814,129 @@ async def regenerate_shot(
     }, "已开始生成这个镜头的新版本")
 
 
+@api_router.post("/jobs/{job_id}/shots/{shot_id}/media")
+@boundary
+async def upload_shot_media(
+    job_id: str,
+    shot_id: str,
+    expected_revision: int = Form(...),
+    media: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    actor = actor_from_user(user)
+    selected_media_id = await runtime.service.validate_shot_media_action(
+        job_id,
+        shot_id,
+        expected_revision,
+        actor,
+    )
+    media_id = f"upload_{secrets.token_hex(12)}"
+    try:
+        raw_asset, media_kind, original_filename = await _store_shot_media(
+            media,
+            job_id=job_id,
+            shot_id=shot_id,
+            media_id=media_id,
+        )
+    finally:
+        await media.close()
+    run = await start_run(
+        "replace_shot_media",
+        job_id,
+        actor,
+        {
+            "shot_id": shot_id,
+            "raw_asset": raw_asset.model_dump(mode="json"),
+            "media_kind": media_kind,
+            "media_id": media_id,
+            "original_filename": original_filename,
+            "expected_selected_media_id": selected_media_id,
+        },
+    )
+    return ok({
+        "job": public_job_payload(
+            await runtime.service.get_job(job_id, actor), user
+        ),
+        "task_id": run.task_id,
+        "reused": run.reused,
+    }, "素材已上传，正在更新这个镜头和成片")
+
+
+@api_router.post(
+    "/jobs/{job_id}/shots/{shot_id}/uploads/{media_id}/actions/select"
+)
+@boundary
+async def select_uploaded_shot_media(
+    job_id: str,
+    shot_id: str,
+    media_id: str,
+    body: ShotVersionSelectionRequest,
+    user: dict = Depends(get_current_user),
+):
+    actor = actor_from_user(user)
+    selected_media_id = await runtime.service.validate_shot_media_action(
+        job_id,
+        shot_id,
+        body.expected_revision,
+        actor,
+        media_id=media_id,
+    )
+    run = await start_run(
+        "select_shot_media",
+        job_id,
+        actor,
+        {
+            "shot_id": shot_id,
+            "media_id": media_id,
+            "expected_selected_media_id": selected_media_id,
+        },
+    )
+    return ok({
+        "job": public_job_payload(
+            await runtime.service.get_job(job_id, actor), user
+        ),
+        "task_id": run.task_id,
+        "reused": run.reused,
+    }, "已开始切换上传素材版本")
+
+
+@api_router.post(
+    "/jobs/{job_id}/shots/{shot_id}/actions/restore-generated-media"
+)
+@boundary
+async def restore_generated_shot_media(
+    job_id: str,
+    shot_id: str,
+    body: ShotVersionSelectionRequest,
+    user: dict = Depends(get_current_user),
+):
+    actor = actor_from_user(user)
+    selected_media_id = await runtime.service.validate_shot_media_action(
+        job_id,
+        shot_id,
+        body.expected_revision,
+        actor,
+        restore_generated=True,
+    )
+    run = await start_run(
+        "select_shot_media",
+        job_id,
+        actor,
+        {
+            "shot_id": shot_id,
+            "media_id": "",
+            "expected_selected_media_id": selected_media_id,
+        },
+    )
+    return ok({
+        "job": public_job_payload(
+            await runtime.service.get_job(job_id, actor), user
+        ),
+        "task_id": run.task_id,
+        "reused": run.reused,
+    }, "已开始恢复 AI 素材")
+
+
 @api_router.post(
     "/jobs/{job_id}/shots/{shot_id}/versions/{version_id}/actions/select"
 )
@@ -785,7 +986,9 @@ async def preview_selected_shot(
     asset = runtime.service.visual_asset_for_shot(job, shot_id)
     if not asset:
         raise HTTPException(status_code=404, detail="镜头预览尚未就绪")
-    return await asset_response(asset, filename=f"{shot_id}.mp4")
+    return await asset_response(
+        asset, filename=f"{shot_id}{_asset_extension(asset)}"
+    )
 
 
 @api_router.get(
@@ -811,6 +1014,28 @@ async def preview_first_frame_candidate(
     }.get(asset.media_type, ".image")
     return await asset_response(
         asset, filename=f"{candidate_id}{extension}"
+    )
+
+
+@api_router.get(
+    "/jobs/{job_id}/shots/{shot_id}/uploads/{media_id}/media"
+)
+@boundary
+async def preview_uploaded_shot_media(
+    job_id: str,
+    shot_id: str,
+    media_id: str,
+    user: dict = Depends(get_current_user),
+):
+    job = await runtime.service.view_job(job_id, actor_from_user(user))
+    version = runtime.service.shot_media_for_shot(
+        job, shot_id, media_id=media_id
+    )
+    if not version:
+        raise HTTPException(status_code=404, detail="上传素材版本不存在")
+    return await asset_response(
+        version.asset,
+        filename=f"{media_id}{_asset_extension(version.asset)}",
     )
 
 

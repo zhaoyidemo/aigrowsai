@@ -341,7 +341,23 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .version-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
 .version-pill { min-height: 30px; border: 1px solid #d3cfc5; border-radius: 999px; padding: 5px 9px; background: white; color: #56605f; cursor: pointer; font-size: 10px; font-weight: 700; }
 .version-pill.previewing { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.version-pill.uploaded { border-style: dashed; }
 .version-pill:disabled { cursor: not-allowed; opacity: .55; }
+.source-version-row { border-bottom: 1px solid #dfdbd1; padding-bottom: 12px; }
+.shot-source-selection-actions { display: grid; margin: -2px 0 12px; }
+.shot-source-selection-actions .button { width: 100%; min-height: 36px; font-size: 11px; }
+.shot-source-panel, .ai-shot-panel { display: grid; gap: 10px; margin: 0 0 12px; border: 1px solid #d5ddd9; border-radius: 10px; padding: 11px; background: #f2f7f5; }
+.ai-shot-panel { border-color: #ded9cd; background: #fbfaf6; }
+.shot-source-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.shot-source-heading > div { display: grid; gap: 2px; }
+.shot-source-heading strong { color: #315f56; font-size: 11px; }
+.ai-shot-panel .shot-source-heading strong { color: #4e585f; }
+.shot-source-heading span, .shot-source-panel > p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.shot-source-heading .source-active-badge { flex: none; border-radius: 999px; padding: 4px 6px; color: #315f56; background: #dcece6; font-weight: 750; }
+.shot-source-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.shot-upload-button { display: inline-flex; min-height: 36px; align-items: center; justify-content: center; cursor: pointer; font-size: 11px; }
+.shot-upload-button input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+.shot-upload-button.disabled { cursor: not-allowed; opacity: .55; }
 .frame-candidate-section { display: grid; gap: 8px; margin: 0 0 12px; }
 .frame-candidate-heading { display: grid; gap: 2px; }
 .frame-candidate-heading strong { color: #4e585f; font-size: 11px; }
@@ -637,6 +653,7 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
   .storyboard-hint { text-align: left; }
   .storyboard-layout.inspector-open { grid-template-columns: 1fr; }
   .shot-grid { grid-template-columns: repeat(5, minmax(138px, 42vw)); }
+  .shot-source-actions { grid-template-columns: 1fr; }
   .script-document-heading { align-items: flex-start; flex-direction: column; }
   .research-brief-heading { align-items: flex-start; flex-direction: column; }
   .research-brief-grid { grid-template-columns: 1fr; }

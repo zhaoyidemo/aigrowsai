@@ -245,3 +245,11 @@ class MediaPackager(Protocol):
         *,
         minimum_duration_seconds: float,
     ) -> tuple[Path, float]: ...
+
+    async def prepare_uploaded_video_for_timeline(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        chapter_duration_seconds: float,
+    ) -> tuple[Path, float]: ...

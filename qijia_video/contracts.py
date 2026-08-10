@@ -820,6 +820,9 @@ class StoryboardShot(ContractModel):
     first_frame_prompt: str = Field(min_length=1, max_length=1800)
     motion_prompt: str = Field(min_length=1, max_length=1800)
     selected_candidate_id: str = Field(default="", max_length=96)
+    # An editor-uploaded image or video can override the AI visual without
+    # deleting the generated candidate/version history.
+    selected_media_id: str = Field(default="", max_length=96)
 
     @model_validator(mode="after")
     def normalize_beat_ids(self):
@@ -863,6 +866,29 @@ class AssetRef(ContractModel):
     size_bytes: int = Field(ge=0)
     media_type: str
     duration_seconds: float | None = Field(default=None, ge=0)
+
+
+class ShotMediaVersion(ContractModel):
+    """Append-only editor media retained beside the generated shot history."""
+
+    media_id: str = Field(
+        min_length=1,
+        max_length=96,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    shot_id: str = Field(min_length=1, max_length=64)
+    version: int = Field(ge=1)
+    media_kind: Literal["image", "video"]
+    asset: AssetRef
+    original_filename: str = Field(default="", max_length=255)
+    created_by: str = Field(default="", max_length=160)
+    created_at: str = Field(default="", max_length=64)
+
+    @model_validator(mode="after")
+    def validate_media_kind(self):
+        if not self.asset.media_type.startswith(f"{self.media_kind}/"):
+            raise ValueError("上传素材类型与资产媒体类型不一致")
+        return self
 
 
 class ProviderUsageRecord(ContractModel):
@@ -1240,6 +1266,7 @@ class VideoJob(ContractModel):
     visual_requests: list[VisualGenerationRequest] = Field(default_factory=list)
     video_tasks: list[ProviderTask] = Field(default_factory=list)
     visual_versions: list[VisualShotVersion] = Field(default_factory=list)
+    shot_media_versions: list[ShotMediaVersion] = Field(default_factory=list)
     render_manifest: RenderManifest | None = None
     quality_report: QualityReport | None = None
     artifacts: list[Artifact] = Field(default_factory=list)
