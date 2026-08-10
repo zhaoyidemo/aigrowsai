@@ -246,7 +246,7 @@ test('creation intake offers one optional global reference image without extra f
 
 test('workflow exposes three videos and configurable image chapters with action context', () => {
   for (const label of [
-    '观点已确认', '生成脚本', '确认脚本', '生成旁白', '分镜与首帧', 'AI 视频 1/3',
+    '观点已确认', '生成脚本', '确认脚本', '生成旁白', '分镜与素材', 'AI 视频 1/3',
     'AI 视频 2/3', 'AI 视频 3/3', '图像与视频合成', '确认成片', '发布包完成',
   ]) assert.match(app, new RegExp(label.replace('/', '\\/')));
   assert.match(page, /id="current-action"/);
@@ -393,6 +393,34 @@ test('storyboard supports editor images and videos without losing AI versions', 
   assert.match(styles, /\.shot-upload-button/);
   assert.match(styles, /\.pending-shot-media-bar/);
   assert.match(styles, /\.shot-card\.pending/);
+});
+
+test('script approval can arrange owned media before paid visual generation', () => {
+  assert.match(page, /id="prepare-media-first"/);
+  assert.match(page, /我有自己的图片或视频，先安排素材/);
+  assert.match(page, /只为未上传的镜头调用 AI/);
+  assert.match(page, /id="pre-generation-media-bar"/);
+  assert.match(page, /id="confirm-pre-generation-media-button"/);
+  assert.match(app, /prepare_media_first: prepareMediaFirst/);
+  assert.match(app, /media_review_required/);
+  assert.match(app, /actions.confirm-media-plan/);
+  assert.match(app, /上传后直接加入本次素材安排/);
+  assert.match(app, /跳过这个镜头的 AI 生成/);
+  assert.match(app, /首版成片只渲染了 1 次/);
+  assert.match(styles, /pre-generation-media-choice/);
+  assert.match(styles, /pre-generation-media-bar/);
+
+  const workflowSource = app.slice(
+    app.indexOf('function workflowCopy'),
+    app.indexOf('function cleanScreenplayValue'),
+  );
+  const researchSource = app.slice(
+    app.indexOf('function renderResearchBrief'),
+    app.indexOf('function focusFirstNarration'),
+  );
+  assert.match(workflowSource, /job.state === 'media_review_required'/);
+  assert.match(workflowSource, /只生成剩余/);
+  assert.doesNotMatch(researchSource, /media_review_required/);
 });
 
 test('person viewpoint flow starts a real job and polling resumes after refresh', () => {

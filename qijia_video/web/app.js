@@ -183,6 +183,15 @@ function generationDefaults() {
   };
 }
 
+function updateScriptApprovalAction() {
+  const choice = $('#prepare-media-first');
+  const button = $('#approve-script-button');
+  if (!choice || !button) return;
+  button.textContent = choice.checked
+    ? '确认脚本并先安排自有素材'
+    : '确认脚本并生成';
+}
+
 function isNewsResearchFailure(job) {
   return job?.state === 'failed'
     && job?.failed_stage === 'script'
@@ -821,11 +830,11 @@ function setBusy(busy) {
 
 const stateLabels = {
   card_verified: '观点已创建', script_generating: '生成脚本', script_review_required: '待确认脚本',
-  script_approved: '脚本已确认', producing: '生产中', quality_checking: '质检中',
+  script_approved: '脚本已确认', producing: '生产中', media_review_required: '安排镜头素材', quality_checking: '质检中',
   final_review_required: '待确认成片', final_approved: '正在生成发布包', packaged: '发布包完成', failed: '失败',
 };
 const workflowStages = [
-  '观点已确认', '生成脚本', '确认脚本', '生成旁白', '分镜与首帧',
+  '观点已确认', '生成脚本', '确认脚本', '生成旁白', '分镜与素材',
   'AI 视频 1/3', 'AI 视频 2/3', 'AI 视频 3/3',
   '图像与视频合成', '确认成片', '发布包完成',
 ];
@@ -839,6 +848,7 @@ const progressStageIndexes = {
   tts: 3,
   production: 3,
   storyboard: 4,
+  confirm_media: 4,
   first_frames: 4,
   first_frames_video: 4,
   frame_selection: 4,
@@ -1288,6 +1298,7 @@ function taskForJob(job) {
 
 function stageIndex(job) {
   if (job.state === 'script_review_required') return 2;
+  if (job.state === 'media_review_required') return 4;
   if (job.state === 'final_review_required') return 9;
   if (job.state === 'packaged') return 10;
   const taskStage = taskForJob(job)?.progress_meta?.stage;
@@ -1301,6 +1312,7 @@ function stageIndex(job) {
     script_review_required: 2,
     script_approved: 3,
     producing: 3,
+    media_review_required: 4,
     quality_checking: 8,
     final_review_required: 9,
     final_approved: 10,
@@ -1649,6 +1661,7 @@ function renderSeedanceUsage(job) {
 function renderShotInspector(job) {
   const inspector = $('#shot-inspector');
   const layout = inspector.closest('.storyboard-layout');
+  const preGeneration = job.state === 'media_review_required';
   const requests = storyboardRequests(job);
   const requestIndex = requests.findIndex(
     (request) => request.request_id === state.selectedShotId,
@@ -1694,7 +1707,7 @@ function renderShotInspector(job) {
   state.previewVersionId = previewKey;
   const previewIsCurrent = previewUpload
     ? previewUpload.media_id === activeUpload?.media_id
-    : !activeUpload && (isImage || (previewVersion
+    : !activeUpload && (preGeneration || isImage || (previewVersion
       && requestSignature(previewVersion.request) === requestSignature(request)));
   const previewIsPending = !!pendingEdit && (
     pendingEdit.media_id
@@ -1723,10 +1736,12 @@ function renderShotInspector(job) {
     && chosenFrame.asset?.asset_id === request.first_frame_asset_id;
   const taskRunning = activeJobTaskRunning(job);
   const canManageMedia = canEditResource(job)
-    && job.state === 'final_review_required'
+    && ['media_review_required', 'final_review_required'].includes(job.state)
     && !taskRunning
     && !state.busy;
-  const canEditAi = !isImage && canManageMedia;
+  const canEditAi = !isImage
+    && job.state === 'final_review_required'
+    && canManageMedia;
   const key = JSON.stringify({
     job: job.id,
     shot: request.request_id,
@@ -1780,13 +1795,15 @@ function renderShotInspector(job) {
   const selectedModelCost = estimatedSeedanceCost(previewRequest, selectedModelId);
   const previewLabel = previewUpload
     ? `上传 v${previewUpload.version}`
+    : preGeneration
+      ? `待生成 AI ${isImage ? '动态图片' : '视频'}`
     : isImage
       ? 'AI 动态图片'
       : previewVersion ? `AI v${previewVersion.version}` : 'AI 当前版本';
   const pendingGenerated = !!pendingEdit && !pendingEdit.media_id;
 
-  const generatedImageButton = isImage
-    ? `<button class="version-pill ${!previewUpload ? 'previewing' : ''}" type="button" data-preview-generated>AI 动态图片${pendingGenerated ? ' · 待应用' : !activeUpload ? ' · 成片' : ''}</button>`
+  const generatedImageButton = isImage || preGeneration
+    ? `<button class="version-pill ${!previewUpload ? 'previewing' : ''}" type="button" data-preview-generated>${preGeneration ? 'AI 生成' : 'AI 动态图片'}${pendingGenerated ? ' · 待应用' : !activeUpload ? ` · ${preGeneration ? '已选' : '成片'}` : ''}</button>`
     : '';
   const versionButtons = versions.map((version) => {
     const versionKey = version.version_id || '__current';
@@ -1809,14 +1826,18 @@ function renderShotInspector(job) {
     const current = activeUpload?.media_id === item.media_id;
     const pending = pendingEdit?.media_id === item.media_id;
     const kind = item.media_kind === 'video' ? '视频' : '图片';
-    return `<button class="version-pill uploaded ${selected ? 'previewing' : ''}" type="button" data-preview-upload="${escapeHtml(item.media_id)}">上传 v${item.version} · ${kind}${pending ? ' · 待应用' : current ? ' · 成片' : ''}</button>`;
+    return `<button class="version-pill uploaded ${selected ? 'previewing' : ''}" type="button" data-preview-upload="${escapeHtml(item.media_id)}">上传 v${item.version} · ${kind}${pending ? ' · 待应用' : current ? ` · ${preGeneration ? '已选' : '成片'}` : ''}</button>`;
   }).join('');
   const historyButtons = [generatedImageButton || versionButtons, uploadButtons]
     .filter(Boolean)
     .join('');
 
   let applyButton = '';
-  if (pendingEdit && (previewIsPending || previewIsCurrent)) {
+  if (preGeneration && previewUpload && !previewIsCurrent) {
+    applyButton = `<button class="button secondary" type="button" data-select-upload="${escapeHtml(previewUpload.media_id)}" ${canManageMedia ? '' : 'disabled'}>选用上传 v${previewUpload.version}</button>`;
+  } else if (preGeneration && !previewUpload && activeUpload) {
+    applyButton = `<button class="button secondary" type="button" data-restore-generated ${canManageMedia ? '' : 'disabled'}>改为使用 AI 生成</button>`;
+  } else if (pendingEdit && (previewIsPending || previewIsCurrent)) {
     applyButton = `<button class="button secondary" type="button" data-discard-pending-media ${canManageMedia ? '' : 'disabled'}>撤销这个镜头的待应用修改</button>`;
   } else if (previewUpload && !previewIsCurrent) {
     applyButton = `<button class="button secondary" type="button" data-select-upload="${escapeHtml(previewUpload.media_id)}" ${canManageMedia ? '' : 'disabled'}>暂存上传 v${previewUpload.version}</button>`;
@@ -1864,7 +1885,9 @@ function renderShotInspector(job) {
       : `${escapeHtml(previewLabel)} · ${request.duration_seconds} 秒 · ${escapeHtml(request.resolution)} · ${escapeHtml(selectedModel?.short_label || 'Seedance')}`;
   const sourceStatusBadge = pendingEdit
     ? `<span class="source-active-badge">待应用：${pendingUpload ? `上传 v${pendingUpload.version}` : 'AI 素材'}</span>`
-    : activeUpload ? '<span class="source-active-badge">当前使用自有素材</span>' : '';
+    : activeUpload
+      ? `<span class="source-active-badge">${preGeneration ? '本次将使用自有素材' : '当前使用自有素材'}</span>`
+      : '';
 
   inspector.innerHTML = `
     <div class="shot-inspector-header">
@@ -1895,10 +1918,12 @@ function renderShotInspector(job) {
           <input type="file" data-shot-upload accept=".mp4,.mov,.webm,video/mp4,video/quicktime,video/webm" data-media-kind="video" ${canManageMedia ? '' : 'disabled'}>
         </label>
       </div>
-      <p>图片支持 JPG、PNG、WebP，最大 20 MB；视频支持 MP4、MOV、WebM，最大 200 MB。每次上传只做安全校验、转码和暂存；完成全部替换后再一次应用并重新生成成片。原 AI 素材会完整保留。</p>
+      <p>${preGeneration
+        ? '图片支持 JPG、PNG、WebP，最大 20 MB；视频支持 MP4、MOV、WebM，最大 200 MB。上传后直接加入本次素材安排；确认后只生成其余 AI 画面，首版成片只渲染一次。'
+        : '图片支持 JPG、PNG、WebP，最大 20 MB；视频支持 MP4、MOV、WebM，最大 200 MB。每次上传只做安全校验、转码和暂存；完成全部替换后再一次应用并重新生成成片。原 AI 素材会完整保留。'}</p>
     </section>
     ${frameButtons ? `<section class="frame-candidate-section"><div class="frame-candidate-heading"><strong>${isImage ? '图片候选' : '首帧候选'}</strong><span>${isImage ? '系统已推荐当前成片使用的图片，可点击查看另一构图' : '系统已自动推荐，可人工改选后重生成本镜头'}</span></div><div class="frame-candidate-grid">${frameButtons}</div></section>` : ''}
-    ${isImage ? '' : `<section class="ai-shot-panel"><div class="shot-source-heading"><div><strong>AI 生成方案</strong><span>需要新构图或复杂动作时，可继续生成并自动切回 AI 素材</span></div></div>
+    ${preGeneration ? `<section class="ai-shot-panel"><div class="shot-source-heading"><div><strong>AI 生成方案</strong><span>${activeUpload ? '当前已跳过这个镜头的 AI 生成；改回 AI 后才会产生费用' : '当前镜头未上传素材，确认后才会开始 AI 生成'}</span></div></div></section>` : isImage ? '' : `<section class="ai-shot-panel"><div class="shot-source-heading"><div><strong>AI 生成方案</strong><span>需要新构图或复杂动作时，可继续生成并自动切回 AI 素材</span></div></div>
       <label class="shot-prompt-field">这个镜头想呈现什么
         <textarea id="shot-prompt-editor" rows="7" maxlength="4000" spellcheck="false" ${canEditAi ? '' : 'readonly'}>${escapeHtml(previewVersion?.request?.prompt || request.prompt)}</textarea>
       </label>
@@ -1911,12 +1936,13 @@ function renderShotInspector(job) {
       </div>
       <p class="cost-note" data-shot-model-cost>本次只会新增 1 次 ${previewRequest.duration_seconds} 秒、${escapeHtml(previewRequest.resolution)} ${escapeHtml(selectedModel?.label || 'Seedance')} 调用${selectedModelCost === null ? '' : `，刊例价预估约 ¥${selectedModelCost.toFixed(2)}`}；不会重做旁白、图片章节或其他视频镜头。</p>
     </section>`}
-    ${isImage ? '<p class="cost-note">AI 图片章节由 Remotion 添加轻微推进或横移，不产生 Seedance 视频费用。</p>' : ''}`;
+    ${!preGeneration && isImage ? '<p class="cost-note">AI 图片章节由 Remotion 添加轻微推进或横移，不产生 Seedance 视频费用。</p>' : ''}`;
 }
 
 function renderShotStoryboard(job) {
   const section = $('#shot-storyboard');
   const requests = storyboardRequests(job);
+  const preGeneration = job.state === 'media_review_required';
   const selectionWarning = $('#frame-selection-warning');
   selectionWarning.hidden = !job?.frame_selection_warning;
   selectionWarning.textContent = job?.frame_selection_warning || '';
@@ -1924,6 +1950,8 @@ function renderShotStoryboard(job) {
   if (section.hidden) {
     state.storyboardKey = '';
     state.inspectorKey = '';
+    $('#pre-generation-media-bar').hidden = true;
+    $('#pending-shot-media-bar').hidden = true;
     return;
   }
   if (
@@ -1960,7 +1988,9 @@ function renderShotStoryboard(job) {
     let status = pendingEdit
       ? {label: '待应用 · 当前成片尚未更新', className: 'pending'}
       : activeUpload
-      ? {label: '已使用上传素材', className: 'succeeded'}
+      ? {label: preGeneration ? '已选择自有素材 · 跳过 AI 生成' : '已使用上传素材', className: 'succeeded'}
+      : preGeneration
+        ? {label: '将由 AI 生成', className: 'waiting'}
       : isImage && currentAsset
         ? {label: '动态图片已就绪', className: 'succeeded'}
         : shotStatus(currentTaskForShot(job, request), !!currentAsset);
@@ -1981,7 +2011,11 @@ function renderShotStoryboard(job) {
   const imageRows = rows.filter((row) => row.isImage);
   const readyVideos = videoRows.filter((row) => row.currentAsset).length;
   const pendingCount = (job.pending_shot_media_edits || []).length;
-  $('#storyboard-summary').textContent = pendingCount
+  const ownMediaCount = rows.filter((row) => row.activeUpload).length;
+  const aiMediaCount = Math.max(0, rows.length - ownMediaCount);
+  $('#storyboard-summary').textContent = preGeneration
+    ? `${ownMediaCount} 个自有素材已选 · ${aiMediaCount} 个镜头将由 AI 生成`
+    : pendingCount
     ? `${pendingCount} 处修改已暂存 · 当前成片尚未改变`
     : readyCount === requests.length
     ? readyCount + ' 个章节已就绪 · ' + videoRows.length
@@ -2029,7 +2063,7 @@ function renderShotStoryboard(job) {
       return `<article class="shot-card ${selected ? 'selected' : ''} ${row.pendingEdit ? 'pending' : ''}" data-shot-id="${escapeHtml(row.request.request_id)}" role="listitem" tabindex="0" aria-label="镜头 ${row.index + 1}，${escapeHtml(row.status.label)}">
         <div class="shot-preview">
           <span class="shot-number">${String(row.index + 1).padStart(2, '0')}</span>
-          <span class="shot-version-badge">${row.pendingEdit ? `待应用 · ${row.displayUpload ? `自有${row.isImage ? '图片' : '视频'}` : 'AI 素材'}` : row.activeUpload ? `自有${row.isImage ? '图片' : '视频'}` : row.isImage ? '动态图片' : `v${versionNumber}${row.versions.length > 1 ? ` · ${row.versions.length} 版` : ''}`}</span>
+          <span class="shot-version-badge">${row.pendingEdit ? `待应用 · ${row.displayUpload ? `自有${row.isImage ? '图片' : '视频'}` : 'AI 素材'}` : row.activeUpload ? `自有${row.isImage ? '图片' : '视频'}` : preGeneration ? `AI ${row.request.visual_type === 'image' ? '图片' : '视频'} · 待生成` : row.isImage ? '动态图片' : `v${versionNumber}${row.versions.length > 1 ? ` · ${row.versions.length} 版` : ''}`}</span>
           ${mediaUrl
             ? `<video src="${mediaUrl}" muted loop playsinline preload="metadata" aria-label="镜头 ${row.index + 1} 预览"></video>`
             : frameUrl
@@ -2056,6 +2090,26 @@ function renderShotStoryboard(job) {
     $('#apply-pending-shot-media-button').textContent = `一次应用 ${pendingCount} 处修改并重新生成成片`;
     $('#apply-pending-shot-media-button').disabled = !canApplyPending;
     $('#discard-pending-shot-media-button').disabled = !canApplyPending;
+  }
+  const preGenerationBar = $('#pre-generation-media-bar');
+  const canConfirmMedia = canEditResource(job)
+    && preGeneration
+    && !activeJobTaskRunning(job)
+    && !state.busy;
+  preGenerationBar.hidden = !preGeneration;
+  if (preGeneration) {
+    const aiVideoCount = rows.filter(
+      (row) => !row.activeUpload && row.request.visual_type === 'video',
+    ).length;
+    const aiImageCount = aiMediaCount - aiVideoCount;
+    $('#pre-generation-media-title').textContent = `${ownMediaCount} 个自有素材 · ${aiMediaCount} 个 AI 镜头`;
+    $('#pre-generation-media-detail').textContent = aiMediaCount
+      ? `确认后只生成 ${aiVideoCount} 段 AI 视频和 ${aiImageCount} 张 AI 图片；已上传镜头不产生对应画面费用。`
+      : '所有镜头都已使用自有素材；确认后跳过 AI 画面生成，直接合成一次成片。';
+    $('#confirm-pre-generation-media-button').textContent = aiMediaCount
+      ? `确认素材并生成剩余 ${aiMediaCount} 个 AI 画面`
+      : '确认素材并直接合成成片';
+    $('#confirm-pre-generation-media-button').disabled = !canConfirmMedia;
   }
   renderShotInspector(job);
 }
@@ -2112,6 +2166,17 @@ function workflowCopy(job, current) {
       next: '确认后自动生成旁白、' + chapterCounts.total + ' 张首帧、'
         + chapterCounts.videoCount + ' 段视频和 '
         + chapterCounts.imageCount + ' 段动态图片',
+    };
+  }
+  if (job.state === 'media_review_required') {
+    const shots = job.storyboard_plan?.shots || [];
+    const ownCount = shots.filter((shot) => shot.selected_media_id).length;
+    const aiCount = Math.max(0, shots.length - ownCount);
+    return {
+      current: `等待你安排镜头素材 · 已选 ${ownCount} 个自有素材`,
+      next: aiCount
+        ? `确认后只生成剩余 ${aiCount} 个 AI 画面，并渲染一次成片`
+        : '确认后跳过 AI 画面生成，直接渲染一次成片',
     };
   }
   if (job.state === 'final_review_required') {
@@ -2413,10 +2478,13 @@ function applyJobReadOnly(job) {
   if (!job) return;
   const readOnly = !canEditResource(job);
   const shotTaskRunning = activeJobTaskRunning(job);
-  const shotControlsDisabled = readOnly
+  const mediaPlanning = job.state === 'media_review_required';
+  const mediaControlsDisabled = readOnly
     || state.busy
-    || job.state !== 'final_review_required'
+    || !['media_review_required', 'final_review_required'].includes(job.state)
     || shotTaskRunning;
+  const aiControlsDisabled = mediaControlsDisabled
+    || job.state !== 'final_review_required';
   document.querySelectorAll([
     '#script-review input',
     '#script-review textarea',
@@ -2425,10 +2493,10 @@ function applyJobReadOnly(job) {
     '#douyin-link-input',
   ].join(',')).forEach((node) => { node.readOnly = readOnly; });
   document.querySelectorAll('#shot-inspector select').forEach((node) => {
-    node.disabled = shotControlsDisabled;
+    node.disabled = aiControlsDisabled;
   });
   document.querySelectorAll('#shot-inspector [data-shot-upload]').forEach((node) => {
-    node.disabled = shotControlsDisabled;
+    node.disabled = mediaControlsDisabled;
   });
   document.querySelectorAll('#script-review select').forEach((node) => {
     node.disabled = readOnly || state.busy;
@@ -2443,6 +2511,7 @@ function applyJobReadOnly(job) {
   ].join(',')).forEach((node) => {
     node.disabled = readOnly || state.busy;
   });
+  $('#prepare-media-first').disabled = readOnly || state.busy;
   const performanceUnavailable = (
     state.capabilities?.douyin_performance?.ready !== true
   );
@@ -2457,14 +2526,21 @@ function applyJobReadOnly(job) {
   document.querySelectorAll([
     '[data-regenerate-shot]',
     '[data-select-version]',
+  ].join(',')).forEach((node) => { node.disabled = aiControlsDisabled; });
+  document.querySelectorAll([
     '[data-select-upload]',
     '[data-restore-generated]',
     '[data-discard-pending-media]',
-  ].join(',')).forEach((node) => { node.disabled = shotControlsDisabled; });
+  ].join(',')).forEach((node) => { node.disabled = mediaControlsDisabled; });
   const pendingCount = (job.pending_shot_media_edits || []).length;
-  const pendingActionsDisabled = shotControlsDisabled || pendingCount === 0;
+  const pendingActionsDisabled = mediaControlsDisabled
+    || job.state !== 'final_review_required'
+    || pendingCount === 0;
   $('#apply-pending-shot-media-button').disabled = pendingActionsDisabled;
   $('#discard-pending-shot-media-button').disabled = pendingActionsDisabled;
+  $('#confirm-pre-generation-media-button').disabled = (
+    mediaControlsDisabled || !mediaPlanning
+  );
   $('#approve-final-button').disabled = readOnly
     || state.busy
     || shotTaskRunning
@@ -2588,6 +2664,12 @@ function renderDetail() {
     $('#job-seedance-prompt').value = job.generation_settings?.seedance_prompt
       || generationDefaults().seedance_prompt
       || '';
+    const mediaChoice = $('#prepare-media-first');
+    if (mediaChoice.dataset.jobId !== job.id) {
+      mediaChoice.dataset.jobId = job.id;
+      mediaChoice.checked = false;
+    }
+    updateScriptApprovalAction();
   }
   if (
     scriptSection.hidden
@@ -3223,15 +3305,30 @@ $('#preview-tts-button').addEventListener('click', async () => {
 
 $('#approve-script-button').addEventListener('click', async () => {
   const job = state.selectedJob; if (!job?.script_hash) return;
+  const prepareMediaFirst = $('#prepare-media-first').checked;
   setBusy(true); notify('');
   try {
     const saved = await saveScriptEdits(job);
     const latestJob = saved.job;
-    const result = await api('POST', `/jobs/${encodeURIComponent(latestJob.id)}/actions/approve-script`, {expected_revision: latestJob.revision, script_hash: latestJob.script_hash});
-    await loadAll({selectJobId: job.id}); setBusy(false); await pollTask(result.task_id, job.id); notify('真实成片已生成，请检查并确认。'); return;
+    const result = await api('POST', `/jobs/${encodeURIComponent(latestJob.id)}/actions/approve-script`, {
+      expected_revision: latestJob.revision,
+      script_hash: latestJob.script_hash,
+      prepare_media_first: prepareMediaFirst,
+    });
+    await loadAll({selectJobId: job.id});
+    setBusy(false);
+    await pollTask(result.task_id, job.id);
+    notify(
+      state.selectedJob?.state === 'media_review_required'
+        ? '旁白和文字分镜已就绪，请为需要替换的镜头上传素材。'
+        : '真实成片已生成，请检查并确认。',
+    );
+    return;
   } catch (error) { notify(error.message, true); }
   finally { setBusy(false); }
 });
+
+$('#prepare-media-first').addEventListener('change', updateScriptApprovalAction);
 
 $('#script-beat-editor').addEventListener('input', (event) => {
   if (event.target.matches('textarea')) resizeScriptTextarea(event.target);
@@ -3308,6 +3405,7 @@ $('#shot-inspector').addEventListener('change', (event) => {
 $('#shot-inspector').addEventListener('change', async (event) => {
   const input = event.target.closest('[data-shot-upload]');
   const job = state.selectedJob;
+  const preGeneration = job?.state === 'media_review_required';
   const shotId = state.selectedShotId;
   const file = input?.files?.[0];
   if (!input || !job || !shotId || !file) return;
@@ -3392,7 +3490,9 @@ $('#shot-inspector').addEventListener('change', async (event) => {
     state.storyboardKey = '';
     state.inspectorKey = '';
     renderDetail();
-    notify(`${mediaKind === 'image' ? '图片' : '视频'}已暂存；可继续替换其他镜头，最后一次应用全部修改。`);
+    notify(preGeneration
+      ? `${mediaKind === 'image' ? '图片' : '视频'}已加入素材安排；这个镜头将跳过 AI 画面生成。`
+      : `${mediaKind === 'image' ? '图片' : '视频'}已暂存；可继续替换其他镜头，最后一次应用全部修改。`);
   } catch (error) {
     await loadAll({selectJobId: job.id}).catch(() => {});
     const refreshed = state.selectedJob;
@@ -3408,7 +3508,9 @@ $('#shot-inspector').addEventListener('change', async (event) => {
       state.storyboardKey = '';
       state.inspectorKey = '';
       renderDetail();
-      notify('素材已暂存；可继续替换其他镜头，最后一次应用全部修改。');
+      notify(preGeneration
+        ? '素材已加入生成前安排；这个镜头将跳过 AI 画面生成。'
+        : '素材已暂存；可继续替换其他镜头，最后一次应用全部修改。');
       return;
     }
     notify(error.message, true);
@@ -3503,7 +3605,9 @@ $('#shot-inspector').addEventListener('click', async (event) => {
       state.storyboardKey = '';
       state.inspectorKey = '';
       renderDetail();
-      notify('上传素材版本已加入待应用修改，可继续调整其他镜头。');
+      notify(job.state === 'media_review_required'
+        ? '已选用这个上传版本；对应 AI 画面不会生成。'
+        : '上传素材版本已加入待应用修改，可继续调整其他镜头。');
     } catch (error) {
       await loadAll({selectJobId: job.id}).catch(() => {});
       notify(error.message, true);
@@ -3527,7 +3631,9 @@ $('#shot-inspector').addEventListener('click', async (event) => {
       state.storyboardKey = '';
       state.inspectorKey = '';
       renderDetail();
-      notify('恢复 AI 素材已加入待应用修改，上传版本仍保留在历史中。');
+      notify(job.state === 'media_review_required'
+        ? '这个镜头已改回 AI 生成；上传版本仍保留在素材历史中。'
+        : '恢复 AI 素材已加入待应用修改，上传版本仍保留在历史中。');
     } catch (error) {
       await loadAll({selectJobId: job.id}).catch(() => {});
       notify(error.message, true);
@@ -3599,6 +3705,45 @@ $('#shot-inspector').addEventListener('click', async (event) => {
     return;
   } catch (error) { notify(error.message, true); }
   finally { setBusy(false); }
+});
+
+$('#confirm-pre-generation-media-button').addEventListener('click', async () => {
+  const job = state.selectedJob;
+  if (
+    !job
+    || job.state !== 'media_review_required'
+    || state.busy
+    || !canEditResource(job)
+  ) return;
+  const shots = job.storyboard_plan?.shots || [];
+  const ownMediaCount = shots.filter((shot) => shot.selected_media_id).length;
+  const aiMediaCount = Math.max(0, shots.length - ownMediaCount);
+  setBusy(true);
+  notify(aiMediaCount
+    ? `素材已确认，正在生成剩余 ${aiMediaCount} 个 AI 画面并合成一次成片…`
+    : '素材已确认，正在跳过 AI 画面生成并直接合成一次成片…');
+  try {
+    const result = await api(
+      'POST',
+      `/jobs/${encodeURIComponent(job.id)}/actions/confirm-media-plan`,
+      {expected_revision: job.revision},
+    );
+    await loadAll({selectJobId: job.id});
+    setBusy(false);
+    await pollTask(result.task_id, job.id);
+    state.previewUploadId = '';
+    state.previewVersionId = '';
+    state.previewFrameCandidateId = '';
+    state.storyboardKey = '';
+    state.inspectorKey = '';
+    renderDetail();
+    notify(`${ownMediaCount} 个自有素材已直接采用，其余 ${aiMediaCount} 个 AI 画面已生成；首版成片只渲染了 1 次。`);
+  } catch (error) {
+    await loadAll({selectJobId: job.id}).catch(() => {});
+    notify(error.message, true);
+  } finally {
+    setBusy(false);
+  }
 });
 
 $('#apply-pending-shot-media-button').addEventListener('click', async () => {

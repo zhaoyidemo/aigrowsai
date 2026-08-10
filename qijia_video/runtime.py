@@ -440,6 +440,8 @@ async def _execute(
             job = await runtime.service.generate_script(
                 job_id, actor, progress=report
             )
+        elif action == "prepare_media_review":
+            job = await runtime.service.produce(job_id, actor, progress=report)
         elif action == "produce":
             job = await runtime.service.produce(job_id, actor, progress=report)
         elif action == "package":
@@ -533,6 +535,11 @@ async def _execute(
             raise RuntimeError("未知的齐家短视频后台动作")
         terminal = {
             "generate_script": ("脚本已就绪，等待你确认", "confirm_script", 28),
+            "prepare_media_review": (
+                "旁白和文字分镜已就绪，等待你安排素材",
+                "confirm_media",
+                46,
+            ),
             "produce": ("成片已就绪，等待你确认", "confirm_final", 90),
             "package": ("发布包已完成，可以下载", "package", 100),
             "regenerate_shot": (
@@ -546,7 +553,11 @@ async def _execute(
                 90,
             ),
             "prepare_shot_media": (
-                "素材已暂存，可继续替换或一次应用全部修改",
+                (
+                    "素材已加入生成前安排，可继续处理其他镜头"
+                    if job.state.value == "media_review_required"
+                    else "素材已暂存，可继续替换或一次应用全部修改"
+                ),
                 "media_staged",
                 72,
             ),
@@ -662,6 +673,7 @@ async def start_run(
 ) -> RunStart:
     if action not in (
         "generate_script",
+        "prepare_media_review",
         "produce",
         "package",
         "regenerate_shot",
@@ -673,7 +685,9 @@ async def start_run(
     ):
         raise ValueError("不支持的后台动作")
     run_group = (
-        "shot-edit"
+        "produce"
+        if action == "prepare_media_review"
+        else "shot-edit"
         if action in (
             "regenerate_shot",
             "select_shot_version",

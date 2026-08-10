@@ -26,6 +26,7 @@ from qijia_video.contracts import (
     GenerationSettings,
     NewsTopicInput,
     PersonViewpointInput,
+    PreGenerationMediaMode,
     QuickSourceCardInput,
     SeedanceModelId,
     ScriptDraft,
@@ -184,6 +185,7 @@ class NewsResearchRetryRequest(RevisionRequest):
 
 class ScriptApprovalRequest(RevisionRequest):
     script_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    prepare_media_first: bool = False
 
 
 class FinalApprovalRequest(RevisionRequest):
@@ -756,7 +758,45 @@ async def approve_script(
 ):
     actor = actor_from_user(user)
     job = await runtime.service.approve_script(
-        job_id, body.expected_revision, body.script_hash, actor
+        job_id,
+        body.expected_revision,
+        body.script_hash,
+        actor,
+        prepare_media_first=body.prepare_media_first,
+    )
+    action = (
+        "prepare_media_review"
+        if body.prepare_media_first
+        else "produce"
+    )
+    run = await start_run(action, job.id, actor)
+    return ok({
+        "job": public_job_payload(
+            await runtime.service.get_job(job.id, actor), user
+        ),
+        "task_id": run.task_id,
+        "reused": run.reused,
+        "requires_review": False,
+        "media_review_requested": body.prepare_media_first,
+    }, (
+        "脚本已确认，先生成旁白和文字分镜"
+        if body.prepare_media_first
+        else "脚本已确认，开始生成成片"
+    ))
+
+
+@api_router.post("/jobs/{job_id}/actions/confirm-media-plan")
+@boundary
+async def confirm_pre_generation_media(
+    job_id: str,
+    body: RevisionRequest,
+    user: dict = Depends(get_current_user),
+):
+    actor = actor_from_user(user)
+    job = await runtime.service.confirm_pre_generation_media(
+        job_id,
+        body.expected_revision,
+        actor,
     )
     run = await start_run("produce", job.id, actor)
     return ok({
@@ -765,8 +805,7 @@ async def approve_script(
         ),
         "task_id": run.task_id,
         "reused": run.reused,
-        "requires_review": False,
-    }, "脚本已确认，开始生成成片")
+    }, "素材安排已确认，只生成剩余 AI 画面")
 
 
 @api_router.post("/jobs/{job_id}/actions/retry")
@@ -790,6 +829,12 @@ async def retry_job(job_id: str, user: dict = Depends(get_current_user)):
         "script": "generate_script",
         "package": "package",
     }.get(job.failed_stage, "produce")
+    if (
+        action == "produce"
+        and job.pre_generation_media_mode
+        == PreGenerationMediaMode.REVIEW_BEFORE_GENERATION
+    ):
+        action = "prepare_media_review"
     run = await start_run(action, job.id, actor)
     return ok({
         "task_id": run.task_id,

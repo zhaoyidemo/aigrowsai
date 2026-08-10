@@ -94,11 +94,20 @@ class JobState(StrEnum):
     SCRIPT_REVIEW_REQUIRED = "script_review_required"
     SCRIPT_APPROVED = "script_approved"
     PRODUCING = "producing"
+    MEDIA_REVIEW_REQUIRED = "media_review_required"
     QUALITY_CHECKING = "quality_checking"
     FINAL_REVIEW_REQUIRED = "final_review_required"
     FINAL_APPROVED = "final_approved"
     PACKAGED = "packaged"
     FAILED = "failed"
+
+
+class PreGenerationMediaMode(StrEnum):
+    """Whether production pauses before paid visual generation."""
+
+    AUTOMATIC = "automatic"
+    REVIEW_BEFORE_GENERATION = "review_before_generation"
+    CONFIRMED = "confirmed"
 
 
 class ProviderTaskState(StrEnum):
@@ -1253,6 +1262,12 @@ class VideoJob(ContractModel):
     skill_snapshot: ContentSkillSnapshot | None = None
     # None 仅用于兼容上线前已经持久化的任务；所有新任务都会冻结完整配置。
     generation_settings: GenerationSettings | None = None
+    # Legacy and all-AI jobs stay automatic. Editors can explicitly request one
+    # pause after narration/storyboard planning so uploaded media prevents the
+    # corresponding Seedream/Seedance calls instead of replacing paid results.
+    pre_generation_media_mode: PreGenerationMediaMode = (
+        PreGenerationMediaMode.AUTOMATIC
+    )
     # Research results and bounded failure diagnostics live in the aggregate so
     # retries never silently repeat a paid search.
     research_brief: PersonResearchBrief | NewsResearchBrief | None = None

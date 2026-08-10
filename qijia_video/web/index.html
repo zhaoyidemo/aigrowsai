@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.17.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.18.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -368,6 +368,13 @@
                 <span class="field-hint">没有参考图时，它会指导本任务的全部分镜、首帧和 3 个所选画质、8-10 秒视频；有参考图时由参考图接管画风与人物造型。口播原句不会作为画面文字。</span>
               </label>
             </details>
+            <label class="pre-generation-media-choice" for="prepare-media-first">
+              <input id="prepare-media-first" type="checkbox">
+              <span>
+                <strong>我有自己的图片或视频，先安排素材</strong>
+                <small>系统先完成旁白和文字分镜；确认素材后，只为未上传的镜头调用 AI，并且首版成片只渲染一次。</small>
+              </span>
+            </label>
             <div class="actions">
               <button id="save-script-button" class="button secondary" type="button">保存修改</button>
               <button id="approve-script-button" class="button primary" type="button">确认脚本并生成</button>
@@ -386,6 +393,13 @@
             <div class="storyboard-layout">
               <div id="shot-grid" class="shot-grid" role="list" aria-label="混合制作镜头列表"></div>
               <aside id="shot-inspector" class="shot-inspector" aria-label="镜头设置" hidden></aside>
+            </div>
+            <div id="pre-generation-media-bar" class="pre-generation-media-bar" hidden>
+              <div>
+                <strong id="pre-generation-media-title">生成前素材安排</strong>
+                <span id="pre-generation-media-detail">上传自己的素材后，系统只生成剩余 AI 画面</span>
+              </div>
+              <button id="confirm-pre-generation-media-button" class="button primary" type="button">确认素材并生成剩余画面</button>
             </div>
             <div id="pending-shot-media-bar" class="pending-shot-media-bar" hidden>
               <div>
@@ -483,6 +497,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.17.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.18.0"></script>
 </body>
 </html>

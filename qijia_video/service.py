@@ -33,6 +33,7 @@ from qijia_video.contracts import (
     NewsResearchBrief,
     PendingShotMediaEdit,
     PersonResearchBrief,
+    PreGenerationMediaMode,
     ProviderTask,
     ProviderTaskState,
     ProviderUsageRecord,
@@ -1472,6 +1473,8 @@ class QijiaVideoService:
         expected_revision: int,
         script_hash: str,
         actor: Actor,
+        *,
+        prepare_media_first: bool = False,
     ) -> VideoJob:
         job = await self.get_job(job_id, actor)
         self._assert_revision(job.revision, expected_revision)
@@ -1496,7 +1499,49 @@ class QijiaVideoService:
             approved_at=timestamp(),
             warnings=list(job.script_review.warnings),
         ))
+        job.pre_generation_media_mode = (
+            PreGenerationMediaMode.REVIEW_BEFORE_GENERATION
+            if prepare_media_first
+            else PreGenerationMediaMode.AUTOMATIC
+        )
         job.state = JobState.SCRIPT_APPROVED
+        return await self._save_job(job, actor)
+
+    async def confirm_pre_generation_media(
+        self,
+        job_id: str,
+        expected_revision: int,
+        actor: Actor,
+    ) -> VideoJob:
+        """Freeze early upload choices before any paid visual generation."""
+
+        job = await self.get_job(job_id, actor)
+        self._assert_revision(job.revision, expected_revision)
+        if job.state != JobState.MEDIA_REVIEW_REQUIRED:
+            raise InvalidTransition("当前没有待确认的生成前镜头素材")
+        if (
+            job.pre_generation_media_mode
+            != PreGenerationMediaMode.REVIEW_BEFORE_GENERATION
+        ):
+            raise InvalidTransition("当前任务没有启用生成前素材安排")
+        if not job.narration_manifest or not job.storyboard_plan:
+            raise QualityGateFailed("旁白或文字分镜尚未准备完成")
+        if job.pending_shot_media_edits:
+            raise QualityGateFailed("生成前素材安排不能包含成片后的待应用修改")
+        known_media = {
+            (item.shot_id, item.media_id) for item in job.shot_media_versions
+        }
+        for shot in job.storyboard_plan.shots:
+            if (
+                shot.selected_media_id
+                and (shot.shot_id, shot.selected_media_id) not in known_media
+            ):
+                raise QualityGateFailed(
+                    f"分镜 {shot.shot_id} 选择了不存在的上传素材"
+                )
+        job.pre_generation_media_mode = PreGenerationMediaMode.CONFIRMED
+        job.state = JobState.SCRIPT_APPROVED
+        job.error = ""
         return await self._save_job(job, actor)
 
     @staticmethod
@@ -2012,9 +2057,9 @@ class QijiaVideoService:
             progress,
             message=(
                 f"{len(plan.shots)} 章节分镜已就绪，"
-                "开始生成统一风格首帧…"
+                "正在确定每个镜头的素材来源…"
             ),
-            stage="first_frames",
+            stage="storyboard",
             percent=46,
         )
         return job
@@ -2346,7 +2391,7 @@ class QijiaVideoService:
             }
             requests: list[VisualGenerationRequest] = []
             for shot_index, shot in enumerate(job.storyboard_plan.shots):
-                if shot.visual_type != "video":
+                if shot.visual_type != "video" or shot.selected_media_id:
                     continue
                 candidate = candidates_by_id.get(shot.selected_candidate_id)
                 if not candidate or not candidate.asset:
@@ -3180,7 +3225,7 @@ class QijiaVideoService:
             request.request_id: asset
             for request, asset in zip(job.visual_requests, visual_assets)
         }
-        if job.storyboard_plan and selected_frames:
+        if job.storyboard_plan:
             segment_index_by_id = {
                 item.id: index for index, item in enumerate(segments)
             }
@@ -3454,8 +3499,12 @@ class QijiaVideoService:
 
         job = await self.get_job(job_id, actor)
         self._assert_revision(job.revision, expected_revision)
-        if job.state != JobState.FINAL_REVIEW_REQUIRED:
-            raise InvalidTransition("只有待确认成片可以替换单个镜头素材")
+        if job.state not in {
+            JobState.MEDIA_REVIEW_REQUIRED,
+            JobState.FINAL_REVIEW_REQUIRED,
+        }:
+            raise InvalidTransition("只有素材安排或成片确认阶段可以调整镜头素材")
+        pre_generation = job.state == JobState.MEDIA_REVIEW_REQUIRED
         shot = next(
             (
                 item
@@ -3474,10 +3523,12 @@ class QijiaVideoService:
             if not version:
                 raise InvalidTransition("指定的上传素材版本不存在")
             if current_media_id == media_id:
-                raise InvalidTransition("该上传素材已经用于当前成片")
+                raise InvalidTransition("该上传素材已经用于当前镜头")
         if restore_generated:
             if not current_media_id:
                 raise InvalidTransition("当前镜头已经在使用 AI 素材")
+            if pre_generation:
+                return current_media_id
             if shot.visual_type == "video":
                 generated = self._generated_visual_asset_for_shot(job, shot_id)
             else:
@@ -3507,8 +3558,12 @@ class QijiaVideoService:
 
         job = await self.get_job(job_id, actor)
         self._assert_revision(job.revision, expected_revision)
-        if job.state != JobState.FINAL_REVIEW_REQUIRED:
-            raise InvalidTransition("只有待确认成片可以暂存镜头素材修改")
+        if job.state not in {
+            JobState.MEDIA_REVIEW_REQUIRED,
+            JobState.FINAL_REVIEW_REQUIRED,
+        }:
+            raise InvalidTransition("只有素材安排或成片确认阶段可以选择镜头素材")
+        pre_generation = job.state == JobState.MEDIA_REVIEW_REQUIRED
         shot = next(
             (
                 item
@@ -3523,7 +3578,7 @@ class QijiaVideoService:
         if media_id:
             if not self.shot_media_for_shot(job, shot_id, media_id=media_id):
                 raise InvalidTransition("指定的上传素材版本不存在")
-        else:
+        elif not pre_generation:
             generated_candidate = job.model_copy(deep=True)
             generated_shot = next(
                 item
@@ -3533,6 +3588,22 @@ class QijiaVideoService:
             generated_shot.selected_media_id = ""
             if not self.visual_asset_for_shot(generated_candidate, shot_id):
                 raise InvalidTransition("这个镜头没有可恢复的 AI 素材")
+
+        if pre_generation:
+            if media_id == shot.selected_media_id:
+                raise InvalidTransition(
+                    "该上传素材已经选中"
+                    if media_id
+                    else "当前镜头已经设置为使用 AI 生成"
+                )
+            shot.selected_media_id = media_id
+            job.pending_shot_media_edits = [
+                item
+                for item in job.pending_shot_media_edits
+                if item.shot_id != shot_id
+            ]
+            job.error = ""
+            return await self._save_job(job, actor)
 
         if media_id == shot.selected_media_id:
             if not existing_pending:
@@ -3737,8 +3808,12 @@ class QijiaVideoService:
         """Validate and normalize one upload without rebuilding the film."""
 
         job = await self.get_job(job_id, actor)
-        if job.state != JobState.FINAL_REVIEW_REQUIRED:
-            raise InvalidTransition("只有待确认成片可以暂存镜头素材")
+        if job.state not in {
+            JobState.MEDIA_REVIEW_REQUIRED,
+            JobState.FINAL_REVIEW_REQUIRED,
+        }:
+            raise InvalidTransition("只有素材安排或成片确认阶段可以准备镜头素材")
+        pre_generation = job.state == JobState.MEDIA_REVIEW_REQUIRED
         shot = next(
             (
                 item
@@ -3757,6 +3832,8 @@ class QijiaVideoService:
             raise QualityGateFailed("上传素材类型与文件内容不一致")
         existing = self.shot_media_for_shot(job, shot_id, media_id=media_id)
         if existing:
+            if pre_generation and shot.selected_media_id == media_id:
+                return job
             pending = self.pending_shot_media_edit_for_shot(job, shot_id)
             if pending and pending.media_id == media_id:
                 return job
@@ -3863,17 +3940,34 @@ class QijiaVideoService:
                 created_by=actor.username,
                 created_at=timestamp(),
             ))
-            self._stage_pending_shot_media_edit(
-                candidate,
-                shot_id,
-                media_id,
-                actor,
-            )
+            if pre_generation:
+                candidate_shot = next(
+                    item
+                    for item in candidate.storyboard_plan.shots
+                    if item.shot_id == shot_id
+                )
+                candidate_shot.selected_media_id = media_id
+                candidate.pending_shot_media_edits = [
+                    item
+                    for item in candidate.pending_shot_media_edits
+                    if item.shot_id != shot_id
+                ]
+            else:
+                self._stage_pending_shot_media_edit(
+                    candidate,
+                    shot_id,
+                    media_id,
+                    actor,
+                )
             candidate.error = ""
             saved = await self._save_job(candidate, actor)
             self._report(
                 progress,
-                message="素材已暂存，可继续替换其他镜头或一次应用全部修改",
+                message=(
+                    "素材已加入生成前安排，可继续处理其他镜头"
+                    if pre_generation
+                    else "素材已暂存，可继续替换其他镜头或一次应用全部修改"
+                ),
                 stage="media_staged",
                 percent=72,
                 workflow="shot_edit",
@@ -3884,7 +3978,12 @@ class QijiaVideoService:
         except Exception as exc:
             latest = await self.get_job(job_id, actor)
             latest.error = (
-                f"上传素材未能暂存，当前成片未受影响：{exc}"
+                (
+                    "上传素材未能加入生成前安排，尚未产生 AI 画面："
+                    if pre_generation
+                    else "上传素材未能暂存，当前成片未受影响："
+                )
+                + str(exc)
             )[:2000]
             await self._save_job(latest, actor)
             raise
@@ -4968,6 +5067,12 @@ class QijiaVideoService:
         progress: ProgressReporter | None = None,
     ) -> VideoJob:
         job = await self.get_job(job_id, actor)
+        if (
+            job.state == JobState.MEDIA_REVIEW_REQUIRED
+            and job.pre_generation_media_mode
+            == PreGenerationMediaMode.REVIEW_BEFORE_GENERATION
+        ):
+            return job
         if job.state not in (
             JobState.SCRIPT_APPROVED,
             JobState.PRODUCING,
@@ -5082,15 +5187,34 @@ class QijiaVideoService:
                 job = await self._ensure_video_tasks(job, actor, progress)
             else:
                 job = await self._ensure_storyboard_plan(job, actor, progress)
+                if (
+                    job.pre_generation_media_mode
+                    == PreGenerationMediaMode.REVIEW_BEFORE_GENERATION
+                ):
+                    job.state = JobState.MEDIA_REVIEW_REQUIRED
+                    job.error = ""
+                    job = await self._save_job(job, actor)
+                    self._report(
+                        progress,
+                        message=(
+                            "旁白和文字分镜已就绪，请安排自有素材；"
+                            "确认前不会生成 AI 图片或视频"
+                        ),
+                        stage="confirm_media",
+                        percent=46,
+                    )
+                    return job
                 video_shot_ids = {
                     shot.shot_id
                     for shot in job.storyboard_plan.shots
                     if shot.visual_type == "video"
+                    and not shot.selected_media_id
                 }
                 image_shot_ids = {
                     shot.shot_id
                     for shot in job.storyboard_plan.shots
                     if shot.visual_type == "image"
+                    and not shot.selected_media_id
                 }
                 job = await self._ensure_first_frames(
                     job,

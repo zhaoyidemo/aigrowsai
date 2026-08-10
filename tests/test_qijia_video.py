@@ -26,6 +26,7 @@ from qijia_video.contracts import (
     NewsTopicInput,
     PersonResearchBrief,
     PersonViewpointInput,
+    PreGenerationMediaMode,
     QuickSourceCardInput,
     QualityReport,
     ResearchDiagnostics,
@@ -328,6 +329,10 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(legacy_job.generation_settings.image_count, 2)
         self.assertEqual(legacy_job.generation_settings.shot_count, 5)
         self.assertEqual(legacy_job.generation_settings.tts_speed_ratio, 1.0)
+        self.assertEqual(
+            legacy_job.pre_generation_media_mode,
+            PreGenerationMediaMode.AUTOMATIC,
+        )
         self.assertEqual(legacy_job.generation_settings.skill_id, "")
         self.assertIsNone(legacy_job.skill_snapshot)
         self.assertEqual(
@@ -2603,6 +2608,127 @@ class QijiaVideoUploadApiTests(unittest.IsolatedAsyncioTestCase):
                 "齐家短视频:shot-edit:job",
             )
 
+    async def test_media_plan_preparation_and_production_share_one_mutex(self):
+        actor = Actor(user_id=7, username="editor", role="member")
+        for index, action in enumerate(
+            ("prepare_media_review", "produce"),
+            1,
+        ):
+            task_id = f"task_produce_mutex_{index}"
+            create = AsyncMock(return_value=(task_id, True))
+            get_task = AsyncMock(return_value={
+                "job_payload": {
+                    "action": action,
+                    "job_id": "job",
+                    "parameters": {},
+                },
+            })
+            with (
+                patch.object(
+                    qijia_runtime.task_service,
+                    "create_or_get_running_task_async",
+                    create,
+                ),
+                patch.object(
+                    qijia_runtime.task_service,
+                    "get_task_async",
+                    get_task,
+                ),
+            ):
+                run = await qijia_runtime.start_run(action, "job", actor)
+
+            self.assertTrue(run.reused)
+            self.assertEqual(
+                create.await_args.args[0],
+                "齐家短视频:produce:job",
+            )
+
+    async def test_script_approval_can_pause_before_visual_generation(self):
+        user = {"id": 7, "username": "editor", "role": "member"}
+        approved_job = type("ApprovedJob", (), {"id": "job"})()
+        service = type("Service", (), {})()
+        service.approve_script = AsyncMock(return_value=approved_job)
+        service.get_job = AsyncMock(return_value=approved_job)
+        start = AsyncMock(return_value=type("Run", (), {
+            "task_id": "task_media_plan",
+            "reused": False,
+        })())
+        with (
+            patch.object(qijia_api.runtime, "service", service),
+            patch.object(qijia_api, "start_run", start),
+            patch.object(
+                qijia_api,
+                "public_job_payload",
+                return_value={"id": "job"},
+            ),
+        ):
+            result = await qijia_api.approve_script(
+                "job",
+                qijia_api.ScriptApprovalRequest(
+                    expected_revision=8,
+                    script_hash="a" * 64,
+                    prepare_media_first=True,
+                ),
+                user,
+            )
+
+        service.approve_script.assert_awaited_once_with(
+            "job",
+            8,
+            "a" * 64,
+            unittest.mock.ANY,
+            prepare_media_first=True,
+        )
+        start.assert_awaited_once_with(
+            "prepare_media_review",
+            "job",
+            unittest.mock.ANY,
+        )
+        self.assertTrue(result["data"]["media_review_requested"])
+        self.assertEqual(result["data"]["task_id"], "task_media_plan")
+
+    async def test_confirming_media_plan_queues_only_remaining_production(self):
+        user = {"id": 7, "username": "editor", "role": "member"}
+        confirmed_job = type("ConfirmedJob", (), {"id": "job"})()
+        service = type("Service", (), {})()
+        service.confirm_pre_generation_media = AsyncMock(
+            return_value=confirmed_job
+        )
+        service.get_job = AsyncMock(return_value=confirmed_job)
+        start = AsyncMock(return_value=type("Run", (), {
+            "task_id": "task_remaining_production",
+            "reused": False,
+        })())
+        with (
+            patch.object(qijia_api.runtime, "service", service),
+            patch.object(qijia_api, "start_run", start),
+            patch.object(
+                qijia_api,
+                "public_job_payload",
+                return_value={"id": "job"},
+            ),
+        ):
+            result = await qijia_api.confirm_pre_generation_media(
+                "job",
+                qijia_api.RevisionRequest(expected_revision=12),
+                user,
+            )
+
+        service.confirm_pre_generation_media.assert_awaited_once_with(
+            "job",
+            12,
+            unittest.mock.ANY,
+        )
+        start.assert_awaited_once_with(
+            "produce",
+            "job",
+            unittest.mock.ANY,
+        )
+        self.assertEqual(
+            result["data"]["task_id"],
+            "task_remaining_production",
+        )
+
     async def test_direct_upload_init_and_complete_only_queue_after_head_verification(self):
         user = {
             "id": 7,
@@ -4273,6 +4399,247 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(job.shot_media_versions), 2)
         self.assertEqual([item.kind for item in job.approvals], ["script"])
+
+    async def test_pre_generation_uploads_skip_matching_ai_and_render_once(self):
+        card = await self.service.create_source_card(valid_card(), self.actor)
+        card = await self.service.verify_source_card(
+            card.id, card.revision, self.actor
+        )
+        job = await self.service.create_job(card.id, self.actor)
+        job = await self.service.generate_script(job.id, self.actor)
+        job = await self.service.approve_script(
+            job.id,
+            job.revision,
+            job.script_hash,
+            self.actor,
+            prepare_media_first=True,
+        )
+        self.assertEqual(
+            job.pre_generation_media_mode,
+            PreGenerationMediaMode.REVIEW_BEFORE_GENERATION,
+        )
+
+        job = await self.service.produce(job.id, self.actor)
+        self.assertEqual(job.state, JobState.MEDIA_REVIEW_REQUIRED)
+        self.assertIsNotNone(job.narration_manifest)
+        self.assertIsNotNone(job.storyboard_plan)
+        self.assertFalse(job.first_frame_candidates)
+        self.assertFalse(job.visual_requests)
+        self.assertFalse(job.video_tasks)
+        self.assertFalse(job.artifacts)
+        self.assertEqual(self.service.renderer.render_calls, 0)
+        self.assertEqual(self.service.renderer.cover_calls, 0)
+
+        paused_revision = job.revision
+        paused_again = await self.service.produce(job.id, self.actor)
+        self.assertEqual(paused_again.revision, paused_revision)
+        self.assertEqual(self.service.renderer.render_calls, 0)
+
+        video_shot = next(
+            shot
+            for shot in job.storyboard_plan.shots
+            if shot.visual_type == "video"
+        )
+        image_shot = next(
+            shot
+            for shot in job.storyboard_plan.shots
+            if shot.visual_type == "image"
+        )
+        uploads = (
+            (
+                video_shot,
+                "video",
+                "video/mp4",
+                ".mp4",
+                bytes.fromhex("000000186674797069736f6d")
+                + b"pre-generation-video",
+                "upload_early_video",
+            ),
+            (
+                image_shot,
+                "image",
+                "image/png",
+                ".png",
+                MockImageProvider._PNG,
+                "upload_early_image",
+            ),
+        )
+        expected_media: dict[str, str] = {}
+        for shot, media_kind, media_type, extension, payload, media_id in uploads:
+            source = self.root / f"{media_id}{extension}"
+            source.write_bytes(payload)
+            raw_asset = await self.storage.put_file(
+                object_key=f"tests/raw-{media_id}{extension}",
+                path=source,
+                asset_id=f"raw_{media_id}",
+                media_type=media_type,
+            )
+            job = await self.service.prepare_shot_media(
+                job.id,
+                shot.shot_id,
+                raw_asset,
+                media_kind,
+                media_id,
+                source.name,
+                "",
+                self.actor,
+            )
+            expected_media[shot.shot_id] = media_id
+            selected_shot = next(
+                item
+                for item in job.storyboard_plan.shots
+                if item.shot_id == shot.shot_id
+            )
+            self.assertEqual(selected_shot.selected_media_id, media_id)
+            self.assertFalse(job.pending_shot_media_edits)
+            self.assertEqual(self.service.renderer.render_calls, 0)
+
+        job = await self.service.stage_shot_media_selection(
+            job.id,
+            image_shot.shot_id,
+            "",
+            job.revision,
+            self.actor,
+        )
+        self.assertEqual(
+            next(
+                shot.selected_media_id
+                for shot in job.storyboard_plan.shots
+                if shot.shot_id == image_shot.shot_id
+            ),
+            "",
+        )
+        job = await self.service.stage_shot_media_selection(
+            job.id,
+            image_shot.shot_id,
+            expected_media[image_shot.shot_id],
+            job.revision,
+            self.actor,
+        )
+        self.assertEqual(self.service.renderer.render_calls, 0)
+
+        job = await self.service.confirm_pre_generation_media(
+            job.id,
+            job.revision,
+            self.actor,
+        )
+        self.assertEqual(job.state, JobState.SCRIPT_APPROVED)
+        self.assertEqual(
+            job.pre_generation_media_mode,
+            PreGenerationMediaMode.CONFIRMED,
+        )
+        produced = await self.service.produce(job.id, self.actor)
+
+        self.assertEqual(produced.state, JobState.FINAL_REVIEW_REQUIRED)
+        self.assertEqual(self.service.renderer.render_calls, 1)
+        self.assertEqual(self.service.renderer.cover_calls, 1)
+        self.assertFalse(produced.pending_shot_media_edits)
+        self.assertEqual(
+            len(produced.first_frame_candidates),
+            len(produced.storyboard_plan.shots) - len(expected_media),
+        )
+        self.assertFalse(any(
+            candidate.shot_id in expected_media
+            for candidate in produced.first_frame_candidates
+        ))
+        expected_ai_video_shots = {
+            shot.shot_id
+            for shot in produced.storyboard_plan.shots
+            if shot.visual_type == "video"
+            and shot.shot_id not in expected_media
+        }
+        self.assertEqual(
+            {request.request_id for request in produced.visual_requests},
+            expected_ai_video_shots,
+        )
+        self.assertEqual(len(produced.video_tasks), len(expected_ai_video_shots))
+        self.assertEqual(
+            {
+                shot.shot_id: shot.selected_media_id
+                for shot in produced.storyboard_plan.shots
+                if shot.shot_id in expected_media
+            },
+            expected_media,
+        )
+        uploaded_assets = {
+            item.shot_id: item.asset.asset_id
+            for item in produced.shot_media_versions
+            if item.media_id in expected_media.values()
+        }
+        blocks = {
+            block.shot_id: block
+            for block in produced.render_manifest.visual_blocks
+        }
+        self.assertEqual(
+            {
+                shot_id: blocks[shot_id].asset_id
+                for shot_id in expected_media
+            },
+            uploaded_assets,
+        )
+
+    async def test_all_pre_generation_uploads_bypass_visual_providers(self):
+        card = await self.service.create_source_card(valid_card(), self.actor)
+        card = await self.service.verify_source_card(
+            card.id, card.revision, self.actor
+        )
+        job = await self.service.create_job(card.id, self.actor)
+        job = await self.service.generate_script(job.id, self.actor)
+        job = await self.service.approve_script(
+            job.id,
+            job.revision,
+            job.script_hash,
+            self.actor,
+            prepare_media_first=True,
+        )
+        job = await self.service.produce(job.id, self.actor)
+
+        for index, shot in enumerate(job.storyboard_plan.shots, 1):
+            source = self.root / f"all-owned-{index}.png"
+            source.write_bytes(
+                bytes.fromhex("89504e470d0a1a0a")
+                + f"all-owned-{index}".encode()
+            )
+            raw_asset = await self.storage.put_file(
+                object_key=f"tests/raw-all-owned-{index}.png",
+                path=source,
+                asset_id=f"raw_all_owned_{index}",
+                media_type="image/png",
+            )
+            job = await self.service.prepare_shot_media(
+                job.id,
+                shot.shot_id,
+                raw_asset,
+                "image",
+                f"upload_all_owned_{index}",
+                source.name,
+                "",
+                self.actor,
+            )
+
+        self.assertEqual(self.service.renderer.render_calls, 0)
+        job = await self.service.confirm_pre_generation_media(
+            job.id,
+            job.revision,
+            self.actor,
+        )
+        produced = await self.service.produce(job.id, self.actor)
+
+        self.assertEqual(produced.state, JobState.FINAL_REVIEW_REQUIRED)
+        self.assertFalse(produced.first_frame_candidates)
+        self.assertFalse(produced.visual_requests)
+        self.assertFalse(produced.video_tasks)
+        self.assertFalse(produced.visual_versions)
+        self.assertEqual(self.service.renderer.render_calls, 1)
+        self.assertEqual(self.service.renderer.cover_calls, 1)
+        self.assertEqual(
+            len(produced.render_manifest.visual_blocks),
+            len(produced.storyboard_plan.shots),
+        )
+        self.assertTrue(all(
+            block.asset_id
+            for block in produced.render_manifest.visual_blocks
+        ))
 
     async def test_three_prepared_media_edits_render_the_film_only_once(self):
         card = await self.service.create_source_card(valid_card(), self.actor)
