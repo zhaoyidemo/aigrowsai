@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "version": "1.0.0",
+  "display_name": "纸艺定格讲解",
+  "description": "用手工纸偶、微缩纸艺场景和可信定格运动呈现具体关系与变化。",
+  "default": false,
+  "director_prompt_file": "references/director-prompt.md",
+  "storyboard_rules_file": "references/storyboard-rules.md",
+  "image_rules_file": "references/image-rules.md",
+  "motion_rules_file": "references/motion-rules.md",
+  "negative_rules": [
+    "不要塑料玩具、黏土、3D 光滑渲染或真实皮肤质感",
+    "不要让纸偶肢体无支撑拉伸、融化或穿透",
+    "不要生成可读文字、数字、Logo、水印或界面"
+  ],
+  "tags": ["papercraft", "stop-motion", "diorama"]
+}

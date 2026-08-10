@@ -3,6 +3,7 @@ const PROMPT_STORAGE_KEY = 'qijia-video-generation-settings-v2';
 const LEGACY_PROMPT_STORAGE_KEY = 'qijia-video-generation-settings-v1';
 const DEFAULT_CONTENT_SKILL_ID = 'explain-expert-view';
 const NEWS_CONTENT_SKILL_ID = 'brief-recent-news';
+const DEFAULT_VISUAL_STYLE_ID = 'content-skill-default';
 const SCRIPT_TARGET_MIN_CHARS = 220;
 const SCRIPT_TARGET_MAX_CHARS = 300;
 const SCRIPT_HARD_MAX_CHARS = 600;
@@ -178,6 +179,7 @@ function generationDefaults() {
   return state.capabilities?.generation_defaults || {
     script_prompt: '', seedance_prompt: '', video_resolution: '1080p',
     seedance_model: 'doubao-seedance-1-0-pro-fast-251015',
+    visual_style_id: DEFAULT_VISUAL_STYLE_ID,
     image_count: 10, shot_count: 13,
     tts_voice_id: 'zh_female_vv_uranus_bigtts', tts_speed_ratio: 1.2,
   };
@@ -262,7 +264,58 @@ function selectContentSkill(skillId, {resetPrompts = false} = {}) {
   if (!selected) return;
   $('#content-skill').value = selected.skill_id;
   updateContentSkillIntake();
-  if (resetPrompts) setPromptFields(skillGenerationDefaults(selected.skill_id));
+  if (resetPrompts) {
+    setPromptFields(visualStyleGenerationDefaults(
+      selected.skill_id,
+      selectedVisualStyle()?.style_id,
+    ));
+  }
+}
+
+function visualStyles() {
+  return Array.isArray(state.capabilities?.visual_styles)
+    ? state.capabilities.visual_styles
+    : [];
+}
+
+function visualStyle(styleId = '') {
+  const styles = visualStyles();
+  const requested = String(styleId || '').trim();
+  return styles.find((item) => item.style_id === requested)
+    || styles.find((item) => item.style_id === DEFAULT_VISUAL_STYLE_ID)
+    || styles.find((item) => item.default)
+    || styles[0]
+    || null;
+}
+
+function selectedVisualStyle() {
+  return visualStyle($('#visual-style')?.value || '');
+}
+
+function visualStyleGenerationDefaults(skillId = '', styleId = '') {
+  const defaults = skillGenerationDefaults(skillId);
+  const stylePrompt = String(
+    visualStyle(styleId)?.generation_defaults?.seedance_prompt || '',
+  ).trim();
+  return stylePrompt ? {...defaults, seedance_prompt: stylePrompt} : defaults;
+}
+
+function updateVisualStyleDescription() {
+  const style = selectedVisualStyle();
+  $('#visual-style-description').textContent = style
+    ? `${style.description} · v${style.version}`
+    : '视觉风格与内容 Skill、生成模型相互独立。';
+}
+
+function renderVisualStyleSelector(preferredStyleId = '') {
+  const selector = $('#visual-style');
+  const styles = visualStyles();
+  selector.innerHTML = styles.map((item) => (
+    `<option value="${escapeHtml(item.style_id)}">${escapeHtml(item.display_name)} · v${escapeHtml(item.version)}</option>`
+  )).join('');
+  const selected = visualStyle(preferredStyleId);
+  if (selected) selector.value = selected.style_id;
+  updateVisualStyleDescription();
 }
 
 const SEEDANCE_EFFICIENT_MODEL = 'doubao-seedance-1-0-pro-fast-251015';
@@ -489,7 +542,10 @@ function taskSeedanceCost(task) {
 }
 
 function setPromptFields(settings) {
-  const defaults = skillGenerationDefaults(settings?.skill_id || $('#content-skill')?.value);
+  const defaults = visualStyleGenerationDefaults(
+    settings?.skill_id || $('#content-skill')?.value,
+    settings?.visual_style_id || $('#visual-style')?.value,
+  );
   $('#script-generation-prompt').value = settings?.script_prompt || defaults.script_prompt || '';
   $('#seedance-generation-prompt').value = settings?.seedance_prompt || defaults.seedance_prompt || '';
 }
@@ -559,8 +615,19 @@ function initializePromptFields() {
   const selectedSkillId = contentSkills().some((item) => item.skill_id === saved?.skill_id)
     ? saved.skill_id
     : DEFAULT_CONTENT_SKILL_ID;
+  const selectedStyleId = visualStyles().some(
+    (item) => item.style_id === saved?.visual_style_id,
+  )
+    ? saved.visual_style_id
+    : DEFAULT_VISUAL_STYLE_ID;
+  const migratedVisualStyle = !!saved
+    && saved.visual_style_id !== selectedStyleId;
   renderContentSkillSelector(selectedSkillId);
-  const selectedDefaults = skillGenerationDefaults(selectedSkillId);
+  renderVisualStyleSelector(selectedStyleId);
+  const selectedDefaults = visualStyleGenerationDefaults(
+    selectedSkillId,
+    selectedStyleId,
+  );
   const legacyFixedImageCount = !!saved
     && typeof saved === 'object'
     && !Number.isInteger(Number(saved.image_count));
@@ -599,7 +666,7 @@ function initializePromptFields() {
     saved.image_count = selectedDefaults.image_count || 10;
     saved.shot_count = saved.image_count + 3;
   }
-  setPromptFields(saved || selectedDefaults);
+  setPromptFields(saved ? {...saved, visual_style_id: selectedStyleId} : selectedDefaults);
   setResolutionField(saved);
   setImageCountField(saved);
   setTtsSettingsFields(saved);
@@ -614,14 +681,19 @@ function initializePromptFields() {
     || legacyIndependentAnimation
     || legacyFixedImageCount
     || loadedLegacySettings
+    || migratedVisualStyle
   ) persistPromptFields();
 }
 
 function generationSettingsPayload(skillOverride = '') {
   const selected = selectedContentSkill();
   const requestedSkill = contentSkill(skillOverride || selected?.skill_id || '');
+  const requestedStyle = selectedVisualStyle();
   const useEditorPrompts = !skillOverride || requestedSkill?.skill_id === selected?.skill_id;
-  const defaults = skillGenerationDefaults(requestedSkill?.skill_id || '');
+  const defaults = visualStyleGenerationDefaults(
+    requestedSkill?.skill_id || '',
+    requestedStyle?.style_id || '',
+  );
   const scriptPrompt = useEditorPrompts
     ? $('#script-generation-prompt').value.trim()
     : String(defaults.script_prompt || '').trim();
@@ -648,6 +720,10 @@ function generationSettingsPayload(skillOverride = '') {
     ...(requestedSkill ? {
       skill_id: requestedSkill.skill_id,
       skill_version: requestedSkill.version,
+    } : {}),
+    ...(requestedStyle ? {
+      visual_style_id: requestedStyle.style_id,
+      visual_style_version: requestedStyle.version,
     } : {}),
     script_prompt: scriptPrompt,
     seedance_prompt: seedancePrompt,
@@ -2656,6 +2732,7 @@ function renderDetail() {
     };
     $('#script-review-spec').textContent = [
       job.skill_snapshot?.display_name || '旧版工作流',
+      job.visual_style_snapshot?.display_name || '旧版视觉设定',
       `本任务 ${jobResolution(job).toUpperCase()}`,
       ttsVoiceLabel(ttsSettings.tts_voice_id),
       `${normalizedTtsSpeedRatio(ttsSettings.tts_speed_ratio).toFixed(1)}x`,
@@ -3978,7 +4055,19 @@ $('#seedance-generation-prompt').addEventListener('change', persistPromptFields)
 $('#content-skill').addEventListener('change', () => {
   const skill = selectedContentSkill();
   updateContentSkillIntake();
-  setPromptFields(skillGenerationDefaults(skill?.skill_id || ''));
+  setPromptFields(visualStyleGenerationDefaults(
+    skill?.skill_id || '',
+    selectedVisualStyle()?.style_id || '',
+  ));
+  persistPromptFields();
+});
+$('#visual-style').addEventListener('change', () => {
+  const defaults = visualStyleGenerationDefaults(
+    selectedContentSkill()?.skill_id || '',
+    selectedVisualStyle()?.style_id || '',
+  );
+  updateVisualStyleDescription();
+  $('#seedance-generation-prompt').value = defaults.seedance_prompt || '';
   persistPromptFields();
 });
 $('#video-resolution').addEventListener('change', persistPromptFields);
@@ -3991,7 +4080,10 @@ $('#image-count').addEventListener('change', (event) => {
   persistPromptFields();
 });
 $('#restore-prompt-defaults').addEventListener('click', () => {
-  setPromptFields(skillGenerationDefaults(selectedContentSkill()?.skill_id || ''));
+  setPromptFields(visualStyleGenerationDefaults(
+    selectedContentSkill()?.skill_id || '',
+    selectedVisualStyle()?.style_id || '',
+  ));
   persistPromptFields();
   notify('已恢复默认提示词。');
 });

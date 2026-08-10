@@ -34,6 +34,7 @@ from qijia_video.contracts import (
     ScriptDraft,
     SourceCard,
     SourceCardInput,
+    StoryboardShot,
     ProviderTaskState,
     ProviderTask,
     ProviderUsageRecord,
@@ -94,6 +95,11 @@ from qijia_video.infrastructure.video_providers import (
 from qijia_video.prompts import SCRIPT_HARD_MAX_CHARS, narration_char_count
 from qijia_video.service import QijiaVideoService, REQUIRED_PACKAGE_NAMES
 from qijia_video.skill_registry import default_skill_registry
+from qijia_video.visual_prompting import compile_video_prompt
+from qijia_video.visual_style_registry import (
+    default_prompt_writing_profile_registry,
+    default_visual_style_registry,
+)
 from qijia_video import auth as auth_service
 
 
@@ -230,10 +236,58 @@ class QijiaVideoContractTests(unittest.TestCase):
             expert.script_prompt,
         )
         self.assertEqual(news.research_mode.value, "recent_news_required")
+        self.assertNotEqual(expert.manifest_hash, news.manifest_hash)
         self.assertIn("不要逐段独立创作后拼接", expert.script_prompt)
         self.assertIn("事实、分析、预测和价值判断", news.script_prompt)
         self.assertIn("不要逐段独立创作后拼接", news.script_prompt)
-        self.assertNotEqual(expert.manifest_hash, news.manifest_hash)
+
+    def test_visual_styles_and_prompt_method_are_provider_independent(self):
+        catalog = default_visual_style_registry.public_catalog()
+        self.assertEqual(
+            {item["style_id"] for item in catalog},
+            {
+                "content-skill-default",
+                "paper-collage-explainer",
+                "papercraft-stop-motion",
+            },
+        )
+        collage = default_visual_style_registry.resolve(
+            "paper-collage-explainer"
+        )
+        papercraft = default_visual_style_registry.resolve(
+            "papercraft-stop-motion"
+        )
+        profile = default_prompt_writing_profile_registry.resolve(
+            "structured-multimodal"
+        )
+        self.assertEqual(collage.version, "1.0.0")
+        self.assertIn("编辑纸张拼贴", collage.director_prompt)
+        self.assertIn("纸片", collage.motion_rules)
+        self.assertIn("4–7", papercraft.storyboard_rules)
+        self.assertIn("主体定义", profile.planning_framework)
+        self.assertNotIn("MiniMax", profile.planning_framework)
+        self.assertNotIn("Seedance", profile.planning_framework)
+        maximum_shot = StoryboardShot(
+            shot_id="shot_01",
+            segment_id="n01",
+            narration_excerpt="长度预算测试",
+            visual_type="video",
+            visual_intent="意" * 600,
+            first_frame_prompt="帧" * 1800,
+            motion_prompt="动" * 1800,
+        )
+        maximum_prompt = compile_video_prompt(
+            "风" * 3200,
+            collage.snapshot(),
+            profile.snapshot(),
+            maximum_shot,
+            has_reference_image=False,
+        )
+        self.assertLessEqual(len(maximum_prompt), 4000)
+        VisualGenerationRequest(
+            request_id="shot_01",
+            prompt=maximum_prompt,
+        )
 
     def test_news_topic_is_a_research_request_not_a_verified_news_fact(self):
         card = NewsTopicInput(
@@ -2968,6 +3022,87 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 GenerationSettings(skill_id="brief-recent-news"),
             )
 
+    async def test_job_freezes_visual_style_and_internal_prompt_method_separately(self):
+        card = await self.service.create_source_card(valid_card(), self.actor)
+        card = await self.service.verify_source_card(
+            card.id, card.revision, self.actor
+        )
+
+        job = await self.service.create_job(
+            card.id,
+            self.actor,
+            GenerationSettings(
+                visual_style_id="paper-collage-explainer",
+            ),
+        )
+
+        self.assertEqual(
+            job.visual_style_snapshot.style_id,
+            "paper-collage-explainer",
+        )
+        self.assertEqual(job.visual_style_snapshot.version, "1.0.0")
+        self.assertEqual(
+            job.prompt_writing_profile_snapshot.profile_id,
+            "structured-multimodal",
+        )
+        self.assertEqual(
+            job.generation_settings.visual_style_version,
+            job.visual_style_snapshot.version,
+        )
+        self.assertIn(
+            "高级编辑纸张拼贴",
+            job.generation_settings.seedance_prompt,
+        )
+        compiled = self.service._storyboard_base_style(job)
+        self.assertIn("结构化多模态规划", compiled)
+        self.assertIn("视觉风格执行", compiled)
+        self.assertIn("3–6", compiled)
+        shot = StoryboardShot(
+            shot_id="shot_01",
+            segment_id="n01",
+            narration_excerpt="父母停下来观察孩子的动作。",
+            visual_type="video",
+            visual_intent="一张遮挡孩子的纸片向旁边移动，露出自主完成的动作。",
+            first_frame_prompt="纸张人物与遮挡纸片形成清楚的前后关系。",
+            motion_prompt="遮挡纸片滑开，主体保持稳定。",
+        )
+        frame_prompt = self.service._first_frame_prompt(job, shot)
+        self.assertIn("首帧提示词结构", frame_prompt)
+        self.assertIn("风格化首帧", frame_prompt)
+        video_prompt = compile_video_prompt(
+            job.generation_settings.seedance_prompt,
+            job.visual_style_snapshot,
+            job.prompt_writing_profile_snapshot,
+            shot,
+            has_reference_image=False,
+        )
+        self.assertIn("视频提示词结构", video_prompt)
+        self.assertIn("风格动作语法", video_prompt)
+        self.assertIn("不生成旁白或模型音频", video_prompt)
+
+        custom = await self.service.create_job(
+            card.id,
+            self.actor,
+            GenerationSettings(
+                visual_style_id="paper-collage-explainer",
+                seedance_prompt="自定义低饱和纸张拼贴导演设定。",
+            ),
+        )
+        self.assertEqual(
+            custom.generation_settings.seedance_prompt,
+            "自定义低饱和纸张拼贴导演设定。",
+        )
+        custom_compiled = self.service._storyboard_base_style(custom)
+        self.assertIn("自定义低饱和纸张拼贴", custom_compiled)
+        self.assertIn("视觉风格执行", custom_compiled)
+
+        with self.assertRaisesRegex(QualityGateFailed, "未知视觉风格"):
+            await self.service.create_job(
+                card.id,
+                self.actor,
+                GenerationSettings(visual_style_id="missing-style"),
+            )
+
     async def test_person_research_enriches_the_job_without_adding_a_gate(self):
         brief = PersonResearchBrief.model_validate({
             "person_name": "阿尔弗雷德·阿德勒",
@@ -5092,10 +5227,11 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(tts_provider.speed_ratio, 1.1)
         self.assertEqual(job.narration_manifest.speed_ratio, 1.1)
-        self.assertEqual(
-            storyboard_provider.base_style,
+        self.assertIn(
             "自然窗光，手持纪录片风格。",
+            storyboard_provider.base_style,
         )
+        self.assertIn("结构化多模态规划", storyboard_provider.base_style)
         requests = job.visual_requests
         self.assertEqual(len(requests), 3)
         self.assertTrue(all(
@@ -5287,6 +5423,29 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         self.assertEqual(
             {item["skill_id"] for item in skill_response.json()["data"]},
             {"brief-recent-news", "explain-expert-view"},
+        )
+        styles = response.json()["data"]["visual_styles"]
+        self.assertEqual(
+            {item["style_id"] for item in styles},
+            {
+                "content-skill-default",
+                "paper-collage-explainer",
+                "papercraft-stop-motion",
+            },
+        )
+        self.assertEqual(
+            response.json()["data"]["prompt_writing_profile"]["profile_id"],
+            "structured-multimodal",
+        )
+        style_response = allowed.get("/api/qijia-video/visual-styles")
+        self.assertEqual(style_response.status_code, 200)
+        self.assertEqual(
+            {item["style_id"] for item in style_response.json()["data"]},
+            {
+                "content-skill-default",
+                "paper-collage-explainer",
+                "papercraft-stop-motion",
+            },
         )
         tts_pricing = response.json()["data"]["tts_pricing"]
         self.assertEqual(

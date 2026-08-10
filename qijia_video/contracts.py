@@ -29,6 +29,8 @@ from qijia_video.tts_options import (
 
 SCHEMA_VERSION = "1.0"
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+DEFAULT_VISUAL_STYLE_ID = "content-skill-default"
+DEFAULT_PROMPT_WRITING_PROFILE_ID = "structured-multimodal"
 SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-0-pro-fast-251015"
 SEEDANCE_RETIRED_MODEL = "doubao-seedance-1-5-pro-251215"
 SEEDANCE_FLAGSHIP_MODEL = "doubao-seedance-2-0-260128"
@@ -738,6 +740,57 @@ class ContentSkillSnapshot(ContractModel):
     frozen_at: str = Field(min_length=1, max_length=64)
 
 
+class VisualStyleSnapshot(ContractModel):
+    """Provider-neutral visual language frozen independently of content logic."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    style_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    version: str = Field(
+        min_length=1,
+        max_length=32,
+        pattern=r"^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
+    )
+    display_name: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=1000)
+    director_prompt: str = Field(default="", max_length=3200)
+    storyboard_rules: str = Field(default="", max_length=4000)
+    image_rules: str = Field(default="", max_length=4000)
+    motion_rules: str = Field(default="", max_length=4000)
+    negative_rules: list[str] = Field(default_factory=list, max_length=30)
+    manifest_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    frozen_at: str = Field(min_length=1, max_length=64)
+
+
+class PromptWritingProfileSnapshot(ContractModel):
+    """Internal prompt-writing method; it never selects or invokes a model."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    profile_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    version: str = Field(
+        min_length=1,
+        max_length=32,
+        pattern=r"^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
+    )
+    display_name: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=1000)
+    planning_framework: str = Field(min_length=1, max_length=4000)
+    image_framework: str = Field(min_length=1, max_length=4000)
+    video_framework: str = Field(min_length=1, max_length=4000)
+    reference_policy: str = Field(min_length=1, max_length=3000)
+    audio_policy: str = Field(min_length=1, max_length=1000)
+    negative_rules: list[str] = Field(default_factory=list, max_length=30)
+    manifest_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    frozen_at: str = Field(min_length=1, max_length=64)
+
+
 class GenerationSettings(ContractModel):
     """创建任务时冻结的可实验生成参数。"""
 
@@ -747,6 +800,26 @@ class GenerationSettings(ContractModel):
         pattern=r"^$|^[a-z0-9]+(?:-[a-z0-9]+)*$",
     )
     skill_version: str = Field(
+        default="",
+        max_length=32,
+        pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
+    )
+    visual_style_id: str = Field(
+        default=DEFAULT_VISUAL_STYLE_ID,
+        max_length=64,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    visual_style_version: str = Field(
+        default="",
+        max_length=32,
+        pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
+    )
+    prompt_writing_profile_id: str = Field(
+        default=DEFAULT_PROMPT_WRITING_PROFILE_ID,
+        max_length=64,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    prompt_writing_profile_version: str = Field(
         default="",
         max_length=32,
         pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
@@ -1260,6 +1333,10 @@ class VideoJob(ContractModel):
     # New jobs freeze the full content workflow. None means the persisted task
     # predates Skill routing and must continue under legacy semantics.
     skill_snapshot: ContentSkillSnapshot | None = None
+    # New tasks also freeze visual treatment and the internal prompt-writing
+    # method. They remain separate from Content Skill and provider selection.
+    visual_style_snapshot: VisualStyleSnapshot | None = None
+    prompt_writing_profile_snapshot: PromptWritingProfileSnapshot | None = None
     # None 仅用于兼容上线前已经持久化的任务；所有新任务都会冻结完整配置。
     generation_settings: GenerationSettings | None = None
     # Legacy and all-AI jobs stay automatic. Editors can explicitly request one

@@ -1,6 +1,6 @@
 # 齐家 AI 家庭教育内容工作台
 
-面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的研究与短视频生产服务。家庭教育仍是默认业务场景；内容策划、研究规则、脚本提示词和视觉方向已经从生产链路中拆成可选择、可版本化的 Content Skill，Seedream、Seedance、TTS、Remotion、FFmpeg、存储、成本与任务状态机继续共用。
+面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的研究与短视频生产服务。家庭教育仍是默认业务场景；内容策划、研究规则和脚本提示词由可版本化的 Content Skill 管理，视觉表现与内部多模态提示词方法分别独立管理，Seedream、Seedance、TTS、Remotion、FFmpeg、存储、成本与任务状态机继续共用。
 
 环境变量中的管理员账号可以创建、启停同事账号，授予或收回工作台使用权限，并重置密码。同事可以查看团队创建的全部内容、成本和抖音效果，只能修改和继续执行自己创建的内容；管理员可以管理全部内容。
 
@@ -11,13 +11,25 @@
 - `explain-expert-view@1.1.0`：教育、心理与思想人物观点讲解。人物联网研究是可选增强；无法形成可靠研究简报时保留原始观点和边界继续。
 - `brief-recent-news@1.2.1`：科技、商业或通用最新新闻口播。用户输入仅是检索请求；至少需要一条与检索注释匹配的可追溯事实。时间缺失、单站点或来源类型不完整时会醒目标注并进入人工审核，只有没有可追溯证据时才停止。联网研究默认使用 `x-ai/grok-4.5`，通过 OpenRouter 托管的 Exa 工具完成检索，不需要额外的搜索 API Key，并与脚本模型独立配置。
 
-每个 Skill 位于 `qijia_video/content_skills/<skill-id>/`，由 `SKILL.md`、`manifest.json` 和 `references/` 中的研究、脚本、视觉提示词组成。`skill_registry.py` 只加载符合固定 manifest 契约的目录，按内容格式推荐默认 Skill；创建任务时把 `skill_id`、`version`、manifest 哈希、研究策略、系统提示词、质量规则和最终生成设置冻结到任务 JSON 中。后续修改 Skill 文件不会改变已创建任务，旧任务没有 `skill_snapshot` 时继续按原语义恢复。
+每个 Skill 位于 `qijia_video/content_skills/<skill-id>/`，由 `SKILL.md`、`manifest.json` 和 `references/` 中的研究、脚本及兼容视觉默认值组成。`skill_registry.py` 只加载符合固定 manifest 契约的目录，按内容格式推荐默认 Skill；创建任务时把 `skill_id`、`version`、manifest 哈希、研究策略、系统提示词、质量规则和最终生成设置冻结到任务 JSON 中。后续修改 Skill 文件不会改变已创建任务，旧任务没有 `skill_snapshot` 时继续按原语义恢复。
 
 扩展新领域时只新增 Skill、对应输入适配和必要的研究 Provider 能力，不复制视频生产基础设施，也不允许 Skill 自由调用工具或改写自身。接口包括：
 
 - `GET /api/qijia-video/skills`：读取可选择的最新 Skill 目录；
 - `POST /api/qijia-video/source-cards/news-topic`：把新闻主题转换为“待研究”的来源卡；
 - `POST /api/qijia-video/jobs`：在 `generation_settings` 中可传 `skill_id` 与 `skill_version`；省略时按来源卡 `content_format` 路由并冻结。
+
+## 视觉风格与多模态提示词
+
+工作台把“写什么”“长什么样”“怎样把意图写成生成提示词”拆成三个独立维度：
+
+- Content Skill：决定输入、研究、脚本结构和内容质量边界；
+- Visual Style：决定视觉语言，目前提供“当前默认风格”“编辑纸张拼贴”“纸艺定格讲解”；
+- Prompt Writing Profile：内部固定使用 `structured-multimodal@1.0.0`，按叙事功能、主体、环境、动作、构图、光色材质、连续性、参考素材和排除项组织分镜、首帧与视频提示词。
+
+两种新增视觉风格是对 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 中提示词组织、纸张拼贴和纸艺定格方法的独立适配，没有复制其长流程门禁，也不引入 MiniMax 模型、API Key 或供应商调用。实际模型仍由现有 Provider 配置决定；今后替换图片或视频模型，只需调整 Provider 编译边界，不需要改写 Content Skill 或视觉风格资源。
+
+视觉风格位于 `qijia_video/visual_styles/`，内部提示词方法位于 `qijia_video/prompt_writing_profiles/`。创建任务时分别冻结 `visual_style_snapshot`、`prompt_writing_profile_snapshot` 及对应版本；旧任务没有这些快照时继续使用原提示词。全局参考图始终拥有最高视觉优先级。只读目录接口为 `GET /api/qijia-video/visual-styles`。
 
 ## 当前真实链路
 
@@ -26,7 +38,7 @@
 入口 B：人物 + 观点
 入口 C：最新新闻主题 + 关注角度
 三种入口汇入统一生产链路
-  → 选择并冻结 Content Skill
+  → 分别选择并冻结 Content Skill、Visual Style 与内部 Prompt Writing Profile
   → 按 Skill 执行可选或强制研究
   → OpenRouter 脚本
   → 人工确认脚本
@@ -113,7 +125,9 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 ## 独立架构
 
 - `qijia_video/`：领域契约、工作流、Provider、API、鉴权和 Web 页面。
-- `qijia_video/content_skills/`、`qijia_video/skill_registry.py`：版本化内容工作流、提示词资源、兼容格式路由与任务快照冻结。
+- `qijia_video/content_skills/`、`qijia_video/skill_registry.py`：版本化内容工作流、兼容格式路由与内容快照冻结。
+- `qijia_video/visual_styles/`、`qijia_video/prompt_writing_profiles/`、`qijia_video/visual_style_registry.py`：模型无关的视觉风格、结构化多模态提示词方法与独立任务快照。
+- `qijia_video/visual_prompting.py`：把冻结的内容导演设定、视觉风格和提示词方法编译为分镜、首帧与视频提示词，不负责选择或调用模型。
 - `qijia_video/infrastructure/postgres_repository.py`：来源卡与视频任务聚合仓储。
 - `qijia_video/accounts.py`、`qijia_video/account_api.py`：同事账号、密码哈希、会话失效与管理员 API。
 - `qijia_video/run_service.py`：后台任务进度、互斥和重启恢复。

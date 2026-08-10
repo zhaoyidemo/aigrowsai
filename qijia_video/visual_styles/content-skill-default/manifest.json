@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "version": "1.0.0",
+  "display_name": "当前默认风格",
+  "description": "沿用所选 Content Skill 的视觉导演设定，不额外叠加艺术媒介。",
+  "default": true,
+  "director_prompt_file": null,
+  "storyboard_rules_file": null,
+  "image_rules_file": null,
+  "motion_rules_file": null,
+  "negative_rules": [],
+  "tags": ["compatible", "content-skill"]
+}

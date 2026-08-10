@@ -62,6 +62,18 @@ test('content Skills select versioned expert or recent-news workflows', () => {
   assert.match(app, /job\.skill_snapshot\?\.display_name/);
 });
 
+test('visual styles are selected and frozen independently from content Skills and models', () => {
+  assert.match(page, /id="visual-style"/);
+  assert.match(page, /视觉风格与内容 Skill、生成模型相互独立/);
+  assert.match(page, /内部提示词方法会自动补齐结构，不改变 Seedream、Seedance 或其他 Provider/);
+  assert.match(app, /DEFAULT_VISUAL_STYLE_ID = 'content-skill-default'/);
+  assert.match(app, /function visualStyleGenerationDefaults/);
+  assert.match(app, /visual_style_id: requestedStyle\.style_id/);
+  assert.match(app, /visual_style_version: requestedStyle\.version/);
+  assert.match(app, /job\.visual_style_snapshot\?\.display_name/);
+  assert.match(styles, /\.visual-style-setting/);
+});
+
 test('administrator can manage bounded colleague access without exposing passwords', () => {
   assert.match(page, /id="account-management-link"/);
   assert.match(accountsPage, /同事账号与使用权限/);

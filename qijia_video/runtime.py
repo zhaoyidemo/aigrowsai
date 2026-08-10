@@ -238,6 +238,8 @@ class QijiaVideoRuntime:
             "missing_configuration": missing,
             "generation_defaults": generation_defaults.model_dump(mode="json"),
             "content_skills": self.service.content_skills(),
+            "visual_styles": self.service.visual_styles(),
+            "prompt_writing_profile": self.service.prompt_writing_profile(),
             "douyin_performance": {
                 "ready": self.douyin_performance_provider.configured,
                 "platform": "douyin",

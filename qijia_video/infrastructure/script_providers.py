@@ -34,7 +34,7 @@ from qijia_video.prompts import (
 
 
 SCRIPT_PROMPT_VERSION = "qijia_script_v13_narrative_progression"
-STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v9_frontier_high_reasoning"
+STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v10_structured_multimodal"
 PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_research_v1"
 NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v5"
 OPENROUTER_REASONING_EFFORT = "high"

@@ -98,6 +98,18 @@ from qijia_video.skill_registry import (
 )
 from qijia_video.tts_options import TTS_SCRIPT_CHARACTER_TARGETS
 from qijia_video.upload_media import detect_shot_media_format
+from qijia_video.visual_prompting import (
+    compile_first_frame_prompt,
+    compile_storyboard_base_style,
+    compile_video_prompt,
+)
+from qijia_video.visual_style_registry import (
+    PromptWritingProfileRegistry,
+    VisualStyleRegistry,
+    VisualStyleRegistryError,
+    default_prompt_writing_profile_registry,
+    default_visual_style_registry,
+)
 
 
 FORBIDDEN_PLACEHOLDERS = ("<仅示意", "仅填写已经核验")
@@ -160,6 +172,10 @@ class QijiaVideoService:
         tts_price_per_10000_characters: float = 5.0,
         tikhub_price_per_success_usd: float = 0.002,
         skill_registry: ContentSkillRegistry | None = None,
+        visual_style_registry: VisualStyleRegistry | None = None,
+        prompt_writing_profile_registry: (
+            PromptWritingProfileRegistry | None
+        ) = None,
     ):
         self.repository = repository
         self.script_provider = script_provider
@@ -173,6 +189,13 @@ class QijiaVideoService:
         self.media_packager = media_packager
         self.douyin_performance_provider = douyin_performance_provider
         self.skill_registry = skill_registry or default_skill_registry
+        self.visual_style_registry = (
+            visual_style_registry or default_visual_style_registry
+        )
+        self.prompt_writing_profile_registry = (
+            prompt_writing_profile_registry
+            or default_prompt_writing_profile_registry
+        )
         self.work_root = work_root.resolve()
         self.work_root.mkdir(parents=True, exist_ok=True)
         self.video_poll_interval_seconds = max(
@@ -776,12 +799,26 @@ class QijiaVideoService:
         card = await self.get_source_card(source_card_id, actor)
         if card.status != SourceCardStatus.VERIFIED:
             raise QualityGateFailed("来源卡必须先核验")
+        requested_settings = generation_settings or GenerationSettings()
+        seedance_prompt_explicit = (
+            "seedance_prompt" in requested_settings.model_fields_set
+        )
         try:
             frozen_settings, skill_snapshot = self.skill_registry.freeze(
                 card,
-                generation_settings or GenerationSettings(),
+                requested_settings,
             )
-        except SkillRegistryError as exc:
+            frozen_settings, visual_style_snapshot = (
+                self.visual_style_registry.freeze(
+                    frozen_settings,
+                    seedance_prompt_explicit=seedance_prompt_explicit,
+                )
+            )
+            (
+                frozen_settings,
+                prompt_writing_profile_snapshot,
+            ) = self.prompt_writing_profile_registry.freeze(frozen_settings)
+        except (SkillRegistryError, VisualStyleRegistryError) as exc:
             raise QualityGateFailed(str(exc)) from exc
         now = timestamp()
         draft = VideoJob(
@@ -791,6 +828,8 @@ class QijiaVideoService:
             source_card_revision=card.revision,
             source_card_snapshot=card.model_dump(mode="json"),
             skill_snapshot=skill_snapshot,
+            visual_style_snapshot=visual_style_snapshot,
+            prompt_writing_profile_snapshot=prompt_writing_profile_snapshot,
             generation_settings=frozen_settings,
             created_by=actor.username,
             created_at=now,
@@ -804,6 +843,12 @@ class QijiaVideoService:
 
     def content_skills(self) -> list[dict]:
         return self.skill_registry.public_catalog()
+
+    def visual_styles(self) -> list[dict]:
+        return self.visual_style_registry.public_catalog()
+
+    def prompt_writing_profile(self) -> dict:
+        return self.prompt_writing_profile_registry.public_default()
 
     @staticmethod
     def _news_research_warning(brief: NewsResearchBrief) -> str:
@@ -1933,14 +1978,13 @@ class QijiaVideoService:
 
     @classmethod
     def _storyboard_base_style(cls, job: VideoJob) -> str:
-        if cls._has_reference_image(job):
-            return (
-                "本任务提供全局参考图。参考图是画风、色彩、光影、材质和人物视觉特征的"
-                "最高优先级。分镜只设计场景、人物动作、空间关系、构图和运镜，不另行规定"
-                "艺术媒介、固定配色或与参考图冲突的造型。"
-            )
         settings = cls._generation_settings(job)
-        return settings.seedance_prompt
+        return compile_storyboard_base_style(
+            settings.seedance_prompt,
+            job.visual_style_snapshot,
+            job.prompt_writing_profile_snapshot,
+            has_reference_image=cls._has_reference_image(job),
+        )
 
     @staticmethod
     def _storyboard_input_hash_for_style(
@@ -2072,22 +2116,12 @@ class QijiaVideoService:
         has_reference_image: bool = False,
     ) -> str:
         settings = QijiaVideoService._generation_settings(job)
-        frame_prompt = shot.first_frame_prompt.strip()[:750]
-        style_direction = (
-            "【视觉基准】已提供的全局参考图是画风、色彩、光影、材质、人物造型与视觉"
-            "气质的最高优先级。严格延续参考图，只根据本镜头内容重新组织场景、动作和"
-            "构图；不要采用其他文字设定中的艺术风格，也不要照搬参考图里的文字、Logo"
-            "或水印。"
-            if has_reference_image
-            else f"【全局视觉导演设定】{settings.seedance_prompt.strip()[:750]}"
-        )
-        return (
-            f"{style_direction}\n"
-            f"【静止首帧】{frame_prompt}\n"
-            "主体关系清楚，构图简洁，优先保证核心变化或信息关系一眼可懂。\n"
-            "只生成一张竖屏 9:16 画面首帧。画面中不得出现任何文字、字幕、"
-            "字母、数字、Logo、水印、可读书页、屏幕界面或品牌标识；"
-            "底部保留干净的字幕安全区。"
+        return compile_first_frame_prompt(
+            settings.seedance_prompt,
+            job.visual_style_snapshot,
+            job.prompt_writing_profile_snapshot,
+            shot,
+            has_reference_image=has_reference_image,
         )
 
     @staticmethod
@@ -2356,16 +2390,6 @@ class QijiaVideoService:
         return job
 
     @classmethod
-    def _seedance_style_context(cls, job: VideoJob) -> str:
-        if cls._has_reference_image(job):
-            return (
-                "【视觉基准】严格以已提供的首帧为唯一画风、色彩、光影、材质和人物造型"
-                "基准；任何文字描述与首帧冲突时，以首帧为准。"
-            )
-        settings = cls._generation_settings(job)
-        return settings.seedance_prompt.strip()[:2000]
-
-    @classmethod
     def _build_visual_requests(
         cls, job: VideoJob
     ) -> list[VisualGenerationRequest]:
@@ -2377,7 +2401,7 @@ class QijiaVideoService:
             return list(job.visual_requests)
         settings = cls._generation_settings(job)
         if job.storyboard_plan:
-            style_context = cls._seedance_style_context(job)
+            has_reference_image = cls._has_reference_image(job)
             candidates_by_id = {
                 item.candidate_id: item for item in job.first_frame_candidates
             }
@@ -2405,16 +2429,13 @@ class QijiaVideoService:
                     if shot_index == 0
                     else ""
                 )
-                prompt = (
-                    f"{style_context}\n"
-                    f"{opening_direction}"
-                    f"【本镜头视觉意图】{shot.visual_intent[:450]}\n"
-                    "【首帧驱动】严格从已提供的首帧自然延展，保持人物、服装、"
-                    "空间、构图、配色和画风稳定。\n"
-                    f"【动作与运镜】{shot.motion_prompt[:1000]}\n"
-                    "本镜头只安排一个清楚可信的动作和一种克制运镜，结尾保持自然。"
-                    "只生成自然动画画面，不生成旁白或模型音频。不得新增任何文字、"
-                    "字幕、字母、数字、Logo、水印、可读书页、屏幕界面或品牌标识。"
+                prompt = compile_video_prompt(
+                    settings.seedance_prompt,
+                    job.visual_style_snapshot,
+                    job.prompt_writing_profile_snapshot,
+                    shot,
+                    has_reference_image=has_reference_image,
+                    opening_direction=opening_direction,
                 )
                 shot_timings = [
                     narration_timing[beat_id]

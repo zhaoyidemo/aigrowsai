@@ -420,6 +420,13 @@ async def list_content_skills(user: dict = Depends(get_current_user)):
     return ok(runtime.service.content_skills())
 
 
+@api_router.get("/visual-styles")
+@boundary
+async def list_visual_styles(user: dict = Depends(get_current_user)):
+    del user
+    return ok(runtime.service.visual_styles())
+
+
 @api_router.post("/source-cards")
 @boundary
 async def create_source_card(

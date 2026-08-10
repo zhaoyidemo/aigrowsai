@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "version": "1.0.0",
+  "display_name": "结构化多模态提示词",
+  "description": "把叙事意图稳定编译为分镜、静态首帧和首帧驱动视频提示词，不绑定任何模型供应商。",
+  "default": true,
+  "planning_framework_file": "references/planning-framework.md",
+  "image_framework_file": "references/image-framework.md",
+  "video_framework_file": "references/video-framework.md",
+  "reference_policy_file": "references/reference-policy.md",
+  "audio_policy": "当前生产链由独立 TTS 和后期声音轨负责；图片与视频模型只生成无声视觉，不写入旁白、对白、音乐或音效要求。",
+  "negative_rules": [
+    "不要逐字图解口播或把旁白排版进画面",
+    "不要在单个镜头中并列多个互相竞争的动作",
+    "不要破坏跨镜头主体身份、服装、道具、空间与光线连续性"
+  ]
+}

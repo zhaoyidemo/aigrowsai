@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.18.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.19.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -115,6 +115,13 @@
               <small id="content-skill-description">选择一套有版本、研究规则、提示词和质量边界的内容工作流。</small>
             </span>
             <select id="content-skill" aria-label="内容 Skill"></select>
+          </label>
+          <label class="video-quality-setting visual-style-setting" for="visual-style">
+            <span class="video-quality-copy">
+              <strong>视觉表现</strong>
+              <small id="visual-style-description">视觉风格与内容 Skill、生成模型相互独立；选择后会统一指导分镜、首帧和视频动作。</small>
+            </span>
+            <select id="visual-style" aria-label="视觉表现"></select>
           </label>
           <label class="video-quality-setting" for="video-resolution">
             <span class="video-quality-copy">
@@ -244,7 +251,7 @@
             </div>
           </form>
           <details id="generation-prompt-settings" class="advanced-settings prompt-settings global-prompt-settings">
-            <summary>调整 AI 写法和画面风格（实验用）</summary>
+            <summary>调整脚本与视觉导演提示词（实验用）</summary>
             <p class="field-hint">默认值可以直接使用。修改后会用于下一条新建视频，并保存在当前浏览器中；系统会为每个视觉章节生成 1 张画面，其中 3 张继续生成 8-10 秒、所选画质的 AI 视频，其余按所选动态图片数量直接进入成片。</p>
             <label>脚本生成提示词
               <textarea id="script-generation-prompt" rows="11" maxlength="8000" spellcheck="false"></textarea>
@@ -252,7 +259,7 @@
             </label>
             <label>全片画面导演设定
               <textarea id="seedance-generation-prompt" rows="8" maxlength="3200" spellcheck="false"></textarea>
-              <span class="field-hint">没有参考图时，它统一指导分镜、Seedream 首帧和 3 个 Seedance 视频；上传参考图后，由参考图接管画风与人物造型。</span>
+              <span class="field-hint">默认内容来自上方所选视觉表现，可继续微调；内部提示词方法会自动补齐结构，不改变 Seedream、Seedance 或其他 Provider。上传参考图后，由参考图接管画风与人物造型。</span>
             </label>
             <div class="prompt-actions">
               <button id="restore-prompt-defaults" class="button secondary" type="button">恢复默认提示词</button>
@@ -365,7 +372,7 @@
               <summary>本任务的全片画面导演设定</summary>
               <label>确认前仍可修改
                 <textarea id="job-seedance-prompt" rows="7" maxlength="3200" spellcheck="false"></textarea>
-                <span class="field-hint">没有参考图时，它会指导本任务的全部分镜、首帧和 3 个所选画质、8-10 秒视频；有参考图时由参考图接管画风与人物造型。口播原句不会作为画面文字。</span>
+                <span class="field-hint">这里显示所选视觉风格的导演设定，可继续微调；内部结构化提示词方法会自动补齐分镜、首帧和动作约束。参考图仍拥有最高视觉优先级，口播原句不会作为画面文字。</span>
               </label>
             </details>
             <label class="pre-generation-media-choice" for="prepare-media-first">
@@ -497,6 +504,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.18.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.19.0"></script>
 </body>
 </html>
