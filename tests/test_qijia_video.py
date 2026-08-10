@@ -214,7 +214,7 @@ class QijiaVideoContractTests(unittest.TestCase):
         expert = default_skill_registry.resolve("explain-expert-view")
         news = default_skill_registry.resolve("brief-recent-news")
         self.assertEqual(expert.version, "1.1.0")
-        self.assertEqual(news.version, "1.2.0")
+        self.assertEqual(news.version, "1.2.1")
         self.assertEqual(
             GenerationSettings().script_prompt,
             expert.script_prompt,
@@ -1446,7 +1446,8 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         provider = OpenRouterScriptProvider(
             api_key="test-key",
             base_url="https://openrouter.ai/api",
-            model="test/news-model",
+            model="test/script-model",
+            research_model="openai/gpt-5.6-terra",
             transport=httpx.MockTransport(handler),
         )
         card_input = NewsTopicInput(
@@ -1472,6 +1473,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(calls), 1)
         request_body = json.loads(calls[0].content)
+        self.assertEqual(request_body["model"], "openai/gpt-5.6-terra")
         self.assertEqual(
             request_body["max_completion_tokens"],
             NEWS_RESEARCH_MAX_COMPLETION_TOKENS,
@@ -1480,7 +1482,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request_body["tool_choice"], "required")
         self.assertEqual(
             request_body["response_format"]["json_schema"]["name"],
-            "recent_news_research_v4",
+            "recent_news_research_v5",
         )
         self.assertEqual(
             request_body["tools"][0]["parameters"]["max_total_results"],
@@ -1699,7 +1701,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             brief.model_dump(mode="json"),
         )
 
-    async def test_recent_news_research_only_reports_time_failure_when_time_is_missing(self):
+    async def test_recent_news_research_accepts_traceable_source_without_time(self):
         source_url = "https://official.example/releases/tera-fab"
 
         def handler(_: httpx.Request) -> httpx.Response:
@@ -1746,16 +1748,17 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             status="verified",
         )
 
-        with self.assertRaisesRegex(
-            ResearchEvidenceUnavailable,
-            "检索证据缺少事件或发布时间",
-        ) as raised:
-            await provider.research_recent_news(card)
+        brief = await provider.research_recent_news(card)
 
-        diagnostics = raised.exception.diagnostics
-        self.assertEqual(diagnostics["accepted_evidence_count"], 1)
-        self.assertEqual(diagnostics["accepted_timed_evidence_count"], 0)
-        self.assertEqual(diagnostics["matched_citation_count"], 1)
+        self.assertEqual(len(brief.evidence), 1)
+        self.assertTrue(any(
+            "来源未提供明确的事件或发布时间" in item
+            for item in brief.uncertainties
+        ))
+        self.assertIn(
+            "时效性仍需确认",
+            QijiaVideoService._news_research_warning(brief),
+        )
 
     async def test_recent_news_research_rejects_invalid_time_before_paid_call(self):
         calls: list[httpx.Request] = []

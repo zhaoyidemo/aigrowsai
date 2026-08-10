@@ -9,7 +9,7 @@
 当前内置两套 Skill：
 
 - `explain-expert-view@1.1.0`：教育、心理与思想人物观点讲解。人物联网研究是可选增强；无法形成可靠研究简报时保留原始观点和边界继续。
-- `brief-recent-news@1.2.0`：科技、商业或通用最新新闻口播。用户输入仅是检索请求；至少需要一条与检索注释匹配且带有事件或发布时间的证据。单站点或来源类型不完整时会醒目标注并进入人工审核，没有可追溯证据时才停止。
+- `brief-recent-news@1.2.1`：科技、商业或通用最新新闻口播。用户输入仅是检索请求；至少需要一条与检索注释匹配的可追溯事实。时间缺失、单站点或来源类型不完整时会醒目标注并进入人工审核，只有没有可追溯证据时才停止。联网研究默认使用 `openai/gpt-5.6-terra`，与脚本模型独立配置。
 
 每个 Skill 位于 `qijia_video/content_skills/<skill-id>/`，由 `SKILL.md`、`manifest.json` 和 `references/` 中的研究、脚本、视觉提示词组成。`skill_registry.py` 只加载符合固定 manifest 契约的目录，按内容格式推荐默认 Skill；创建任务时把 `skill_id`、`version`、manifest 哈希、研究策略、系统提示词、质量规则和最终生成设置冻结到任务 JSON 中。后续修改 Skill 文件不会改变已创建任务，旧任务没有 `skill_snapshot` 时继续按原语义恢复。
 

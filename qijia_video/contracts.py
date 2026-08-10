@@ -505,11 +505,7 @@ class NewsResearchBrief(ContractModel):
     generated_at: str = Field(default="", max_length=64)
 
     @model_validator(mode="after")
-    def validate_news_evidence_mix(self):
-        if not any(
-            item.published_at or item.event_at for item in self.evidence
-        ):
-            raise ValueError("最新新闻简报必须记录至少一个事件或发布时间")
+    def validate_news_research(self):
         try:
             frozen_at = datetime.fromisoformat(self.as_of)
         except ValueError as exc:

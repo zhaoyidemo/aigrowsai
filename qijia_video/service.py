@@ -813,6 +813,10 @@ class QijiaVideoService:
         hosts.discard("")
         kinds = {item.source_kind for item in brief.evidence}
         warnings: list[str] = []
+        if not any(
+            item.published_at or item.event_at for item in brief.evidence
+        ):
+            warnings.append("来源未提供明确的事件或发布时间，时效性仍需确认")
         if len(hosts) < 2:
             warnings.append(
                 "本次新闻研究只有一个可追溯站点，未完成跨站点交叉验证"

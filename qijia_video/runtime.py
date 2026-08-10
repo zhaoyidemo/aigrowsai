@@ -86,6 +86,7 @@ class QijiaVideoRuntime:
             api_key=settings.OPENROUTER_API_KEY,
             base_url=settings.OPENROUTER_BASE_URL,
             model=settings.QIJIA_VIDEO_SCRIPT_MODEL,
+            research_model=settings.QIJIA_VIDEO_RESEARCH_MODEL,
         )
         storyboard_provider = OpenRouterStoryboardProvider(
             api_key=settings.OPENROUTER_API_KEY,
@@ -219,6 +220,8 @@ class QijiaVideoRuntime:
             "module": "qijia_video",
             "mode": "skill-video-platform",
             "script_provider": self.script_provider.name,
+            "script_model": self.script_provider.model,
+            "research_model": self.script_provider.research_model,
             "storyboard_provider": self.storyboard_provider.name,
             "image_provider": self.image_provider.name,
             "tts_provider": self.tts_provider.name,

@@ -36,7 +36,7 @@ from qijia_video.prompts import (
 SCRIPT_PROMPT_VERSION = "qijia_script_v13_narrative_progression"
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v8_max_reasoning"
 PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_research_v1"
-NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v4"
+NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v5"
 OPENROUTER_REASONING_EFFORT = "max"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 PERSON_RESEARCH_MAX_COMPLETION_TOKENS = 48_000
@@ -907,12 +907,14 @@ class OpenRouterScriptProvider:
         api_key: str,
         base_url: str,
         model: str,
+        research_model: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout_seconds: float = 300.0,
     ):
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "https://openrouter.ai/api").strip()
         self.model = str(model or "").strip()
+        self.research_model = str(research_model or self.model).strip()
         self.transport = transport
         self.timeout_seconds = max(10.0, float(timeout_seconds))
 
@@ -921,6 +923,7 @@ class OpenRouterScriptProvider:
         return bool(
             self.api_key
             and self.model
+            and self.research_model
             and self.base_url.startswith("https://")
         )
 
@@ -992,7 +995,7 @@ class OpenRouterScriptProvider:
         response = await _openrouter_json_request(
             api_key=self.api_key,
             base_url=self.base_url,
-            model=self.model,
+            model=self.research_model,
             messages=[
                 {
                     "role": "system",
@@ -1088,7 +1091,7 @@ class OpenRouterScriptProvider:
         as_of: str = "",
         on_usage: UsageRecorder | None = None,
     ) -> NewsResearchBrief:
-        """Research current news and require at least one cited, timed source."""
+        """Research current news and require at least one cited source."""
 
         if not self.configured:
             raise ProviderUnavailable(
@@ -1117,7 +1120,8 @@ class OpenRouterScriptProvider:
                 if research_prompt.strip()
                 else ""
             )
-            + "至少形成一条与本次检索注释匹配、可追溯且带发布时间或事件时间的证据。"
+            + "至少形成一条与本次检索注释匹配且可追溯的证据。"
+            "能确认页面发布时间或事件发生时间时必须填写；不能确认时留空并写入 uncertainties。"
             "优先同时检索官方或原始材料与可信独立来源，但不得为了凑站点而采用低质量转载；"
             "只有一个可追溯站点、缺少官方材料或缺少独立报道时不得猜测，必须写入 uncertainties。"
             "每条 evidence 只写来源能够直接支持的一个事实；claim 必须是非空事实描述，"
@@ -1133,7 +1137,7 @@ class OpenRouterScriptProvider:
         response = await _openrouter_json_request(
             api_key=self.api_key,
             base_url=self.base_url,
-            model=self.model,
+            model=self.research_model,
             messages=[
                 {
                     "role": "system",
@@ -1145,7 +1149,7 @@ class OpenRouterScriptProvider:
                 {"role": "user", "content": prompt},
             ],
             label="最新新闻研究",
-            schema_name="recent_news_research_v4",
+            schema_name="recent_news_research_v5",
             response_schema=_NEWS_RESEARCH_RESPONSE_SCHEMA,
             max_completion_tokens=NEWS_RESEARCH_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,
@@ -1345,16 +1349,6 @@ class OpenRouterScriptProvider:
                 message,
                 diagnostics,
             )
-        if accepted_timed_evidence_count == 0:
-            diagnostics["detail"] = (
-                f"accepted_evidence_count={len(grounded_evidence)}，"
-                "accepted_timed_evidence_count=0"
-            )
-            raise ResearchEvidenceUnavailable(
-                "检索证据缺少事件或发布时间",
-                diagnostics,
-            )
-
         def bounded_text(key: str, maximum: int) -> str:
             value = response.data.get(key)
             return value.strip()[:maximum] if isinstance(value, str) else ""
@@ -1386,6 +1380,10 @@ class OpenRouterScriptProvider:
                 system_uncertainties.append(message)
 
         source_kinds = {item["source_kind"] for item in grounded_evidence}
+        if accepted_timed_evidence_count == 0:
+            add_system_uncertainty(
+                "来源未提供明确的事件或发布时间，时效性请在脚本审核时确认。"
+            )
         if len(source_hosts) < 2:
             add_system_uncertainty(
                 "本次研究只有一个可追溯站点，尚未完成跨站点交叉验证。"
