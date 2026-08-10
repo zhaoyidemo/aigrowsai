@@ -30,7 +30,8 @@ from qijia_video.tts_options import (
 SCHEMA_VERSION = "1.0"
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_VISUAL_STYLE_ID = "content-skill-default"
-DEFAULT_PROMPT_WRITING_PROFILE_ID = "structured-multimodal"
+H3_PROMPT_WRITING_PROFILE_ID = "h3-prompt-writing"
+DEFAULT_PROMPT_WRITING_PROFILE_ID = H3_PROMPT_WRITING_PROFILE_ID
 SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-0-pro-fast-251015"
 SEEDANCE_RETIRED_MODEL = "doubao-seedance-1-5-pro-251215"
 SEEDANCE_FLAGSHIP_MODEL = "doubao-seedance-2-0-260128"
@@ -733,6 +734,9 @@ class ContentSkillSnapshot(ContractModel):
     research_mode: SkillResearchMode = SkillResearchMode.NONE
     research_prompt: str = Field(default="", max_length=12000)
     script_system_prompt: str = Field(min_length=1, max_length=4000)
+    # Content Skills define what may be shown, never how it should be styled
+    # or animated. Old frozen jobs omit this field and remain readable.
+    visual_policy: str = Field(default="", max_length=3200)
     policy_ids: list[str] = Field(default_factory=list, max_length=30)
     quality_rules: list[str] = Field(default_factory=list, max_length=30)
     output_schema: Literal["script_draft_v2"] = "script_draft_v2"
@@ -792,7 +796,7 @@ class PromptWritingProfileSnapshot(ContractModel):
 
 
 class GenerationSettings(ContractModel):
-    """创建任务时冻结的可实验生成参数。"""
+    """创建任务时冻结的生成参数；视觉编排方法由系统固定。"""
 
     skill_id: str = Field(
         default="",
@@ -829,6 +833,8 @@ class GenerationSettings(ContractModel):
         min_length=1,
         max_length=8000,
     )
+    # Persisted for historical task recovery and as the selected style's
+    # internal director resource. New API callers may not override it.
     seedance_prompt: str = Field(
         default=DEFAULT_SEEDANCE_PROMPT,
         min_length=1,

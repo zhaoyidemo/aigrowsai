@@ -104,8 +104,8 @@ DEFAULT_SCRIPT_PROMPT = _skill_prompt(
     _LEGACY_DEFAULT_SCRIPT_PROMPT,
 )
 DEFAULT_SEEDANCE_PROMPT = _skill_prompt(
-    "explain-expert-view",
-    "visual-prompt.md",
+    "../visual_styles/content-skill-default",
+    "director-prompt.md",
     _LEGACY_DEFAULT_SEEDANCE_PROMPT,
 )
 
@@ -113,4 +113,4 @@ DEFAULT_SEEDANCE_PROMPT = _skill_prompt(
 SCRIPT_OUTPUT_CONTRACT = """【系统输出格式】
 输出严格 JSON，不要 Markdown。字段为 schema_version、video_title、cover_text、hook、closing、caption、hashtags、beats。schema_version 固定为 "2.0"。beats 按语义自然划分为 5-8 段，依次使用 id n01、n02……；第一段 role 为 hook，最后一段为 closing，中间按内容使用 suspense、context、reframe、explanation、example 或 application。每段包含 id、role、narration、visual_direction、on_screen_text、source_refs、quote_ref。
 
-narration 是唯一会送入 TTS 的口播，所有 narration 合计字数遵循系统在本任务末尾追加的语速目标；visual_direction 只描述画面中可见的人物、动作、场景与情绪，不包含字幕、文字、Logo 或排版指令；on_screen_text 是由 Remotion 后期叠加的少量强调文字，不会送入 TTS，也不会送给画面模型，不需要时填空字符串。每段 source_refs 至少填写一个明确列出的可用 fact/quote ID，绝不能填写 source ID 或自行创造 ID；没有直接引文时 quote_ref 填 null。hook 与第一段 narration 相同，closing 与最后一段 narration 相同；hashtags 输出 3-5 个不带 # 的词。"""
+narration 是唯一会送入 TTS 的口播，所有 narration 合计字数遵循系统在本任务末尾追加的语速目标；visual_direction 只写本段必须被观众看懂的可见语义，包括主体、关系、变化或结果，不规定画风、色彩、材质、构图、景别、运镜、连续性方案，也不包含字幕、文字、Logo 或排版指令；on_screen_text 是由 Remotion 后期叠加的少量强调文字，不会送入 TTS，也不会送给画面模型，不需要时填空字符串。每段 source_refs 至少填写一个明确列出的可用 fact/quote ID，绝不能填写 source ID 或自行创造 ID；没有直接引文时 quote_ref 填 null。hook 与第一段 narration 相同，closing 与最后一段 narration 相同；hashtags 输出 3-5 个不带 # 的词。"""

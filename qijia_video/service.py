@@ -28,6 +28,7 @@ from qijia_video.contracts import (
     DouyinPlaybackSnapshot,
     FirstFrameCandidate,
     GenerationSettings,
+    H3_PROMPT_WRITING_PROFILE_ID,
     JobState,
     InterpretationBoundary,
     NewsResearchBrief,
@@ -811,7 +812,6 @@ class QijiaVideoService:
             frozen_settings, visual_style_snapshot = (
                 self.visual_style_registry.freeze(
                     frozen_settings,
-                    seedance_prompt_explicit=seedance_prompt_explicit,
                 )
             )
             (
@@ -820,6 +820,15 @@ class QijiaVideoService:
             ) = self.prompt_writing_profile_registry.freeze(frozen_settings)
         except (SkillRegistryError, VisualStyleRegistryError) as exc:
             raise QualityGateFailed(str(exc)) from exc
+        if (
+            seedance_prompt_explicit
+            and prompt_writing_profile_snapshot.profile_id
+            == H3_PROMPT_WRITING_PROFILE_ID
+        ):
+            raise QualityGateFailed(
+                "H3 提示词编排已统一接管视觉导演设置；"
+                "请选择视觉表现，不要再提交 seedance_prompt"
+            )
         now = timestamp()
         draft = VideoJob(
             id="pending",
@@ -1383,7 +1392,6 @@ class QijiaVideoService:
         script: ScriptDraft,
         expected_revision: int,
         actor: Actor,
-        seedance_prompt: str | None = None,
         tts_voice_id: str | None = None,
         tts_speed_ratio: float | None = None,
     ) -> VideoJob:
@@ -1411,12 +1419,6 @@ class QijiaVideoService:
             ):
                 raise QualityGateFailed("当前脚本缺少有效的自动审核结果")
         current_settings = self._generation_settings(job)
-        seedance_prompt_changed = (
-            seedance_prompt is not None
-            and seedance_prompt != current_settings.seedance_prompt
-        )
-        if seedance_prompt is not None:
-            current_settings.seedance_prompt = seedance_prompt
         tts_voice_changed = (
             tts_voice_id is not None
             and tts_voice_id != current_settings.tts_voice_id
@@ -1429,9 +1431,7 @@ class QijiaVideoService:
         )
         if tts_speed_ratio is not None:
             current_settings.tts_speed_ratio = tts_speed_ratio
-        settings_changed = (
-            seedance_prompt_changed or tts_voice_changed or tts_speed_changed
-        )
+        settings_changed = tts_voice_changed or tts_speed_changed
         if not script_changed and not settings_changed:
             return job
         job.generation_settings = current_settings
@@ -1439,7 +1439,7 @@ class QijiaVideoService:
             job,
             script,
             review,
-            allow_visual_reuse=not seedance_prompt_changed,
+            allow_visual_reuse=True,
         )
         return await self._save_job(job, actor)
 
@@ -1984,6 +1984,11 @@ class QijiaVideoService:
             job.visual_style_snapshot,
             job.prompt_writing_profile_snapshot,
             has_reference_image=cls._has_reference_image(job),
+            content_policy=(
+                job.skill_snapshot.visual_policy
+                if job.skill_snapshot
+                else ""
+            ),
         )
 
     @staticmethod

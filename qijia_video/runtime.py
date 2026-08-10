@@ -217,6 +217,8 @@ class QijiaVideoRuntime:
             missing.append("QIJIA_VIDEO_STORAGE=tos")
         generation_ready = not missing
         generation_defaults = GenerationSettings()
+        public_generation_defaults = generation_defaults.model_dump(mode="json")
+        public_generation_defaults.pop("seedance_prompt", None)
         return {
             "module": "qijia_video",
             "mode": "skill-video-platform",
@@ -236,7 +238,7 @@ class QijiaVideoRuntime:
             "real_generation_ready": generation_ready,
             "production_ready": generation_ready and self.storage.name == "tos",
             "missing_configuration": missing,
-            "generation_defaults": generation_defaults.model_dump(mode="json"),
+            "generation_defaults": public_generation_defaults,
             "content_skills": self.service.content_skills(),
             "visual_styles": self.service.visual_styles(),
             "prompt_writing_profile": self.service.prompt_writing_profile(),
@@ -387,7 +389,7 @@ class QijiaVideoRuntime:
                     "3 张驱动 8-10 秒 Seedance 1.0 Pro Fast 无声视频，"
                     "复杂镜头可单独升级 Seedance 2.0"
                 ),
-                "存在全局参考图时由参考图主导画风；无参考图时使用全片画面导演设定",
+                "参考图约束其中已定义的视觉属性；无参考图时由所选视觉表现完整定义画风",
                 "最终由 Remotion 按任务所选的 480P、720P 或 1080P 画质合成竖屏成片",
             ],
         }

@@ -64,10 +64,10 @@ test('content Skills select versioned expert or recent-news workflows', () => {
 
 test('visual styles are selected and frozen independently from content Skills and models', () => {
   assert.match(page, /id="visual-style"/);
-  assert.match(page, /视觉风格与内容 Skill、生成模型相互独立/);
-  assert.match(page, /内部提示词方法会自动补齐结构，不改变 Seedream、Seedance 或其他 Provider/);
+  assert.match(page, /只决定画面采用什么艺术语言/);
+  assert.match(page, /不改写内容语义，也不直接编排镜头/);
   assert.match(app, /DEFAULT_VISUAL_STYLE_ID = 'content-skill-default'/);
-  assert.match(app, /function visualStyleGenerationDefaults/);
+  assert.doesNotMatch(app, /function visualStyleGenerationDefaults/);
   assert.match(app, /visual_style_id: requestedStyle\.style_id/);
   assert.match(app, /visual_style_version: requestedStyle\.version/);
   assert.match(app, /job\.visual_style_snapshot\?\.display_name/);
@@ -77,6 +77,7 @@ test('visual styles are selected and frozen independently from content Skills an
 test('the automatic prompt-writing profile is visible without becoming another selector', () => {
   assert.match(page, /id="prompt-profile-name"/);
   assert.match(page, /id="prompt-profile-version">自动启用/);
+  assert.match(page, /H3 是唯一编排层/);
   assert.match(page, /id="job-generation-methods"/);
   assert.match(app, /function promptWritingProfile/);
   assert.match(app, /state\.capabilities\?\.prompt_writing_profile/);
@@ -282,8 +283,8 @@ test('workflow exposes three videos and configurable image chapters with action 
   assert.match(app, /remotion_render: 8/);
   assert.match(app, /remotion_normalize: 8/);
   assert.match(page, /id="next-action"/);
-  assert.match(page, /3 张继续生成 8-10 秒、所选画质的 AI 视频/);
-  assert.match(page, /其余按所选动态图片数量直接进入成片/);
+  assert.match(page, /AI 视频始终保持 3 段/);
+  assert.match(page, /可选 2–10 段，默认 10 段/);
 });
 
 test('video quality is selectable and frozen into each new task', () => {
@@ -365,7 +366,7 @@ test('AI shots are visible storyboard cards with isolated version controls', () 
 });
 
 test('final video mixes generated videos and motion images without narration text cards', () => {
-  assert.match(page, /口播原句不会作为画面文字/);
+  assert.match(page, /屏幕文字由 Remotion 后期排版，不会让 AI 直接画字/);
   assert.match(renderer, /playbackRate=\{playbackRate\}/);
   assert.match(renderer, /assetDurationSeconds/);
   assert.match(renderer, /translate3d/);
@@ -456,24 +457,22 @@ test('person viewpoint flow starts a real job and polling resumes after refresh'
   assert.match(app, /fetchTask\(job\.last_run_task_id\)/);
 });
 
-test('script and Seedance prompts are configurable without exposing transport contracts', () => {
+test('script prompt stays configurable while H3 exclusively owns visual prompting', () => {
   assert.match(page, /id="script-generation-prompt"/);
-  assert.match(page, /id="seedance-generation-prompt"/);
+  assert.doesNotMatch(page, /id="seedance-generation-prompt"/);
+  assert.doesNotMatch(page, /id="job-seedance-prompt"/);
   assert.match(page, /来源卡和 JSON 输出结构由系统自动附加/);
-  assert.match(page, /上传参考图后，由参考图接管画风与人物造型/);
-  assert.match(page, /为每个视觉章节生成 1 张画面/);
-  assert.match(page, /id="job-seedance-prompt"/);
+  assert.match(page, /视觉提示词由上方显示的 H3 方法统一编排/);
   assert.match(app, /generation_settings: generationSettings/);
-  assert.match(app, /seedance_prompt: seedancePrompt/);
+  assert.doesNotMatch(app, /seedance_prompt: seedancePrompt/);
+  assert.doesNotMatch(app, /job-seedance-prompt/);
   assert.match(app, /video_resolution: videoResolution/);
   assert.match(app, /restore-prompt-defaults/);
   assert.match(app, /legacyFixedStructure/);
-  assert.match(app, /legacySeedanceStyle/);
   assert.match(app, /legacyLongScript/);
-  assert.match(app, /legacyIndependentAnimation/);
   assert.match(app, /legacySingleTrackScript/);
   assert.match(app, /legacyPreRetentionHook/);
-  assert.match(app, /legacyPreDirectorPrompt/);
+  assert.match(app, /legacyScriptDirectorLayer/);
   assert.match(app, /降低 2 秒流失率、提高 5 秒完播率/);
   assert.match(app, /贯穿全片的可见变化/);
 });

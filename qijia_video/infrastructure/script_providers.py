@@ -34,7 +34,7 @@ from qijia_video.prompts import (
 
 
 SCRIPT_PROMPT_VERSION = "qijia_script_v13_narrative_progression"
-STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v10_structured_multimodal"
+STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v11_h3_orchestrated"
 PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_research_v1"
 NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v5"
 OPENROUTER_REASONING_EFFORT = "high"
@@ -245,9 +245,33 @@ _STORYBOARD_RESPONSE_SCHEMA = {
                         "type": "array",
                         "items": {"type": "string"},
                     },
-                    "visual_intent": {"type": "string"},
-                    "first_frame_prompt": {"type": "string"},
-                    "motion_prompt": {"type": "string"},
+                    "visual_intent": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 600,
+                        "description": (
+                            "一句内容语义目标，只写必须看懂的主体、关系、"
+                            "变化或结果，不写风格、构图、运镜或方法说明"
+                        ),
+                    },
+                    "first_frame_prompt": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1800,
+                        "description": (
+                            "可直接提交图片模型的自包含最终首帧提示词，"
+                            "完整落实统一基础规格，不复述方法说明"
+                        ),
+                    },
+                    "motion_prompt": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1800,
+                        "description": (
+                            "video 写可直接提交 I2V 的最终动作提示词；"
+                            "image 只写 Remotion 后期取景方向"
+                        ),
+                    },
                 },
                 "required": [
                     "segment_id",
@@ -1802,35 +1826,37 @@ class OpenRouterStoryboardProvider:
             ],
         }, ensure_ascii=False)
         prompt = (
-            f"把下面的完整脚本设计成一条连续的竖屏视觉叙事。脚本已经被确定性地分成 {shot_count} 个"
-            "视觉章节，每章可能承载一个或多个相邻叙事段；不得遗漏任何叙事段。严格遵循统一基础"
-            "风格，并在内容允许时复用同一核心主体、空间和关键物件；如果出现人物，其外貌、服装"
-            "与身份必须连续。每个章节仍须单独成立、无需依赖字幕才能看懂。\n\n"
+            "严格执行下方【统一基础规格】中的唯一提示词编排方法，不引入或叠加"
+            "第二套导演方法。\n\n"
+            f"把完整脚本规划成一条连续的竖屏视觉叙事。脚本已确定性地分成 {shot_count} 个"
+            "章节，每章可能承载一个或多个相邻叙事段；不得遗漏、合并或重排。先在内部建立"
+            "全片主体、空间、关键物件和状态变化，再逐章推进。相邻章节可以承接同一动作的"
+            "不同阶段、景别或视角，但不能重复同一构图或重新发明主体。\n\n"
             "各章媒介已经根据真实旁白时长确定，不得自行更改："
             + "；".join(
                 f"第 {index} 章为 {visual_type}"
                 for index, visual_type in enumerate(visual_types, 1)
             )
-            + "。image 章节要设计有景深、可供缓慢推进或横移的静态构图；video 章节"
-            "只安排一个清楚可信的动作和一种克制运镜。\n\n"
-            "同一个叙事段可能连续分配给多个视觉章节；这些章节必须沿时间顺序设计成"
-            "不同动作阶段、景别或视角，彼此承接但不得重复同一构图。\n\n"
-            "第一章同时承担抖音开场：首帧就要看见正在发生的冲突、反常识结果或关键选择，"
-            "不能先给空镜、主体入场或环境介绍。动作从第一帧立即开始，前 2 秒内让主体关系"
-            "和矛盾一眼可懂，前 5 秒内通过动作反应或构图变化再提供一层新信息；画面不能依赖"
-            "字幕解释，也不能用夸张惊吓、焦虑表演或虚假危机吸引注意。\n\n"
-            "优先使用每段给出的 visual_direction，把同一章内相邻段落合并成一个清楚、可拍摄的视觉动作。"
-            "on_screen_text 由 Remotion 后期叠加，只帮助理解编辑意图，绝不能让图片或视频模型生成它。\n\n"
-            "first_frame_prompt 只写首帧能看见的主体、动作起点、场景、前中后景、构图、"
-            "光线和色彩；motion_prompt 对图片章节写适合 Remotion 的取景方向，对视频章节"
-            "只写从首帧开始的自然动作、镜头运动和结尾状态。不得要求出现文字、字幕、"
-            "书写内容、Logo、界面、名人或真实品牌，避免逐字图解口播。统一基础风格只是"
-            "全片视觉边界，各镜头字段不要机械重复它；如果基础风格声明参考图优先，就不要"
-            "另行发明艺术媒介、配色、材质或人物造型。\n\n"
+            + "。image 章节需要首帧与后期取景方向；video 章节需要首帧和可直接用于"
+            "首帧驱动 I2V 的 motion_prompt，具体写法完全服从统一基础规格。\n\n"
+            "第一章直接处在冲突、反常识结果或关键选择中，不先用空镜、主体入场或环境介绍；"
+            "动作从第一帧发生，前 2 秒让主体关系和矛盾可见，前 5 秒出现第二层可见信息。"
+            "钩子必须来自内容本身，不能用"
+            "夸张惊吓、焦虑表演或虚假危机。\n\n"
+            "字段职责必须严格分离：visual_intent 只用一句话写观众必须看懂的主体、关系、"
+            "变化或结果，不写画风、色彩、材质、构图、景别、运镜和通用禁用项。"
+            "first_frame_prompt 是可直接发送给图片模型的自包含正向提示词，按统一基础规格"
+            "完整落实本章画面。motion_prompt 对 video 是可直接发送给 I2V 模型的提示词，"
+            "对 image 只写后期取景方向。不要在这些字段里复述方法说明、字段标签或整段"
+            "通用限制，系统会在媒体提交前统一附加一次硬边界。\n\n"
+            "每段 visual_direction 只提供内容语义。你负责依据统一基础规格把语义编译成"
+            "完整视觉提示词；on_screen_text 只供后期排版参考，绝不能变成画内文字。"
+            "如果基础规格包含参考素材规则，只让参考图约束其中已经定义的视觉属性，不得让"
+            "参考图覆盖事实、安全和本章语义。\n\n"
             "严格复制下面 JSON 骨架，只填写三个空字符串字段；不得新增、删除、合并或"
             "重排 shots，不得修改 segment_id 或 beat_ids。最终只返回这一个 JSON 对象：\n"
             f"{output_skeleton}\n\n"
-            f"【统一基础风格】{base_style}\n"
+            f"【统一基础规格】{base_style}\n"
             f"【{shot_count} 个视觉章节】\n"
             + "\n".join(
                 (
@@ -1854,14 +1880,14 @@ class OpenRouterStoryboardProvider:
                 {
                     "role": "system",
                     "content": (
-                        "你是知识短视频的分镜导演。"
+                        "你是执行统一基础规格的 H3 视觉提示词编排器。"
                         "只返回符合要求的 JSON，不在画面中设计任何可读文字。"
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
             label="分镜生成",
-            schema_name="qijia_storyboard_v3",
+            schema_name="qijia_storyboard_v4",
             response_schema=_STORYBOARD_RESPONSE_SCHEMA,
             max_completion_tokens=STORYBOARD_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,

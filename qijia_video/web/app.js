@@ -177,7 +177,7 @@ function isNarrationRevisionFailure(job) {
 
 function generationDefaults() {
   return state.capabilities?.generation_defaults || {
-    script_prompt: '', seedance_prompt: '', video_resolution: '1080p',
+    script_prompt: '', video_resolution: '1080p',
     seedance_model: 'doubao-seedance-1-0-pro-fast-251015',
     visual_style_id: DEFAULT_VISUAL_STYLE_ID,
     image_count: 10, shot_count: 13,
@@ -265,10 +265,7 @@ function selectContentSkill(skillId, {resetPrompts = false} = {}) {
   $('#content-skill').value = selected.skill_id;
   updateContentSkillIntake();
   if (resetPrompts) {
-    setPromptFields(visualStyleGenerationDefaults(
-      selected.skill_id,
-      selectedVisualStyle()?.style_id,
-    ));
+    setPromptFields(skillGenerationDefaults(selected.skill_id));
   }
 }
 
@@ -290,14 +287,6 @@ function visualStyle(styleId = '') {
 
 function selectedVisualStyle() {
   return visualStyle($('#visual-style')?.value || '');
-}
-
-function visualStyleGenerationDefaults(skillId = '', styleId = '') {
-  const defaults = skillGenerationDefaults(skillId);
-  const stylePrompt = String(
-    visualStyle(styleId)?.generation_defaults?.seedance_prompt || '',
-  ).trim();
-  return stylePrompt ? {...defaults, seedance_prompt: stylePrompt} : defaults;
 }
 
 function updateVisualStyleDescription() {
@@ -325,12 +314,12 @@ function promptWritingProfile() {
 
 function renderPromptWritingProfile() {
   const profile = promptWritingProfile();
-  $('#prompt-profile-name').textContent = profile?.display_name || '结构化多模态提示词';
+  $('#prompt-profile-name').textContent = profile?.display_name || 'H3 提示词编排';
   $('#prompt-profile-version').textContent = profile?.version
     ? '自动启用 · v' + profile.version
     : '自动启用';
   $('#prompt-profile-description').textContent = profile?.description
-    || '系统会自动把视觉意图整理成分镜、首帧和视频提示词，不需要手动选择。';
+    || 'H3 是唯一编排层：统一生成分镜、首帧和首帧驱动视频提示词。';
 }
 
 const SEEDANCE_EFFICIENT_MODEL = 'doubao-seedance-1-0-pro-fast-251015';
@@ -557,12 +546,10 @@ function taskSeedanceCost(task) {
 }
 
 function setPromptFields(settings) {
-  const defaults = visualStyleGenerationDefaults(
+  const defaults = skillGenerationDefaults(
     settings?.skill_id || $('#content-skill')?.value,
-    settings?.visual_style_id || $('#visual-style')?.value,
   );
   $('#script-generation-prompt').value = settings?.script_prompt || defaults.script_prompt || '';
-  $('#seedance-generation-prompt').value = settings?.seedance_prompt || defaults.seedance_prompt || '';
 }
 
 function setResolutionField(settings) {
@@ -640,28 +627,21 @@ function initializePromptFields() {
   renderContentSkillSelector(selectedSkillId);
   renderVisualStyleSelector(selectedStyleId);
   renderPromptWritingProfile();
-  const selectedDefaults = visualStyleGenerationDefaults(
-    selectedSkillId,
-    selectedStyleId,
-  );
+  const selectedDefaults = skillGenerationDefaults(selectedSkillId);
   const legacyFixedImageCount = !!saved
     && typeof saved === 'object'
     && !Number.isInteger(Number(saved.image_count));
   const legacyFixedStructure = saved?.script_prompt?.includes('【五段结构】')
     && saved.script_prompt.includes('n01 / hook');
-  const legacySeedanceStyle = saved?.seedance_prompt?.includes('写实电影感')
-    && saved.seedance_prompt.includes('中国家庭生活观察镜头');
   const legacyLongScript = saved?.script_prompt?.includes('目标时长约 60 秒')
     && saved.script_prompt.includes('230-300 个汉字');
-  const legacyIndependentAnimation = saved?.seedance_prompt?.includes('独立的心理隐喻')
-    && saved.seedance_prompt.includes('不依赖前后镜头');
   const legacySingleTrackScript = saved?.script_prompt?.includes('总字数控制在 200-240 个汉字')
     || saved?.script_prompt?.includes('中文口播脚本，目标时长约 45-50 秒');
   const legacyPreRetentionHook = saved?.script_prompt?.includes('这不是人物简介，而是对一个观点的深入展开')
     && saved.script_prompt.includes('不要写成模板化的五段论')
     && !saved.script_prompt.includes('降低 2 秒流失率、提高 5 秒完播率');
-  const legacyPreDirectorPrompt = saved?.script_prompt?.includes('降低 2 秒流失率、提高 5 秒完播率')
-    && !saved.script_prompt.includes('贯穿全片的可见变化');
+  const legacyScriptDirectorLayer = saved?.script_prompt?.includes('【导演思维】')
+    || saved?.script_prompt?.includes('贯穿全片的可见变化');
   const legacyPreTtsSpeedPrompt = saved?.script_prompt?.includes(
     '口播以 220-300 个汉字为建议区间',
   );
@@ -670,13 +650,10 @@ function initializePromptFields() {
     || legacyLongScript
     || legacySingleTrackScript
     || legacyPreRetentionHook
-    || legacyPreDirectorPrompt
+    || legacyScriptDirectorLayer
     || legacyPreTtsSpeedPrompt
   ) {
     saved.script_prompt = selectedDefaults.script_prompt;
-  }
-  if (legacySeedanceStyle || legacyIndependentAnimation) {
-    saved.seedance_prompt = selectedDefaults.seedance_prompt;
   }
   if (legacyFixedImageCount) {
     saved.image_count = selectedDefaults.image_count || 10;
@@ -691,10 +668,8 @@ function initializePromptFields() {
     || legacyLongScript
     || legacySingleTrackScript
     || legacyPreRetentionHook
-    || legacyPreDirectorPrompt
+    || legacyScriptDirectorLayer
     || legacyPreTtsSpeedPrompt
-    || legacySeedanceStyle
-    || legacyIndependentAnimation
     || legacyFixedImageCount
     || loadedLegacySettings
     || migratedVisualStyle
@@ -706,22 +681,15 @@ function generationSettingsPayload(skillOverride = '') {
   const requestedSkill = contentSkill(skillOverride || selected?.skill_id || '');
   const requestedStyle = selectedVisualStyle();
   const useEditorPrompts = !skillOverride || requestedSkill?.skill_id === selected?.skill_id;
-  const defaults = visualStyleGenerationDefaults(
-    requestedSkill?.skill_id || '',
-    requestedStyle?.style_id || '',
-  );
+  const defaults = skillGenerationDefaults(requestedSkill?.skill_id || '');
   const scriptPrompt = useEditorPrompts
     ? $('#script-generation-prompt').value.trim()
     : String(defaults.script_prompt || '').trim();
-  const seedancePrompt = useEditorPrompts
-    ? $('#seedance-generation-prompt').value.trim()
-    : String(defaults.seedance_prompt || '').trim();
   const videoResolution = $('#video-resolution').value;
   const rawImageCount = Number($('#image-count').value);
   const ttsVoiceId = normalizedTtsVoiceId($('#tts-voice-id').value);
   const ttsSpeedRatio = normalizedTtsSpeedRatio($('#tts-speed-ratio').value);
   if (!scriptPrompt) throw new Error('脚本生成提示词不能为空');
-  if (!seedancePrompt) throw new Error('全片画面导演设定不能为空');
   if (!['480p', '720p', '1080p'].includes(videoResolution)) {
     throw new Error('请选择有效的视频画质');
   }
@@ -742,7 +710,6 @@ function generationSettingsPayload(skillOverride = '') {
       visual_style_version: requestedStyle.version,
     } : {}),
     script_prompt: scriptPrompt,
-    seedance_prompt: seedancePrompt,
     video_resolution: videoResolution,
     seedance_model: defaultSeedanceModel(),
     image_count: rawImageCount,
@@ -2783,9 +2750,6 @@ function renderDetail() {
       `${normalizedTtsSpeedRatio(ttsSettings.tts_speed_ratio).toFixed(1)}x`,
       '确认后开始配音与画面生成',
     ].join(' · ');
-    $('#job-seedance-prompt').value = job.generation_settings?.seedance_prompt
-      || generationDefaults().seedance_prompt
-      || '';
     const mediaChoice = $('#prepare-media-first');
     if (mediaChoice.dataset.jobId !== job.id) {
       mediaChoice.dataset.jobId = job.id;
@@ -3330,8 +3294,6 @@ async function saveScriptEdits(job) {
   if (characterCount > SCRIPT_HARD_MAX_CHARS) {
     throw new Error(`纯旁白共 ${characterCount} 字，超过技术安全上限 ${SCRIPT_HARD_MAX_CHARS} 字`);
   }
-  const seedancePrompt = $('#job-seedance-prompt').value.trim();
-  if (!seedancePrompt) throw new Error('全片画面导演设定不能为空');
   const ttsVoiceId = normalizedTtsVoiceId($('#job-tts-voice-id').value);
   const ttsSpeedRatio = normalizedTtsSpeedRatio($('#job-tts-speed-ratio').value);
   const currentSettings = job.generation_settings || {
@@ -3339,18 +3301,14 @@ async function saveScriptEdits(job) {
     tts_speed_ratio: 1.0,
   };
   const scriptChanged = JSON.stringify(script) !== JSON.stringify(job.script);
-  const promptChanged = seedancePrompt !== (
-    job.generation_settings?.seedance_prompt || generationDefaults().seedance_prompt
-  );
   const voiceChanged = ttsVoiceId !== currentSettings.tts_voice_id;
   const speedChanged = ttsSpeedRatio !== normalizedTtsSpeedRatio(
     currentSettings.tts_speed_ratio,
   );
-  if (!scriptChanged && !promptChanged && !voiceChanged && !speedChanged) return {job};
+  if (!scriptChanged && !voiceChanged && !speedChanged) return {job};
   const updated = await api('PUT', `/jobs/${encodeURIComponent(job.id)}/script`, {
     expected_revision: job.revision,
     script,
-    seedance_prompt: seedancePrompt,
     tts_voice_id: ttsVoiceId,
     tts_speed_ratio: ttsSpeedRatio,
   });
@@ -3364,7 +3322,7 @@ $('#save-script-button').addEventListener('click', async () => {
     const saved = await saveScriptEdits(job);
     state.selectedJob = saved.job;
     await loadAll({selectJobId: job.id});
-    notify('完整脚本和画面导演设定已保存。');
+    notify('完整脚本和旁白设置已保存。');
   }
   catch (error) { notify(error.message, true); }
   finally { setBusy(false); }
@@ -4096,23 +4054,14 @@ $('#refresh-button').addEventListener('click', async () => {
   } catch (error) { notify(error.message, true); }
 });
 $('#script-generation-prompt').addEventListener('change', persistPromptFields);
-$('#seedance-generation-prompt').addEventListener('change', persistPromptFields);
 $('#content-skill').addEventListener('change', () => {
   const skill = selectedContentSkill();
   updateContentSkillIntake();
-  setPromptFields(visualStyleGenerationDefaults(
-    skill?.skill_id || '',
-    selectedVisualStyle()?.style_id || '',
-  ));
+  setPromptFields(skillGenerationDefaults(skill?.skill_id || ''));
   persistPromptFields();
 });
 $('#visual-style').addEventListener('change', () => {
-  const defaults = visualStyleGenerationDefaults(
-    selectedContentSkill()?.skill_id || '',
-    selectedVisualStyle()?.style_id || '',
-  );
   updateVisualStyleDescription();
-  $('#seedance-generation-prompt').value = defaults.seedance_prompt || '';
   persistPromptFields();
 });
 $('#video-resolution').addEventListener('change', persistPromptFields);
@@ -4125,12 +4074,11 @@ $('#image-count').addEventListener('change', (event) => {
   persistPromptFields();
 });
 $('#restore-prompt-defaults').addEventListener('click', () => {
-  setPromptFields(visualStyleGenerationDefaults(
+  setPromptFields(skillGenerationDefaults(
     selectedContentSkill()?.skill_id || '',
-    selectedVisualStyle()?.style_id || '',
   ));
   persistPromptFields();
-  notify('已恢复默认提示词。');
+  notify('已恢复默认脚本提示词。');
 });
 $('#reference-image-input').addEventListener('change', (event) => {
   setReferenceImage(event.target.files?.[0]);

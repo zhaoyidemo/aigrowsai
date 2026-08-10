@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "display_name": "人物观点解读",
   "input_mode": "person_viewpoint",
   "compatible_formats": [
@@ -18,7 +18,7 @@
   "research_mode": "person_viewpoint_optional",
   "script_system_prompt": "你是严谨的知识短视频主编。严格区分来源事实、人物原话、合理解释和编辑角度，只返回符合约定的有效 JSON。",
   "script_prompt_file": "references/script-prompt.md",
-  "visual_prompt_file": "references/visual-prompt.md",
+  "visual_policy_file": "references/visual-policy.md",
   "research_prompt_file": "references/research-prompt.md",
   "policy_ids": [
     "source-grounding",

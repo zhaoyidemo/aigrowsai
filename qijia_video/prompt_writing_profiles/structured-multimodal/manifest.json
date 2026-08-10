@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "display_name": "结构化多模态提示词",
   "description": "把叙事意图稳定编译为分镜、静态首帧和首帧驱动视频提示词，不绑定任何模型供应商。",
-  "default": true,
+  "default": false,
   "planning_framework_file": "references/planning-framework.md",
   "image_framework_file": "references/image-framework.md",
   "video_framework_file": "references/video-framework.md",

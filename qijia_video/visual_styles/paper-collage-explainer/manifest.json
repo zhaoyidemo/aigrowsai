@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "display_name": "编辑纸张拼贴",
   "description": "用高级杂志拼贴、半色调纸纹和可触摸的定格组装解释观点与知识。",
   "default": false,
@@ -10,8 +10,7 @@
   "motion_rules_file": "references/motion-rules.md",
   "negative_rules": [
     "不要变成儿童手工作业或廉价贴纸风",
-    "不要堆满无关装饰，每章只保留一个主要视觉隐喻",
-    "不要生成可读文字、数字、Logo、水印或界面"
+    "不要堆满无关装饰或使用互相竞争的纸张纹理"
   ],
   "tags": ["editorial", "collage", "explainer"]
 }

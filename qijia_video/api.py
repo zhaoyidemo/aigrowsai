@@ -166,11 +166,6 @@ class QuickSourceCardUpdateRequest(RevisionRequest):
 
 class ScriptUpdateRequest(RevisionRequest):
     script: ScriptDraft
-    seedance_prompt: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=3200,
-    )
     tts_voice_id: TtsVoiceId | None = None
     tts_speed_ratio: TtsSpeedRatio | None = None
 
@@ -713,7 +708,6 @@ async def update_script(
         body.script,
         body.expected_revision,
         actor_from_user(user),
-        seedance_prompt=body.seedance_prompt,
         tts_voice_id=body.tts_voice_id,
         tts_speed_ratio=body.tts_speed_ratio,
     )

@@ -12,7 +12,7 @@ description: 将教育、心理学或思想领域人物的观点转化为有来�
 1. 校验人物、观点、来源与解释边界。
 2. 对人物观点输入可选地联网补充有引用的研究简报；研究失败时保留警告并使用原始来源卡。已经核验的概念、书籍或研究来源卡不额外触发人物检索。
 3. 使用 [script-prompt.md](references/script-prompt.md) 生成严格的 `ScriptDraft v2`。
-4. 使用 [visual-prompt.md](references/visual-prompt.md) 统一分镜和视觉生成。
+4. 使用 [visual-policy.md](references/visual-policy.md) 约束可见语义的真实性与教育心理安全；画风由 Visual Style 提供，分镜、首帧和 I2V 提示词由固定 H3 编排层统一生成。
 5. 应用来源完整性、引语完整性、教育心理安全和未成年人安全规则。
 
 联网研究时遵循 [research-prompt.md](references/research-prompt.md)。

@@ -1,13 +1,15 @@
 {
   "schema_version": "1.0",
-  "version": "1.0.0",
-  "display_name": "当前默认风格",
-  "description": "沿用所选 Content Skill 的视觉导演设定，不额外叠加艺术媒介。",
+  "version": "1.1.0",
+  "display_name": "现代编辑插画",
+  "description": "成熟克制的现代编辑插画，以清晰层次、纸张颗粒和轻微景深承载知识叙事。",
   "default": true,
-  "director_prompt_file": null,
-  "storyboard_rules_file": null,
-  "image_rules_file": null,
-  "motion_rules_file": null,
-  "negative_rules": [],
-  "tags": ["compatible", "content-skill"]
+  "director_prompt_file": "references/director-prompt.md",
+  "storyboard_rules_file": "references/storyboard-rules.md",
+  "image_rules_file": "references/image-rules.md",
+  "motion_rules_file": "references/motion-rules.md",
+  "negative_rules": [
+    "避免写实摄影、光滑塑料 3D、廉价卡通和霓虹赛博朋克质感"
+  ],
+  "tags": ["editorial", "illustration", "explainer"]
 }

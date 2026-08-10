@@ -95,7 +95,11 @@ from qijia_video.infrastructure.video_providers import (
 from qijia_video.prompts import SCRIPT_HARD_MAX_CHARS, narration_char_count
 from qijia_video.service import QijiaVideoService, REQUIRED_PACKAGE_NAMES
 from qijia_video.skill_registry import default_skill_registry
-from qijia_video.visual_prompting import compile_video_prompt
+from qijia_video.visual_prompting import (
+    compile_first_frame_prompt,
+    compile_storyboard_base_style,
+    compile_video_prompt,
+)
 from qijia_video.visual_style_registry import (
     default_prompt_writing_profile_registry,
     default_visual_style_registry,
@@ -229,8 +233,8 @@ class QijiaVideoContractTests(unittest.TestCase):
         )
         expert = default_skill_registry.resolve("explain-expert-view")
         news = default_skill_registry.resolve("brief-recent-news")
-        self.assertEqual(expert.version, "1.1.0")
-        self.assertEqual(news.version, "1.2.1")
+        self.assertEqual(expert.version, "1.2.0")
+        self.assertEqual(news.version, "1.3.0")
         self.assertEqual(
             GenerationSettings().script_prompt,
             expert.script_prompt,
@@ -240,6 +244,13 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertIn("不要逐段独立创作后拼接", expert.script_prompt)
         self.assertIn("事实、分析、预测和价值判断", news.script_prompt)
         self.assertIn("不要逐段独立创作后拼接", news.script_prompt)
+        self.assertIn("医疗诊断", expert.visual_policy)
+        self.assertIn("新闻截图", news.visual_policy)
+        self.assertNotIn("2.5D", expert.visual_policy)
+        self.assertTrue(all(
+            "seedance_prompt" not in item["generation_defaults"]
+            for item in catalog
+        ))
 
     def test_visual_styles_and_prompt_method_are_provider_independent(self):
         catalog = default_visual_style_registry.public_catalog()
@@ -258,13 +269,18 @@ class QijiaVideoContractTests(unittest.TestCase):
             "papercraft-stop-motion"
         )
         profile = default_prompt_writing_profile_registry.resolve(
+            "h3-prompt-writing"
+        )
+        legacy_profile = default_prompt_writing_profile_registry.resolve(
             "structured-multimodal"
         )
-        self.assertEqual(collage.version, "1.0.0")
+        self.assertEqual(collage.version, "1.1.0")
         self.assertIn("编辑纸张拼贴", collage.director_prompt)
         self.assertIn("纸片", collage.motion_rules)
-        self.assertIn("4–7", papercraft.storyboard_rules)
-        self.assertIn("主体定义", profile.planning_framework)
+        self.assertIn("纸偶关节", papercraft.storyboard_rules)
+        self.assertIn("先判断输入模式", profile.planning_framework)
+        self.assertIn("I2V", profile.planning_framework)
+        self.assertIn("主体定义", legacy_profile.planning_framework)
         self.assertNotIn("MiniMax", profile.planning_framework)
         self.assertNotIn("Seedance", profile.planning_framework)
         maximum_shot = StoryboardShot(
@@ -284,10 +300,100 @@ class QijiaVideoContractTests(unittest.TestCase):
             has_reference_image=False,
         )
         self.assertLessEqual(len(maximum_prompt), 4000)
+        self.assertNotIn("视频提示词结构", maximum_prompt)
+        self.assertNotIn("风格动作语法", maximum_prompt)
+        maximum_frame_prompt = compile_first_frame_prompt(
+            "风" * 3200,
+            collage.snapshot(),
+            profile.snapshot(),
+            maximum_shot,
+            has_reference_image=True,
+        )
+        self.assertLessEqual(len(maximum_frame_prompt), 2000)
         VisualGenerationRequest(
             request_id="shot_01",
             prompt=maximum_prompt,
         )
+
+    def test_h3_keeps_content_style_and_reference_responsibilities_separate(self):
+        style = default_visual_style_registry.resolve(
+            "paper-collage-explainer"
+        ).snapshot()
+        profile = default_prompt_writing_profile_registry.resolve(
+            "h3-prompt-writing"
+        ).snapshot()
+        expert_policy = default_skill_registry.resolve(
+            "explain-expert-view"
+        ).visual_policy
+        news_policy = default_skill_registry.resolve(
+            "brief-recent-news"
+        ).visual_policy
+
+        expert_base = compile_storyboard_base_style(
+            style.director_prompt,
+            style,
+            profile,
+            has_reference_image=False,
+            content_policy=expert_policy,
+        )
+        news_base = compile_storyboard_base_style(
+            style.director_prompt,
+            style,
+            profile,
+            has_reference_image=False,
+            content_policy=news_policy,
+        )
+        self.assertNotEqual(expert_base, news_base)
+        self.assertIn("医疗诊断", expert_base)
+        self.assertIn("新闻截图", news_base)
+        self.assertIn("高级编辑纸张拼贴", expert_base)
+        self.assertIn("高级编辑纸张拼贴", news_base)
+
+        referenced = compile_storyboard_base_style(
+            style.director_prompt,
+            style,
+            profile,
+            has_reference_image=True,
+            content_policy=news_policy,
+        )
+        self.assertIn("参考图只约束", referenced)
+        self.assertIn("新闻截图", referenced)
+        self.assertIn("高级编辑纸张拼贴", referenced)
+        self.assertIn("参考素材已经确定的视觉属性", referenced)
+
+        shot = StoryboardShot(
+            shot_id="shot_01",
+            segment_id="n01",
+            narration_excerpt="测试",
+            visual_type="video",
+            visual_intent="展示一个可见变化",
+            first_frame_prompt="纸艺人物把手放在桌边，积木尚未完成。",
+            motion_prompt="手缓慢收回，孩子放稳最后一块积木，镜头轻推后停住。",
+        )
+        frame_prompt = compile_first_frame_prompt(
+            style.director_prompt,
+            style,
+            profile,
+            shot,
+            has_reference_image=False,
+        )
+        video_prompt = compile_video_prompt(
+            style.director_prompt,
+            style,
+            profile,
+            shot,
+            has_reference_image=False,
+        )
+        self.assertTrue(frame_prompt.startswith(shot.first_frame_prompt))
+        self.assertIn(shot.motion_prompt, video_prompt)
+        for meta_label in (
+            "H3 编排方法",
+            "首帧输出标准",
+            "视频提示词结构",
+            "风格动作语法",
+            "本镜头视觉意图",
+        ):
+            self.assertNotIn(meta_label, frame_prompt + video_prompt)
 
     def test_news_topic_is_a_research_request_not_a_verified_news_fact(self):
         card = NewsTopicInput(
@@ -492,13 +598,14 @@ class QijiaVideoContractTests(unittest.TestCase):
             SEEDANCE_RETIRED_MODEL,
         )
 
-    def test_default_seedance_style_is_a_continuous_hybrid_story(self):
+    def test_default_seedance_prompt_is_only_a_visual_style(self):
         prompt = GenerationSettings().seedance_prompt
-        self.assertIn("编辑插画动画", prompt)
-        self.assertIn("同一组虚构东亚家庭成员", prompt)
-        self.assertIn("始终一致", prompt)
-        self.assertIn("图片镜头", prompt)
+        self.assertIn("现代编辑插画视觉", prompt)
         self.assertIn("2.5D", prompt)
+        self.assertIn("米白", prompt)
+        self.assertNotIn("同一组虚构东亚家庭成员", prompt)
+        self.assertNotIn("视频镜头", prompt)
+        self.assertNotIn("医疗诊断", prompt)
 
     def test_subtitle_cues_are_normalized_and_limited_to_one_line(self):
         chunks = QijiaVideoService._split_subtitle_text(
@@ -520,10 +627,10 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertIn("具体场景冲突", prompt)
         self.assertIn("不得用“毁掉孩子”", prompt)
         self.assertIn("第一段画面从正在发生的动作", prompt)
-        self.assertIn("贯穿全片的可见变化", prompt)
-        self.assertIn("画面不能只是旁白的图解", prompt)
-        self.assertIn("结尾画面回应、完成或反转开场", prompt)
-        self.assertIn("不要额外输出导演说明", prompt)
+        self.assertIn("visual_direction 是内容语义", prompt)
+        self.assertIn("不负责画风、色彩、材质、构图、景别、运镜", prompt)
+        self.assertNotIn("【导演思维】", prompt)
+        self.assertNotIn("贯穿全片的可见变化", prompt)
         self.assertIn("先完成一版从头到尾自然连贯的完整口播", prompt)
         self.assertIn("每个叙事段只承担一个主要信息任务", prompt)
         self.assertIn("最后一段必须直接回应开场冲突和中心问题", prompt)
@@ -1372,7 +1479,8 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("不要写成模板化的五段论", prompt)
         self.assertIn("降低 2 秒流失率、提高 5 秒完播率", prompt)
         self.assertIn("强钩子设计", prompt)
-        self.assertIn("导演思维", prompt)
+        self.assertNotIn("【导演思维】", prompt)
+        self.assertIn("visual_direction 是内容语义", prompt)
         self.assertIn("可复用的判断框架", prompt)
         self.assertIn("具体、低压力、无需暴露隐私", prompt)
         self.assertIn("5-8 段", prompt)
@@ -2326,7 +2434,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("motion_prompt", prompt)
             self.assertIn("前 2 秒", prompt)
             self.assertIn("前 5 秒", prompt)
-            self.assertIn("不能先给空镜", prompt)
+            self.assertIn("不先用空镜", prompt)
             self.assertIn("连续的竖屏视觉叙事", prompt)
             self.assertNotIn("竖屏家庭微故事", prompt)
             self.assertNotIn("所有章节使用同一组虚构东亚家庭成员", prompt)
@@ -2999,7 +3107,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         job = await self.service.create_job(card.id, self.actor)
 
         self.assertEqual(job.skill_snapshot.skill_id, "explain-expert-view")
-        self.assertEqual(job.skill_snapshot.version, "1.1.0")
+        self.assertEqual(job.skill_snapshot.version, "1.2.0")
         self.assertEqual(job.skill_snapshot.research_mode.value, "none")
         self.assertEqual(
             job.generation_settings.skill_id,
@@ -3040,10 +3148,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.visual_style_snapshot.style_id,
             "paper-collage-explainer",
         )
-        self.assertEqual(job.visual_style_snapshot.version, "1.0.0")
+        self.assertEqual(job.visual_style_snapshot.version, "1.1.0")
         self.assertEqual(
             job.prompt_writing_profile_snapshot.profile_id,
-            "structured-multimodal",
+            "h3-prompt-writing",
         )
         self.assertEqual(
             job.generation_settings.visual_style_version,
@@ -3054,8 +3162,11 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.generation_settings.seedance_prompt,
         )
         compiled = self.service._storyboard_base_style(job)
-        self.assertIn("结构化多模态规划", compiled)
-        self.assertIn("视觉风格执行", compiled)
+        self.assertIn("唯一编排层", compiled)
+        self.assertIn("H3 编排方法", compiled)
+        self.assertIn("内容视觉策略", compiled)
+        self.assertIn("医疗诊断", compiled)
+        self.assertIn("视觉表现", compiled)
         self.assertIn("3–6", compiled)
         shot = StoryboardShot(
             shot_id="shot_01",
@@ -3067,8 +3178,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             motion_prompt="遮挡纸片滑开，主体保持稳定。",
         )
         frame_prompt = self.service._first_frame_prompt(job, shot)
-        self.assertIn("首帧提示词结构", frame_prompt)
-        self.assertIn("风格化首帧", frame_prompt)
+        self.assertTrue(frame_prompt.startswith(shot.first_frame_prompt))
+        self.assertNotIn("首帧提示词结构", frame_prompt)
+        self.assertNotIn("风格化首帧", frame_prompt)
         video_prompt = compile_video_prompt(
             job.generation_settings.seedance_prompt,
             job.visual_style_snapshot,
@@ -3076,25 +3188,36 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             shot,
             has_reference_image=False,
         )
-        self.assertIn("视频提示词结构", video_prompt)
-        self.assertIn("风格动作语法", video_prompt)
-        self.assertIn("不生成旁白或模型音频", video_prompt)
+        self.assertIn("唯一视觉基准", video_prompt)
+        self.assertIn(shot.motion_prompt, video_prompt)
+        self.assertIn("只生成无声画面", video_prompt)
+        self.assertNotIn("视频提示词结构", video_prompt)
+        self.assertNotIn("风格动作语法", video_prompt)
 
-        custom = await self.service.create_job(
-            card.id,
-            self.actor,
-            GenerationSettings(
-                visual_style_id="paper-collage-explainer",
-                seedance_prompt="自定义低饱和纸张拼贴导演设定。",
-            ),
-        )
-        self.assertEqual(
-            custom.generation_settings.seedance_prompt,
-            "自定义低饱和纸张拼贴导演设定。",
-        )
-        custom_compiled = self.service._storyboard_base_style(custom)
-        self.assertIn("自定义低饱和纸张拼贴", custom_compiled)
-        self.assertIn("视觉风格执行", custom_compiled)
+        with self.assertRaisesRegex(
+            QualityGateFailed,
+            "不要再提交 seedance_prompt",
+        ):
+            await self.service.create_job(
+                card.id,
+                self.actor,
+                GenerationSettings(
+                    visual_style_id="paper-collage-explainer",
+                    seedance_prompt="自定义低饱和纸张拼贴导演设定。",
+                ),
+            )
+
+        with self.assertRaisesRegex(
+            QualityGateFailed,
+            "新任务固定使用 H3",
+        ):
+            await self.service.create_job(
+                card.id,
+                self.actor,
+                GenerationSettings(
+                    prompt_writing_profile_id="structured-multimodal",
+                ),
+            )
 
         with self.assertRaisesRegex(QualityGateFailed, "未知视觉风格"):
             await self.service.create_job(
@@ -3431,9 +3554,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("家长", visual_text)
         self.assertNotIn("孩子", visual_text)
+        self.assertIn("新闻截图", produced.skill_snapshot.visual_policy)
         self.assertIn(
-            "科技与商业新闻",
-            produced.generation_settings.seedance_prompt,
+            "新闻截图",
+            self.service._storyboard_base_style(produced),
         )
 
     async def test_seedance_cost_keeps_submission_price_snapshot(self):
@@ -3913,12 +4037,11 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         card = await self.service.verify_source_card(
             card.id, card.revision, self.actor
         )
-        conflicting_style = "写实摄影，霓虹紫色灯光，真人电影质感。"
         job = await self.service.create_job(
             card.id,
             self.actor,
             GenerationSettings(
-                seedance_prompt=conflicting_style,
+                visual_style_id="paper-collage-explainer",
                 image_count=10,
             ),
         )
@@ -3933,13 +4056,16 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             set(provider.reference_image_urls),
             {"local://qijia-video/reference-images/test.png"},
         )
-        self.assertIn("参考图是画风", storyboard_provider.base_style)
-        self.assertNotIn(conflicting_style, storyboard_provider.base_style)
-        self.assertTrue(all("【视觉基准】" in prompt for prompt in provider.prompts))
-        self.assertTrue(all(conflicting_style not in prompt for prompt in provider.prompts))
+        self.assertIn("【参考素材】", storyboard_provider.base_style)
+        self.assertIn("参考图只约束", storyboard_provider.base_style)
+        self.assertIn("【内容视觉策略】", storyboard_provider.base_style)
+        self.assertIn("【视觉表现】", storyboard_provider.base_style)
+        self.assertIn("高级编辑纸张拼贴", storyboard_provider.base_style)
         self.assertTrue(all(
-            "【视觉基准】" in request.prompt
-            and conflicting_style not in request.prompt
+            "延续输入参考图" in prompt for prompt in provider.prompts
+        ))
+        self.assertTrue(all(
+            "唯一视觉基准" in request.prompt
             for request in job.visual_requests
         ))
 
@@ -4054,11 +4180,17 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             [request.request_id for request in job.visual_requests],
             video_shot_ids,
         )
-        self.assertIn("【抖音开场执行】", job.visual_requests[0].prompt)
-        self.assertTrue(all(
-            "【抖音开场执行】" not in request.prompt
-            for request in job.visual_requests[1:]
-        ))
+        first_video_shot = next(
+            shot for shot in job.storyboard_plan.shots
+            if shot.visual_type == "video"
+        )
+        self.assertIn("唯一视觉基准", job.visual_requests[0].prompt)
+        self.assertIn(
+            first_video_shot.motion_prompt,
+            job.visual_requests[0].prompt,
+        )
+        self.assertNotIn("【抖音开场执行】", job.visual_requests[0].prompt)
+        self.assertNotIn("视频提示词结构", job.visual_requests[0].prompt)
         self.assertEqual(len(job.video_tasks), 3)
         self.assertEqual(len(job.visual_versions), 3)
         self.assertTrue(all(
@@ -4157,9 +4289,11 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertTrue(all(
-            "【首帧驱动】" in request.prompt
-            and "【动作与运镜】" in request.prompt
-            and "不得新增任何文字" in request.prompt
+            request.prompt.startswith("输入首帧就是视频第一帧")
+            and "只生成无声画面" in request.prompt
+            and "不新增任何可读文字" in request.prompt
+            and "【首帧驱动】" not in request.prompt
+            and "【动作与运镜】" not in request.prompt
             for request in job.visual_requests
         ))
         self.assertTrue(all(
@@ -5145,7 +5279,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(current.fingerprint(), original.fingerprint())
         self.assertIn("原成片仍然保留", latest.error)
 
-    async def test_frontend_generation_settings_flow_into_both_providers(self):
+    async def test_frontend_supported_settings_flow_into_providers(self):
         class RecordingScriptProvider(TemplateScriptProvider):
             prompt = None
 
@@ -5197,7 +5331,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         settings = GenerationSettings(
             script_prompt="用更像真实对话的方式写脚本。",
-            seedance_prompt="低饱和纪录片风格，固定机位。",
+            visual_style_id="papercraft-stop-motion",
             video_resolution="1080p",
             tts_voice_id="zh_male_ruyayichen_saturn_bigtts",
             tts_speed_ratio=1.1,
@@ -5210,13 +5344,6 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("语速 1.1x", provider.prompt)
         self.assertIn("245-325 个汉字", provider.prompt)
 
-        job = await self.service.update_script(
-            job.id,
-            job.script,
-            job.revision,
-            self.actor,
-            seedance_prompt="自然窗光，手持纪录片风格。",
-        )
         job = await self.service.approve_script(
             job.id, job.revision, job.script_hash, self.actor
         )
@@ -5227,11 +5354,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(tts_provider.speed_ratio, 1.1)
         self.assertEqual(job.narration_manifest.speed_ratio, 1.1)
-        self.assertIn(
-            "自然窗光，手持纪录片风格。",
-            storyboard_provider.base_style,
-        )
-        self.assertIn("结构化多模态规划", storyboard_provider.base_style)
+        self.assertIn("H3 编排方法", storyboard_provider.base_style)
+        self.assertIn("精致手工纸艺定格", storyboard_provider.base_style)
+        self.assertIn("内容视觉策略", storyboard_provider.base_style)
         requests = job.visual_requests
         self.assertEqual(len(requests), 3)
         self.assertTrue(all(
@@ -5245,7 +5370,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             (1080, 1920),
         )
         self.assertTrue(all(
-            request.prompt.startswith("自然窗光，手持纪录片风格。")
+            request.prompt.startswith("输入首帧就是视频第一帧")
+            and "视频提示词结构" not in request.prompt
             for request in requests
         ))
         legacy = requests[0].model_copy(update={
@@ -5413,6 +5539,10 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             response.json()["data"]["generation_defaults"]["seedance_model"],
             SEEDANCE_EFFICIENT_MODEL,
         )
+        self.assertNotIn(
+            "seedance_prompt",
+            response.json()["data"]["generation_defaults"],
+        )
         skills = response.json()["data"]["content_skills"]
         self.assertEqual(
             {item["skill_id"] for item in skills},
@@ -5435,7 +5565,7 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         )
         self.assertEqual(
             response.json()["data"]["prompt_writing_profile"]["profile_id"],
-            "structured-multimodal",
+            "h3-prompt-writing",
         )
         style_response = allowed.get("/api/qijia-video/visual-styles")
         self.assertEqual(style_response.status_code, 200)

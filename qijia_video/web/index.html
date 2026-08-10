@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.19.1">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.20.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -112,21 +112,21 @@
           <label class="video-quality-setting skill-setting" for="content-skill">
             <span class="video-quality-copy">
               <strong>内容 Skill</strong>
-              <small id="content-skill-description">选择一套有版本、研究规则、提示词和质量边界的内容工作流。</small>
+              <small id="content-skill-description">决定讲什么、依据什么，以及哪些内容不能被视觉化；不再决定画风和运镜。</small>
             </span>
             <select id="content-skill" aria-label="内容 Skill"></select>
           </label>
           <label class="video-quality-setting visual-style-setting" for="visual-style">
             <span class="video-quality-copy">
               <strong>视觉表现</strong>
-              <small id="visual-style-description">视觉风格与内容 Skill、生成模型相互独立；选择后会统一指导分镜、首帧和视频动作。</small>
+              <small id="visual-style-description">只决定画面采用什么艺术语言；不改写内容语义，也不直接编排镜头。</small>
             </span>
             <select id="visual-style" aria-label="视觉表现"></select>
           </label>
           <section class="video-quality-setting prompt-profile-setting" aria-labelledby="prompt-profile-label">
             <span class="video-quality-copy">
-              <strong id="prompt-profile-label">提示词方法</strong>
-              <small id="prompt-profile-description">系统会自动把视觉意图整理成分镜、首帧和视频提示词，不需要手动选择。</small>
+              <strong id="prompt-profile-label">提示词总编排</strong>
+              <small id="prompt-profile-description">H3 是唯一编排层：统一生成分镜、首帧和首帧驱动视频提示词，不需要手动选择。</small>
             </span>
             <span class="prompt-profile-value" aria-live="polite">
               <strong id="prompt-profile-name">正在读取当前方法</strong>
@@ -261,18 +261,14 @@
             </div>
           </form>
           <details id="generation-prompt-settings" class="advanced-settings prompt-settings global-prompt-settings">
-            <summary>调整脚本与视觉导演提示词（实验用）</summary>
-            <p class="field-hint">默认值可以直接使用。修改后会用于下一条新建视频，并保存在当前浏览器中；系统会为每个视觉章节生成 1 张画面，其中 3 张继续生成 8-10 秒、所选画质的 AI 视频，其余按所选动态图片数量直接进入成片。</p>
+            <summary>调整脚本生成提示词（实验用）</summary>
+            <p class="field-hint">默认值可以直接使用。修改后会用于下一条新建视频，并保存在当前浏览器中；视觉提示词由上方显示的 H3 方法统一编排，避免多套导演规则互相覆盖。</p>
             <label>脚本生成提示词
               <textarea id="script-generation-prompt" rows="11" maxlength="8000" spellcheck="false"></textarea>
               <span class="field-hint">来源卡和 JSON 输出结构由系统自动附加；修改只影响当前所选 Skill 的下一条新任务。</span>
             </label>
-            <label>全片画面导演设定
-              <textarea id="seedance-generation-prompt" rows="8" maxlength="3200" spellcheck="false"></textarea>
-              <span class="field-hint">默认内容来自上方所选视觉表现，可继续微调；内部提示词方法会自动补齐结构，不改变 Seedream、Seedance 或其他 Provider。上传参考图后，由参考图接管画风与人物造型。</span>
-            </label>
             <div class="prompt-actions">
-              <button id="restore-prompt-defaults" class="button secondary" type="button">恢复默认提示词</button>
+              <button id="restore-prompt-defaults" class="button secondary" type="button">恢复默认脚本提示词</button>
             </div>
           </details>
         </section>
@@ -379,13 +375,6 @@
               <div id="script-beat-editor" class="script-beat-editor"></div>
               <p class="field-hint script-document-hint">每一段都包含画面、旁白和可选的屏幕文字。只有旁白会进入配音；屏幕文字由 Remotion 后期排版，不会让 AI 直接画字。</p>
             </section>
-            <details class="advanced-settings prompt-settings job-prompt-settings">
-              <summary>本任务的全片画面导演设定</summary>
-              <label>确认前仍可修改
-                <textarea id="job-seedance-prompt" rows="7" maxlength="3200" spellcheck="false"></textarea>
-                <span class="field-hint">这里显示所选视觉风格的导演设定，可继续微调；内部结构化提示词方法会自动补齐分镜、首帧和动作约束。参考图仍拥有最高视觉优先级，口播原句不会作为画面文字。</span>
-              </label>
-            </details>
             <label class="pre-generation-media-choice" for="prepare-media-first">
               <input id="prepare-media-first" type="checkbox">
               <span>
@@ -515,6 +504,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.19.1"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.20.0"></script>
 </body>
 </html>

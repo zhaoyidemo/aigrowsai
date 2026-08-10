@@ -139,7 +139,6 @@ class VisualStyleDefinition:
             "description": self.description,
             "default": self.default,
             "tags": list(self.tags),
-            "generation_defaults": {"seedance_prompt": self.director_prompt},
         }
 
 
@@ -306,18 +305,12 @@ class VisualStyleRegistry:
     def freeze(
         self,
         settings: GenerationSettings,
-        *,
-        seedance_prompt_explicit: bool,
     ) -> tuple[GenerationSettings, VisualStyleSnapshot]:
         definition = self.resolve(
             settings.visual_style_id, settings.visual_style_version
         )
         effective = settings.model_copy(deep=True)
-        if (
-            definition.style_id != DEFAULT_VISUAL_STYLE_ID
-            and not seedance_prompt_explicit
-            and definition.director_prompt
-        ):
+        if definition.director_prompt:
             effective.seedance_prompt = definition.director_prompt
         effective.visual_style_id = definition.style_id
         effective.visual_style_version = definition.version
@@ -391,8 +384,15 @@ class PromptWritingProfileRegistry:
     def freeze(
         self, settings: GenerationSettings
     ) -> tuple[GenerationSettings, PromptWritingProfileSnapshot]:
+        if (
+            settings.prompt_writing_profile_id
+            != DEFAULT_PROMPT_WRITING_PROFILE_ID
+        ):
+            raise VisualStyleRegistryError(
+                "新任务固定使用 H3 提示词编排；旧方法只用于读取历史任务"
+            )
         definition = self.resolve(
-            settings.prompt_writing_profile_id,
+            DEFAULT_PROMPT_WRITING_PROFILE_ID,
             settings.prompt_writing_profile_version,
         )
         effective = settings.model_copy(deep=True)

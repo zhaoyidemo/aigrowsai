@@ -1,6 +1,6 @@
 # 齐家 AI 家庭教育内容工作台
 
-面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的研究与短视频生产服务。家庭教育仍是默认业务场景；内容策划、研究规则和脚本提示词由可版本化的 Content Skill 管理，视觉表现与内部多模态提示词方法分别独立管理，Seedream、Seedance、TTS、Remotion、FFmpeg、存储、成本与任务状态机继续共用。
+面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的研究与短视频生产服务。家庭教育仍是默认业务场景；内容策划、研究规则、脚本提示词和内容视觉策略由可版本化的 Content Skill 管理，视觉表现独立管理，H3 Prompt Writing 作为唯一内部视觉提示词编排层；Seedream、Seedance、TTS、Remotion、FFmpeg、存储、成本与任务状态机继续共用。
 
 环境变量中的管理员账号可以创建、启停同事账号，授予或收回工作台使用权限，并重置密码。同事可以查看团队创建的全部内容、成本和抖音效果，只能修改和继续执行自己创建的内容；管理员可以管理全部内容。
 
@@ -8,10 +8,10 @@
 
 当前内置两套 Skill：
 
-- `explain-expert-view@1.1.0`：教育、心理与思想人物观点讲解。人物联网研究是可选增强；无法形成可靠研究简报时保留原始观点和边界继续。
-- `brief-recent-news@1.2.1`：科技、商业或通用最新新闻口播。用户输入仅是检索请求；至少需要一条与检索注释匹配的可追溯事实。时间缺失、单站点或来源类型不完整时会醒目标注并进入人工审核，只有没有可追溯证据时才停止。联网研究默认使用 `x-ai/grok-4.5`，通过 OpenRouter 托管的 Exa 工具完成检索，不需要额外的搜索 API Key，并与脚本模型独立配置。
+- `explain-expert-view@1.2.0`：教育、心理与思想人物观点讲解。人物联网研究是可选增强；无法形成可靠研究简报时保留原始观点和边界继续。
+- `brief-recent-news@1.3.0`：科技、商业或通用最新新闻口播。用户输入仅是检索请求；至少需要一条与检索注释匹配的可追溯事实。时间缺失、单站点或来源类型不完整时会醒目标注并进入人工审核，只有没有可追溯证据时才停止。联网研究默认使用 `x-ai/grok-4.5`，通过 OpenRouter 托管的 Exa 工具完成检索，不需要额外的搜索 API Key，并与脚本模型独立配置。
 
-每个 Skill 位于 `qijia_video/content_skills/<skill-id>/`，由 `SKILL.md`、`manifest.json` 和 `references/` 中的研究、脚本及兼容视觉默认值组成。`skill_registry.py` 只加载符合固定 manifest 契约的目录，按内容格式推荐默认 Skill；创建任务时把 `skill_id`、`version`、manifest 哈希、研究策略、系统提示词、质量规则和最终生成设置冻结到任务 JSON 中。后续修改 Skill 文件不会改变已创建任务，旧任务没有 `skill_snapshot` 时继续按原语义恢复。
+每个 Skill 位于 `qijia_video/content_skills/<skill-id>/`，由 `SKILL.md`、`manifest.json` 和 `references/` 中的研究、脚本及内容视觉策略组成。内容视觉策略只约束真实性、领域安全和允许表达的语义，不包含画风、构图或运镜。`skill_registry.py` 只加载符合固定 manifest 契约的目录，按内容格式推荐默认 Skill；创建任务时把 `skill_id`、`version`、manifest 哈希、研究策略、系统提示词、内容视觉策略和质量规则冻结到任务 JSON 中。后续修改 Skill 文件不会改变已创建任务，旧任务没有 `skill_snapshot` 时继续按原语义恢复。
 
 扩展新领域时只新增 Skill、对应输入适配和必要的研究 Provider 能力，不复制视频生产基础设施，也不允许 Skill 自由调用工具或改写自身。接口包括：
 
@@ -23,15 +23,17 @@
 
 工作台把“写什么”“长什么样”“怎样把意图写成生成提示词”拆成三个独立维度：
 
-- Content Skill：决定输入、研究、脚本结构和内容质量边界；
-- Visual Style：决定视觉语言，目前提供“当前默认风格”“编辑纸张拼贴”“纸艺定格讲解”；
-- Prompt Writing Profile：内部固定使用 `structured-multimodal@1.0.0`，按叙事功能、主体、环境、动作、构图、光色材质、连续性、参考素材和排除项组织分镜、首帧与视频提示词。
+- Content Skill：决定输入、研究、脚本结构、每段可见语义和内容真实性/安全边界，不决定艺术风格与镜头方法；
+- Visual Style：只提供艺术语言与材质运动语法，目前提供“现代编辑插画”“编辑纸张拼贴”“纸艺定格讲解”；
+- Prompt Writing Profile：所有新任务固定使用 `h3-prompt-writing@1.0.0`。它先识别文本、参考素材和首帧驱动等输入模式，再统一生成可直接使用的首帧和 I2V 动作提示词；旧 `structured-multimodal@1.0.0` 仅用于读取历史任务。
 
-两种新增视觉风格是对 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 中提示词组织、纸张拼贴和纸艺定格方法的独立适配，没有复制其长流程门禁，也不引入 MiniMax 模型、API Key 或供应商调用。实际模型仍由现有 Provider 配置决定；今后替换图片或视频模型，只需调整 Provider 编译边界，不需要改写 Content Skill 或视觉风格资源。
+H3 编排和两种纸艺视觉风格是对 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 中提示词组织、纸张拼贴和纸艺定格方法的内部适配，没有复制其长流程门禁，也不引入 MiniMax 模型、API Key 或供应商调用。实际模型仍由现有 Provider 配置决定；今后替换图片或视频模型，只需调整 Provider 编译边界，不需要改写 Content Skill 或视觉风格资源。
 
-视觉风格位于 `qijia_video/visual_styles/`，内部提示词方法位于 `qijia_video/prompt_writing_profiles/`。创建任务时分别冻结 `visual_style_snapshot`、`prompt_writing_profile_snapshot` 及对应版本；旧任务没有这些快照时继续使用原提示词。全局参考图始终拥有最高视觉优先级。只读目录接口为 `GET /api/qijia-video/visual-styles`。
+视觉风格位于 `qijia_video/visual_styles/`，内部提示词方法位于 `qijia_video/prompt_writing_profiles/`。创建任务时分别冻结 `visual_style_snapshot`、`prompt_writing_profile_snapshot` 及对应版本；旧任务没有这些快照时继续使用原提示词。冲突优先级固定为：事实/安全与领域边界 > 本章可见语义 > 参考素材已经定义的视觉属性 > 视觉风格对未定义属性的补全 > Provider 语法。参考图不是事实来源。只读目录接口为 `GET /api/qijia-video/visual-styles`。
 
 工作台会在创建区以只读状态显示当前自动启用的 Prompt Writing Profile，并在任务详情持续展示本任务冻结的 Content Skill、Visual Style 与 Prompt Writing Profile；旧任务则明确标记为兼容模式。
+
+新任务 API 不再接受可编辑的 `seedance_prompt`，脚本确认页也不再暴露“全片画面导演设定”。调用方只提交 Visual Style；工作台仍保留旧字段和旧 Profile 的读取能力，以便已经冻结的历史任务继续恢复和重试。
 
 ## 当前真实链路
 
@@ -40,12 +42,12 @@
 入口 B：人物 + 观点
 入口 C：最新新闻主题 + 关注角度
 三种入口汇入统一生产链路
-  → 分别选择并冻结 Content Skill、Visual Style 与内部 Prompt Writing Profile
+  → 选择 Content Skill 与 Visual Style，并冻结固定的 H3 Prompt Writing Profile
   → 按 Skill 执行可选或强制研究
   → OpenRouter 脚本
   → 人工确认脚本
   → 豆包 TTS 2.0 完整旁白
-  → OpenRouter 混合分镜（固定 3 段视频，动态图片可选 2–10 段）
+  → OpenRouter 按 H3 统一编排混合分镜与最终媒体提示词（固定 3 段视频，动态图片可选 2–10 段）
   → 可选：先按文字分镜连续上传自有图片 / 视频，并一次确认素材安排
   → Seedream 只为未上传素材的视觉章节生成首帧
   → Seedance 1.0 Pro Fast 只生成未被自有素材覆盖的视频镜头（复杂镜头可单独升级 2.0）
@@ -129,7 +131,7 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 - `qijia_video/`：领域契约、工作流、Provider、API、鉴权和 Web 页面。
 - `qijia_video/content_skills/`、`qijia_video/skill_registry.py`：版本化内容工作流、兼容格式路由与内容快照冻结。
 - `qijia_video/visual_styles/`、`qijia_video/prompt_writing_profiles/`、`qijia_video/visual_style_registry.py`：模型无关的视觉风格、结构化多模态提示词方法与独立任务快照。
-- `qijia_video/visual_prompting.py`：把冻结的内容导演设定、视觉风格和提示词方法编译为分镜、首帧与视频提示词，不负责选择或调用模型。
+- `qijia_video/visual_prompting.py`：按固定优先级把内容视觉策略、参考素材、视觉风格和 H3 方法编译为分镜规格，并把 H3 产出的首帧/I2V 提示词精简后交给媒体 Provider，不负责选择或调用模型。
 - `qijia_video/infrastructure/postgres_repository.py`：来源卡与视频任务聚合仓储。
 - `qijia_video/accounts.py`、`qijia_video/account_api.py`：同事账号、密码哈希、会话失效与管理员 API。
 - `qijia_video/run_service.py`：后台任务进度、互斥和重启恢复。

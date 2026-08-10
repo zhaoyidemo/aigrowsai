@@ -1,7 +1,7 @@
 """Versioned, data-backed content Skill registry.
 
-Skills own research policy, content prompts, visual direction and quality
-rules. The paid media pipeline consumes only the frozen task snapshot.
+Skills own research, writing, domain visual policy and quality rules. Visual
+style and prompt composition are deliberately handled by separate registries.
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ _MANIFEST_KEYS = {
     "research_mode",
     "script_system_prompt",
     "script_prompt_file",
-    "visual_prompt_file",
+    "visual_policy_file",
     "research_prompt_file",
     "policy_ids",
     "quality_rules",
@@ -58,7 +58,7 @@ class ContentSkillDefinition:
     research_prompt: str
     script_system_prompt: str
     script_prompt: str
-    visual_prompt: str
+    visual_policy: str
     policy_ids: tuple[str, ...]
     quality_rules: tuple[str, ...]
     manifest_hash: str
@@ -74,6 +74,7 @@ class ContentSkillDefinition:
             research_mode=self.research_mode,
             research_prompt=self.research_prompt,
             script_system_prompt=self.script_system_prompt,
+            visual_policy=self.visual_policy,
             policy_ids=list(self.policy_ids),
             quality_rules=list(self.quality_rules),
             manifest_hash=self.manifest_hash,
@@ -93,7 +94,6 @@ class ContentSkillDefinition:
             "quality_rules": list(self.quality_rules),
             "generation_defaults": {
                 "script_prompt": self.script_prompt,
-                "seedance_prompt": self.visual_prompt,
             },
         }
 
@@ -171,8 +171,8 @@ def _load_definition(skill_root: Path) -> ContentSkillDefinition:
     script_prompt = _read_reference(
         skill_root, manifest["script_prompt_file"]
     )
-    visual_prompt = _read_reference(
-        skill_root, manifest["visual_prompt_file"]
+    visual_policy = _read_reference(
+        skill_root, manifest["visual_policy_file"]
     )
     research_prompt = _read_reference(
         skill_root, manifest["research_prompt_file"]
@@ -183,7 +183,7 @@ def _load_definition(skill_root: Path) -> ContentSkillDefinition:
         "instructions": instructions,
         "manifest": manifest,
         "script_prompt": script_prompt,
-        "visual_prompt": visual_prompt,
+        "visual_policy": visual_policy,
         "research_prompt": research_prompt,
     }
     try:
@@ -206,7 +206,7 @@ def _load_definition(skill_root: Path) -> ContentSkillDefinition:
             research_prompt=research_prompt,
             script_system_prompt=str(manifest["script_system_prompt"]),
             script_prompt=script_prompt,
-            visual_prompt=visual_prompt,
+            visual_policy=visual_policy,
             policy_ids=tuple(str(item) for item in manifest["policy_ids"]),
             quality_rules=tuple(
                 str(item) for item in manifest["quality_rules"]
@@ -307,8 +307,6 @@ class ContentSkillRegistry:
         effective = settings.model_copy(deep=True)
         if "script_prompt" not in explicitly_set:
             effective.script_prompt = definition.script_prompt
-        if "seedance_prompt" not in explicitly_set:
-            effective.seedance_prompt = definition.visual_prompt
         effective.skill_id = definition.skill_id
         effective.skill_version = definition.version
         snapshot = definition.snapshot()
