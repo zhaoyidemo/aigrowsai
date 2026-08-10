@@ -466,6 +466,37 @@ async def _execute(
                 actor,
                 progress=report,
             )
+        elif action == "prepare_shot_media":
+            raw_asset = AssetRef.model_validate(parameters.get("raw_asset") or {})
+            job = await runtime.service.prepare_shot_media(
+                job_id,
+                str(parameters.get("shot_id") or ""),
+                raw_asset,
+                str(parameters.get("media_kind") or ""),
+                str(parameters.get("media_id") or ""),
+                str(parameters.get("original_filename") or ""),
+                str(parameters.get("expected_selected_media_id") or ""),
+                actor,
+                progress=report,
+            )
+            delete_object = getattr(runtime.storage, "delete_object", None)
+            if callable(delete_object):
+                try:
+                    await delete_object(raw_asset.object_key)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to clean staged shot upload key=%s error=%s",
+                        raw_asset.object_key,
+                        exc,
+                    )
+        elif action == "apply_pending_shot_media":
+            job = await runtime.service.apply_pending_shot_media(
+                job_id,
+                str(parameters.get("expected_pending_fingerprint") or ""),
+                str(parameters.get("batch_id") or ""),
+                actor,
+                progress=report,
+            )
         elif action == "replace_shot_media":
             raw_asset = AssetRef.model_validate(parameters.get("raw_asset") or {})
             job = await runtime.service.replace_shot_media(
@@ -511,6 +542,16 @@ async def _execute(
             ),
             "select_shot_version": (
                 "镜头版本已切换，等待你确认成片",
+                "confirm_final",
+                90,
+            ),
+            "prepare_shot_media": (
+                "素材已暂存，可继续替换或一次应用全部修改",
+                "media_staged",
+                72,
+            ),
+            "apply_pending_shot_media": (
+                "全部待处理素材已应用，等待你确认成片",
                 "confirm_final",
                 90,
             ),
@@ -598,6 +639,8 @@ async def _monitor_worker(
         if action in (
             "regenerate_shot",
             "select_shot_version",
+            "prepare_shot_media",
+            "apply_pending_shot_media",
             "replace_shot_media",
             "select_shot_media",
         ):
@@ -623,6 +666,8 @@ async def start_run(
         "package",
         "regenerate_shot",
         "select_shot_version",
+        "prepare_shot_media",
+        "apply_pending_shot_media",
         "replace_shot_media",
         "select_shot_media",
     ):
@@ -632,6 +677,8 @@ async def start_run(
         if action in (
             "regenerate_shot",
             "select_shot_version",
+            "prepare_shot_media",
+            "apply_pending_shot_media",
             "replace_shot_media",
             "select_shot_media",
         )

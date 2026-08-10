@@ -1027,7 +1027,7 @@ async def complete_shot_media_upload(
         size_bytes=claims.size_bytes,
     )
     run = await start_run(
-        "replace_shot_media",
+        "prepare_shot_media",
         job_id,
         actor,
         {
@@ -1045,7 +1045,7 @@ async def complete_shot_media_upload(
         ),
         "task_id": run.task_id,
         "reused": run.reused,
-    }, "素材已安全上传，正在更新这个镜头和成片")
+    }, "素材已安全上传，正在校验并暂存")
 
 
 @api_router.post("/jobs/{job_id}/shots/{shot_id}/media/uploads/cancel")
@@ -1108,7 +1108,7 @@ async def upload_shot_media(
     finally:
         await media.close()
     run = await start_run(
-        "replace_shot_media",
+        "prepare_shot_media",
         job_id,
         actor,
         {
@@ -1126,7 +1126,73 @@ async def upload_shot_media(
         ),
         "task_id": run.task_id,
         "reused": run.reused,
-    }, "素材已上传，正在更新这个镜头和成片")
+    }, "素材已上传，正在校验并暂存")
+
+
+@api_router.post("/jobs/{job_id}/shot-media/pending/actions/apply")
+@boundary
+async def apply_pending_shot_media(
+    job_id: str,
+    body: RevisionRequest,
+    user: dict = Depends(get_current_user),
+):
+    actor = actor_from_user(user)
+    fingerprint = await runtime.service.validate_pending_shot_media_action(
+        job_id,
+        body.expected_revision,
+        actor,
+    )
+    batch_id = f"batch_{secrets.token_hex(12)}"
+    run = await start_run(
+        "apply_pending_shot_media",
+        job_id,
+        actor,
+        {
+            "expected_pending_fingerprint": fingerprint,
+            "batch_id": batch_id,
+        },
+    )
+    return ok({
+        "job": public_job_payload(
+            await runtime.service.get_job(job_id, actor), user
+        ),
+        "task_id": run.task_id,
+        "reused": run.reused,
+    }, "已开始一次应用全部待处理镜头素材")
+
+
+@api_router.post("/jobs/{job_id}/shot-media/pending/actions/discard")
+@boundary
+async def discard_all_pending_shot_media(
+    job_id: str,
+    body: RevisionRequest,
+    user: dict = Depends(get_current_user),
+):
+    job = await runtime.service.discard_pending_shot_media_edits(
+        job_id,
+        body.expected_revision,
+        actor_from_user(user),
+    )
+    return ok(public_job_payload(job, user), "已撤销全部待应用素材修改")
+
+
+@api_router.post(
+    "/jobs/{job_id}/shots/{shot_id}/media/pending/actions/discard"
+)
+@boundary
+async def discard_pending_shot_media(
+    job_id: str,
+    shot_id: str,
+    body: RevisionRequest,
+    user: dict = Depends(get_current_user),
+):
+    job = await runtime.service.discard_pending_shot_media_edits(
+        job_id,
+        body.expected_revision,
+        actor_from_user(user),
+        shot_id=shot_id,
+    )
+    return ok(public_job_payload(job, user), "已撤销这个镜头的待应用修改")
 
 
 @api_router.post(
@@ -1141,30 +1207,17 @@ async def select_uploaded_shot_media(
     user: dict = Depends(get_current_user),
 ):
     actor = actor_from_user(user)
-    selected_media_id = await runtime.service.validate_shot_media_action(
+    job = await runtime.service.stage_shot_media_selection(
         job_id,
         shot_id,
+        media_id,
         body.expected_revision,
         actor,
-        media_id=media_id,
     )
-    run = await start_run(
-        "select_shot_media",
-        job_id,
-        actor,
-        {
-            "shot_id": shot_id,
-            "media_id": media_id,
-            "expected_selected_media_id": selected_media_id,
-        },
+    return ok(
+        public_job_payload(job, user),
+        "素材版本已加入待应用修改",
     )
-    return ok({
-        "job": public_job_payload(
-            await runtime.service.get_job(job_id, actor), user
-        ),
-        "task_id": run.task_id,
-        "reused": run.reused,
-    }, "已开始切换上传素材版本")
 
 
 @api_router.post(
@@ -1178,30 +1231,17 @@ async def restore_generated_shot_media(
     user: dict = Depends(get_current_user),
 ):
     actor = actor_from_user(user)
-    selected_media_id = await runtime.service.validate_shot_media_action(
+    job = await runtime.service.stage_shot_media_selection(
         job_id,
         shot_id,
+        "",
         body.expected_revision,
         actor,
-        restore_generated=True,
     )
-    run = await start_run(
-        "select_shot_media",
-        job_id,
-        actor,
-        {
-            "shot_id": shot_id,
-            "media_id": "",
-            "expected_selected_media_id": selected_media_id,
-        },
+    return ok(
+        public_job_payload(job, user),
+        "恢复 AI 素材已加入待应用修改",
     )
-    return ok({
-        "job": public_job_payload(
-            await runtime.service.get_job(job_id, actor), user
-        ),
-        "task_id": run.task_id,
-        "reused": run.reused,
-    }, "已开始恢复 AI 素材")
 
 
 @api_router.post(

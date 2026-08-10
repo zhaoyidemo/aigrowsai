@@ -887,6 +887,24 @@ class ShotMediaVersion(ContractModel):
         return self
 
 
+class PendingShotMediaEdit(ContractModel):
+    """One prepared editor-media selection waiting for a batch render."""
+
+    shot_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    # Empty means restoring the generated AI visual for this shot.
+    media_id: str = Field(
+        default="",
+        max_length=96,
+        pattern=r"^$|^[A-Za-z0-9_-]+$",
+    )
+    staged_by: str = Field(default="", max_length=160)
+    staged_at: str = Field(default="", max_length=64)
+
+
 class ProviderUsageRecord(ContractModel):
     """One provider attempt persisted before downstream validation can fail."""
 
@@ -1263,6 +1281,9 @@ class VideoJob(ContractModel):
     video_tasks: list[ProviderTask] = Field(default_factory=list)
     visual_versions: list[VisualShotVersion] = Field(default_factory=list)
     shot_media_versions: list[ShotMediaVersion] = Field(default_factory=list)
+    pending_shot_media_edits: list[PendingShotMediaEdit] = Field(
+        default_factory=list
+    )
     render_manifest: RenderManifest | None = None
     quality_report: QualityReport | None = None
     artifacts: list[Artifact] = Field(default_factory=list)

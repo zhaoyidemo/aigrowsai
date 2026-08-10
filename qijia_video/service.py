@@ -31,6 +31,7 @@ from qijia_video.contracts import (
     JobState,
     InterpretationBoundary,
     NewsResearchBrief,
+    PendingShotMediaEdit,
     PersonResearchBrief,
     ProviderTask,
     ProviderTaskState,
@@ -2848,6 +2849,50 @@ class QijiaVideoService:
             None,
         )
 
+    @staticmethod
+    def pending_shot_media_edit_for_shot(
+        job: VideoJob,
+        shot_id: str,
+    ) -> PendingShotMediaEdit | None:
+        return next(
+            (
+                item
+                for item in job.pending_shot_media_edits
+                if item.shot_id == shot_id
+            ),
+            None,
+        )
+
+    @staticmethod
+    def pending_shot_media_fingerprint(job: VideoJob) -> str:
+        return content_hash([
+            {"shot_id": item.shot_id, "media_id": item.media_id}
+            for item in sorted(
+                job.pending_shot_media_edits,
+                key=lambda edit: edit.shot_id,
+            )
+        ])
+
+    @staticmethod
+    def _stage_pending_shot_media_edit(
+        job: VideoJob,
+        shot_id: str,
+        media_id: str,
+        actor: Actor,
+    ) -> None:
+        pending = PendingShotMediaEdit(
+            shot_id=shot_id,
+            media_id=media_id,
+            staged_by=actor.username,
+            staged_at=timestamp(),
+        )
+        for index, item in enumerate(job.pending_shot_media_edits):
+            if item.shot_id == shot_id:
+                job.pending_shot_media_edits[index] = pending
+                break
+        else:
+            job.pending_shot_media_edits.append(pending)
+
     @classmethod
     def _generated_visual_asset_for_shot(
         cls,
@@ -3450,6 +3495,113 @@ class QijiaVideoService:
                 raise InvalidTransition("这个镜头没有可恢复的 AI 素材")
         return current_media_id
 
+    async def stage_shot_media_selection(
+        self,
+        job_id: str,
+        shot_id: str,
+        media_id: str,
+        expected_revision: int,
+        actor: Actor,
+    ) -> VideoJob:
+        """Stage one existing upload or AI restore without rendering the film."""
+
+        job = await self.get_job(job_id, actor)
+        self._assert_revision(job.revision, expected_revision)
+        if job.state != JobState.FINAL_REVIEW_REQUIRED:
+            raise InvalidTransition("只有待确认成片可以暂存镜头素材修改")
+        shot = next(
+            (
+                item
+                for item in (job.storyboard_plan.shots if job.storyboard_plan else [])
+                if item.shot_id == shot_id
+            ),
+            None,
+        )
+        if not shot:
+            raise InvalidTransition("指定的分镜不存在")
+        existing_pending = self.pending_shot_media_edit_for_shot(job, shot_id)
+        if media_id:
+            if not self.shot_media_for_shot(job, shot_id, media_id=media_id):
+                raise InvalidTransition("指定的上传素材版本不存在")
+        else:
+            generated_candidate = job.model_copy(deep=True)
+            generated_shot = next(
+                item
+                for item in generated_candidate.storyboard_plan.shots
+                if item.shot_id == shot_id
+            )
+            generated_shot.selected_media_id = ""
+            if not self.visual_asset_for_shot(generated_candidate, shot_id):
+                raise InvalidTransition("这个镜头没有可恢复的 AI 素材")
+
+        if media_id == shot.selected_media_id:
+            if not existing_pending:
+                raise InvalidTransition("该素材已经用于当前成片")
+            job.pending_shot_media_edits = [
+                item
+                for item in job.pending_shot_media_edits
+                if item.shot_id != shot_id
+            ]
+        elif existing_pending and existing_pending.media_id == media_id:
+            raise InvalidTransition("该素材已经加入待应用修改")
+        else:
+            self._stage_pending_shot_media_edit(job, shot_id, media_id, actor)
+        job.error = ""
+        return await self._save_job(job, actor)
+
+    async def discard_pending_shot_media_edits(
+        self,
+        job_id: str,
+        expected_revision: int,
+        actor: Actor,
+        *,
+        shot_id: str = "",
+    ) -> VideoJob:
+        job = await self.get_job(job_id, actor)
+        self._assert_revision(job.revision, expected_revision)
+        if job.state != JobState.FINAL_REVIEW_REQUIRED:
+            raise InvalidTransition("只有待确认成片可以撤销待应用修改")
+        original_count = len(job.pending_shot_media_edits)
+        job.pending_shot_media_edits = [
+            item
+            for item in job.pending_shot_media_edits
+            if shot_id and item.shot_id != shot_id
+        ] if shot_id else []
+        if len(job.pending_shot_media_edits) == original_count:
+            raise InvalidTransition("没有可撤销的待应用素材修改")
+        job.error = ""
+        return await self._save_job(job, actor)
+
+    async def validate_pending_shot_media_action(
+        self,
+        job_id: str,
+        expected_revision: int,
+        actor: Actor,
+    ) -> str:
+        job = await self.get_job(job_id, actor)
+        self._assert_revision(job.revision, expected_revision)
+        if job.state != JobState.FINAL_REVIEW_REQUIRED:
+            raise InvalidTransition("只有待确认成片可以应用镜头素材修改")
+        if not job.pending_shot_media_edits:
+            raise InvalidTransition("当前没有待应用的镜头素材修改")
+        shot_ids = [item.shot_id for item in job.pending_shot_media_edits]
+        if len(shot_ids) != len(set(shot_ids)):
+            raise QualityGateFailed("待应用镜头素材存在重复记录")
+        known_shots = {
+            item.shot_id
+            for item in (job.storyboard_plan.shots if job.storyboard_plan else [])
+        }
+        for item in job.pending_shot_media_edits:
+            if item.shot_id not in known_shots:
+                raise QualityGateFailed("待应用镜头素材引用了不存在的分镜")
+            if item.media_id and not self.shot_media_for_shot(
+                job,
+                item.shot_id,
+                media_id=item.media_id,
+            ):
+                raise QualityGateFailed("待应用镜头素材版本不存在")
+        return self.pending_shot_media_fingerprint(job)
+
     async def mark_shot_edit_failed(
         self,
         job_id: str,
@@ -3569,6 +3721,277 @@ class QijiaVideoService:
             shot_id=shot_id,
         )
         return saved
+
+    async def prepare_shot_media(
+        self,
+        job_id: str,
+        shot_id: str,
+        raw_asset: AssetRef,
+        media_kind: str,
+        media_id: str,
+        original_filename: str,
+        expected_selected_media_id: str,
+        actor: Actor,
+        progress: ProgressReporter | None = None,
+    ) -> VideoJob:
+        """Validate and normalize one upload without rebuilding the film."""
+
+        job = await self.get_job(job_id, actor)
+        if job.state != JobState.FINAL_REVIEW_REQUIRED:
+            raise InvalidTransition("只有待确认成片可以暂存镜头素材")
+        shot = next(
+            (
+                item
+                for item in (job.storyboard_plan.shots if job.storyboard_plan else [])
+                if item.shot_id == shot_id
+            ),
+            None,
+        )
+        if not shot:
+            raise InvalidTransition("指定的分镜不存在")
+        if shot.selected_media_id != expected_selected_media_id:
+            raise RevisionConflict("该镜头素材已被其他操作更新，请刷新后重试")
+        if media_kind not in {"image", "video"}:
+            raise QualityGateFailed("上传素材类型不受支持")
+        if not raw_asset.media_type.startswith(f"{media_kind}/"):
+            raise QualityGateFailed("上传素材类型与文件内容不一致")
+        existing = self.shot_media_for_shot(job, shot_id, media_id=media_id)
+        if existing:
+            pending = self.pending_shot_media_edit_for_shot(job, shot_id)
+            if pending and pending.media_id == media_id:
+                return job
+            raise RevisionConflict("该上传素材版本已经存在")
+
+        workspace = Path(tempfile.mkdtemp(
+            prefix=f"{job.id}-upload-prepare-", dir=self.work_root
+        ))
+        try:
+            self._report(
+                progress,
+                message=(
+                    "正在标准化上传视频并匹配镜头时长…"
+                    if media_kind == "video"
+                    else "正在检查上传图片并准备暂存…"
+                ),
+                stage="media_prepare",
+                percent=64,
+                workflow="shot_edit",
+                shot_id=shot_id,
+            )
+            source_path = await self.storage.materialize(
+                raw_asset, workspace / "source.upload"
+            )
+            if source_path.stat().st_size != raw_asset.size_bytes:
+                raise QualityGateFailed("上传素材大小与确认信息不一致")
+            try:
+                actual_kind, _, actual_media_type = detect_shot_media_format(
+                    source_path
+                )
+            except ValueError as exc:
+                raise QualityGateFailed(str(exc)) from exc
+            iso_video_types = {"video/mp4", "video/quicktime"}
+            compatible_media_type = (
+                actual_media_type == raw_asset.media_type
+                or {actual_media_type, raw_asset.media_type} <= iso_video_types
+            )
+            if actual_kind != media_kind or not compatible_media_type:
+                raise QualityGateFailed("上传素材类型与文件内容不一致")
+
+            if media_kind == "video":
+                destination = workspace / "uploaded.timeline.mp4"
+                prepare_upload = getattr(
+                    self.media_packager,
+                    "prepare_uploaded_video_for_timeline",
+                    None,
+                )
+                chapter_duration = self._shot_chapter_duration_seconds(
+                    job, shot_id, 8
+                )
+                if callable(prepare_upload):
+                    prepared_path, actual_duration = await prepare_upload(
+                        source_path,
+                        destination,
+                        chapter_duration_seconds=chapter_duration,
+                    )
+                else:
+                    prepared_path, actual_duration = (
+                        await self.media_packager.prepare_video_for_timeline(
+                            source_path,
+                            destination,
+                            minimum_duration_seconds=chapter_duration,
+                        )
+                    )
+                media_type = "video/mp4"
+                extension = ".mp4"
+                duration_seconds = round(actual_duration, 3)
+            else:
+                prepared_path = source_path
+                media_type = raw_asset.media_type
+                extension = {
+                    "image/jpeg": ".jpg",
+                    "image/png": ".png",
+                    "image/webp": ".webp",
+                }.get(media_type, ".image")
+                duration_seconds = None
+
+            asset = await self.storage.put_file(
+                object_key=(
+                    f"qijia-video/{job.id}/uploads/{shot_id}/"
+                    f"{media_id}{extension}"
+                ),
+                path=prepared_path,
+                asset_id=f"shot_media_{media_id}",
+                media_type=media_type,
+                duration_seconds=duration_seconds,
+            )
+            candidate = job.model_copy(deep=True)
+            version_number = 1 + max(
+                (
+                    item.version
+                    for item in candidate.shot_media_versions
+                    if item.shot_id == shot_id
+                ),
+                default=0,
+            )
+            candidate.shot_media_versions.append(ShotMediaVersion(
+                media_id=media_id,
+                shot_id=shot_id,
+                version=version_number,
+                media_kind=media_kind,
+                asset=asset,
+                original_filename=str(original_filename or "")[:255],
+                created_by=actor.username,
+                created_at=timestamp(),
+            ))
+            self._stage_pending_shot_media_edit(
+                candidate,
+                shot_id,
+                media_id,
+                actor,
+            )
+            candidate.error = ""
+            saved = await self._save_job(candidate, actor)
+            self._report(
+                progress,
+                message="素材已暂存，可继续替换其他镜头或一次应用全部修改",
+                stage="media_staged",
+                percent=72,
+                workflow="shot_edit",
+                shot_id=shot_id,
+                pending_count=len(saved.pending_shot_media_edits),
+            )
+            return saved
+        except Exception as exc:
+            latest = await self.get_job(job_id, actor)
+            latest.error = (
+                f"上传素材未能暂存，当前成片未受影响：{exc}"
+            )[:2000]
+            await self._save_job(latest, actor)
+            raise
+        finally:
+            await asyncio.to_thread(shutil.rmtree, workspace, True)
+
+    async def apply_pending_shot_media(
+        self,
+        job_id: str,
+        expected_pending_fingerprint: str,
+        batch_id: str,
+        actor: Actor,
+        progress: ProgressReporter | None = None,
+    ) -> VideoJob:
+        """Atomically apply every staged media edit and render the film once."""
+
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", str(batch_id or "")):
+            raise QualityGateFailed("批量镜头修改 ID 无效")
+        job = await self.get_job(job_id, actor)
+        batch_marker = f"-{batch_id}/"
+        if (
+            job.state == JobState.FINAL_REVIEW_REQUIRED
+            and any(batch_marker in item.asset.object_key for item in job.artifacts)
+        ):
+            return job
+        resuming = job.state == JobState.PRODUCING and bool(job.review_bundle_hash)
+        if job.state != JobState.FINAL_REVIEW_REQUIRED and not resuming:
+            raise InvalidTransition("只有待确认成片可以应用镜头素材修改")
+        if not job.pending_shot_media_edits:
+            raise InvalidTransition("当前没有待应用的镜头素材修改")
+        if self.pending_shot_media_fingerprint(job) != expected_pending_fingerprint:
+            raise RevisionConflict("待应用镜头素材已经变化，请刷新后重试")
+
+        edits = list(job.pending_shot_media_edits)
+        workspace = Path(tempfile.mkdtemp(
+            prefix=f"{job.id}-upload-batch-", dir=self.work_root
+        ))
+        try:
+            if not resuming:
+                self._remember_current_visuals(job, actor)
+                job.state = JobState.PRODUCING
+                job.error = ""
+                job = await self._save_job(job, actor)
+            candidate = job.model_copy(deep=True)
+            shots_by_id = {
+                item.shot_id: item
+                for item in (
+                    candidate.storyboard_plan.shots
+                    if candidate.storyboard_plan
+                    else []
+                )
+            }
+            for edit in edits:
+                shot = shots_by_id.get(edit.shot_id)
+                if not shot:
+                    raise QualityGateFailed("待应用镜头素材引用了不存在的分镜")
+                if edit.media_id and not self.shot_media_for_shot(
+                    candidate,
+                    edit.shot_id,
+                    media_id=edit.media_id,
+                ):
+                    raise QualityGateFailed("待应用镜头素材版本不存在")
+                shot.selected_media_id = edit.media_id
+
+            audio_assets = self._narration_assets(candidate)
+            if not audio_assets:
+                raise QualityGateFailed("原成片缺少可复用的旁白资产")
+            selected_assets: list[AssetRef] = []
+            for request in candidate.visual_requests:
+                selected = self.visual_asset_for_shot(
+                    candidate,
+                    request.request_id,
+                )
+                if not selected:
+                    raise QualityGateFailed(
+                        f"镜头 {request.request_id} 缺少可复用素材"
+                    )
+                selected_assets.append(selected)
+            candidate.render_manifest = self._build_render_manifest(
+                candidate,
+                audio_assets,
+                selected_assets,
+            )
+            candidate.pending_shot_media_edits = []
+            return await self._render_shot_edit_candidate(
+                job,
+                candidate,
+                actor,
+                version_id=batch_id,
+                shot_id=edits[0].shot_id,
+                workspace=workspace,
+                progress=progress,
+                ready_message=(
+                    f"{len(edits)} 处镜头修改已准备，正在用 Remotion 一次更新成片…"
+                ),
+            )
+        except Exception as exc:
+            latest = await self.get_job(job_id, actor)
+            if latest.state == JobState.PRODUCING and latest.review_bundle_hash:
+                latest.state = JobState.FINAL_REVIEW_REQUIRED
+            latest.error = (
+                f"批量镜头修改未应用，原成片和待应用修改均已保留：{exc}"
+            )[:2000]
+            await self._save_job(latest, actor)
+            raise
+        finally:
+            await asyncio.to_thread(shutil.rmtree, workspace, True)
 
     async def replace_shot_media(
         self,
@@ -4817,6 +5240,8 @@ class QijiaVideoService:
         self._assert_revision(job.revision, expected_revision)
         if job.state != JobState.FINAL_REVIEW_REQUIRED:
             raise InvalidTransition("当前没有可确认的成片")
+        if job.pending_shot_media_edits:
+            raise InvalidTransition("请先应用或撤销待处理的镜头素材修改")
         draft = next((item for item in job.artifacts if item.name == "draft.mp4"), None)
         actual_bundle_hash = self._review_hash(job.artifacts)
         if (

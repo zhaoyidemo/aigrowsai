@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.16.2">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.17.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -387,6 +387,16 @@
               <div id="shot-grid" class="shot-grid" role="list" aria-label="混合制作镜头列表"></div>
               <aside id="shot-inspector" class="shot-inspector" aria-label="镜头设置" hidden></aside>
             </div>
+            <div id="pending-shot-media-bar" class="pending-shot-media-bar" hidden>
+              <div>
+                <strong id="pending-shot-media-title">待应用镜头修改</strong>
+                <span id="pending-shot-media-detail">素材已准备，当前成片尚未改变</span>
+              </div>
+              <div class="pending-shot-media-actions">
+                <button id="discard-pending-shot-media-button" class="button secondary" type="button">撤销全部</button>
+                <button id="apply-pending-shot-media-button" class="button primary" type="button">一次应用并重新生成成片</button>
+              </div>
+            </div>
           </section>
           <section id="final-review" class="review-section" hidden>
             <div class="section-title"><h3>成片确认</h3><span>自动质检通过后仍需人工确认</span></div>
@@ -473,6 +483,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.16.2"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.17.0"></script>
 </body>
 </html>

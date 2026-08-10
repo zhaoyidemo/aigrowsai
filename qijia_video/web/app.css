@@ -138,7 +138,8 @@ button:focus-visible { outline: 3px solid rgba(49,95,86,.2); outline-offset: 2px
 .confirmation-check { display: grid !important; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px !important; color: #43534e !important; font-size: 11px !important; line-height: 1.5; }
 .confirmation-check input { width: auto; margin: 2px 0 0; }
 .workspace-grid { display: grid; grid-template-columns: minmax(340px, 460px) minmax(0, 1fr); gap: 20px; align-items: start; }
-.left-column, .right-column { display: grid; gap: 20px; }
+.left-column, .right-column { display: grid; min-width: 0; gap: 20px; }
+.left-column > *, .right-column > * { min-width: 0; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; box-shadow: 0 1px 2px rgba(33,38,45,.03); }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
 .panel h2, .panel h3 { margin: 2px 0 0; }
@@ -309,6 +310,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .shot-card:hover { border-color: #9eb8b0; transform: translateY(-1px); }
 .shot-card:focus-visible { outline: 3px solid rgba(49,95,86,.18); outline-offset: 2px; }
 .shot-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(49,95,86,.12); }
+.shot-card.pending { border-color: #d3a34a; background: #fffaf0; }
 .shot-preview { position: relative; aspect-ratio: 9 / 16; overflow: hidden; background: #202a2d; }
 .shot-preview video, .shot-preview .shot-frame { width: 100%; height: 100%; max-height: none; margin: 0; border-radius: 0; object-fit: cover; }
 .shot-placeholder { display: grid; width: 100%; height: 100%; place-content: center; gap: 8px; padding: 12px; color: #dce7e3; text-align: center; font-size: 11px; line-height: 1.45; }
@@ -328,6 +330,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .shot-status.succeeded::before { background: #3a8063; }
 .shot-status.failed { color: #9b3e3e; }
 .shot-status.failed::before { background: #b84c4c; }
+.shot-status.pending { color: #8a641f; }
+.shot-status.pending::before { background: #d39a32; }
 .shot-inspector { min-width: 0; border: 1px solid #d7d4cc; border-radius: 11px; background: #f8f6ef; padding: 14px; }
 .shot-inspector-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .shot-inspector-header h4 { margin: 0 0 3px; font-size: 14px; }
@@ -346,6 +350,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .source-version-row { border-bottom: 1px solid #dfdbd1; padding-bottom: 12px; }
 .shot-source-selection-actions { display: grid; margin: -2px 0 12px; }
 .shot-source-selection-actions .button { width: 100%; min-height: 36px; font-size: 11px; }
+.pending-shot-media-bar { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 16px; border: 1px solid #d3a34a; border-radius: 12px; padding: 14px 16px; background: #fff8e9; }
+.pending-shot-media-bar > div:first-child { display: grid; gap: 3px; }
+.pending-shot-media-bar strong { color: #715019; font-size: 13px; }
+.pending-shot-media-bar span { color: #786a50; font-size: 10px; line-height: 1.5; }
+.pending-shot-media-actions { display: flex; flex: none; gap: 8px; }
 .shot-source-panel, .ai-shot-panel { display: grid; gap: 10px; margin: 0 0 12px; border: 1px solid #d5ddd9; border-radius: 10px; padding: 11px; background: #f2f7f5; }
 .ai-shot-panel { border-color: #ded9cd; background: #fbfaf6; }
 .shot-source-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
@@ -654,6 +663,8 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
   .storyboard-layout.inspector-open { grid-template-columns: 1fr; }
   .shot-grid { grid-template-columns: repeat(5, minmax(138px, 42vw)); }
   .shot-source-actions { grid-template-columns: 1fr; }
+  .pending-shot-media-bar, .pending-shot-media-actions { align-items: stretch; flex-direction: column; }
+  .pending-shot-media-actions .button { width: 100%; }
   .script-document-heading { align-items: flex-start; flex-direction: column; }
   .research-brief-heading { align-items: flex-start; flex-direction: column; }
   .research-brief-grid { grid-template-columns: 1fr; }

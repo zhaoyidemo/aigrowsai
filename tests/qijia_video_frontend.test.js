@@ -378,9 +378,21 @@ test('storyboard supports editor images and videos without losing AI versions', 
   assert.match(app, /restore-generated-media/);
   assert.match(app, /data-preview-upload/);
   assert.match(app, /selectedUploadedMedia/);
+  assert.match(app, /pendingShotMediaEdit/);
+  assert.match(app, /pending_shot_media_edits/);
+  assert.match(page, /id="pending-shot-media-bar"/);
+  assert.match(page, /id="apply-pending-shot-media-button"/);
+  assert.match(page, /id="discard-pending-shot-media-button"/);
+  assert.match(app, /shot-media\/pending\/actions\/apply/);
+  assert.match(app, /shot-media\/pending\/actions\/discard/);
+  assert.match(app, /media\/pending\/actions\/discard/);
+  assert.match(app, /成片只重新生成了 1 次/);
+  assert.match(app, /每次上传只做安全校验、转码和暂存/);
   assert.match(app, /原 AI 素材会完整保留/);
   assert.match(styles, /\.shot-source-panel/);
   assert.match(styles, /\.shot-upload-button/);
+  assert.match(styles, /\.pending-shot-media-bar/);
+  assert.match(styles, /\.shot-card\.pending/);
 });
 
 test('person viewpoint flow starts a real job and polling resumes after refresh', () => {

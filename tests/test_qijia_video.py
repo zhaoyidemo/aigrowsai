@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from qijia_video import api as qijia_api
+from qijia_video import runtime as qijia_runtime
 from qijia_video.contracts import (
     Actor,
     AssetRef,
@@ -45,6 +46,7 @@ from qijia_video.contracts import (
 )
 from qijia_video.errors import (
     AccessDenied,
+    InvalidTransition,
     ProviderUnavailable,
     QualityGateFailed,
     ResearchEvidenceUnavailable,
@@ -129,14 +131,20 @@ def valid_card(**updates) -> SourceCardInput:
 class FakeRenderer:
     name = "fake-remotion"
 
+    def __init__(self):
+        self.render_calls = 0
+        self.cover_calls = 0
+
     async def render(self, manifest, storage, workspace: Path) -> Path:
         del manifest, storage
+        self.render_calls += 1
         output = workspace / "raw.mp4"
         output.write_bytes(b"raw-video")
         return output
 
     async def render_cover(self, manifest, storage, workspace: Path) -> Path:
         del manifest, storage
+        self.cover_calls += 1
         output = workspace / "cover.jpg"
         output.write_bytes(b"jpeg-cover")
         return output
@@ -2550,6 +2558,51 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
 
 
 class QijiaVideoUploadApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prepare_and_batch_apply_share_the_shot_edit_mutex(self):
+        actor = Actor(user_id=7, username="editor", role="member")
+        actions = {
+            "prepare_shot_media": {"shot_id": "shot_01"},
+            "apply_pending_shot_media": {
+                "expected_pending_fingerprint": "a" * 64,
+                "batch_id": "batch_01",
+            },
+        }
+        for index, (action, parameters) in enumerate(actions.items(), 1):
+            task_id = f"task_mutex_{index}"
+            create = AsyncMock(return_value=(task_id, True))
+            get_task = AsyncMock(return_value={
+                "job_payload": {
+                    "action": action,
+                    "job_id": "job",
+                    "parameters": parameters,
+                },
+            })
+            with (
+                patch.object(
+                    qijia_runtime.task_service,
+                    "create_or_get_running_task_async",
+                    create,
+                ),
+                patch.object(
+                    qijia_runtime.task_service,
+                    "get_task_async",
+                    get_task,
+                ),
+            ):
+                run = await qijia_runtime.start_run(
+                    action,
+                    "job",
+                    actor,
+                    parameters,
+                )
+
+            self.assertTrue(run.reused)
+            self.assertEqual(run.task_id, task_id)
+            self.assertEqual(
+                create.await_args.args[0],
+                "齐家短视频:shot-edit:job",
+            )
+
     async def test_direct_upload_init_and_complete_only_queue_after_head_verification(self):
         user = {
             "id": 7,
@@ -2617,6 +2670,7 @@ class QijiaVideoUploadApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed["data"]["task_id"], "task_upload_01")
         storage.complete_direct_upload.assert_awaited_once()
         start.assert_awaited_once()
+        self.assertEqual(start.await_args.args[0], "prepare_shot_media")
         parameters = start.await_args.args[3]
         self.assertEqual(parameters["media_kind"], "video")
         self.assertEqual(parameters["raw_asset"]["sha256"], digest)
@@ -2646,6 +2700,71 @@ class QijiaVideoUploadApiTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(result["data"], {"upload_mode": "multipart"})
+
+    async def test_pending_media_apply_queues_one_batch_action(self):
+        user = {"id": 7, "username": "editor", "role": "member"}
+        service = type("Service", (), {})()
+        service.validate_pending_shot_media_action = AsyncMock(
+            return_value="a" * 64
+        )
+        service.get_job = AsyncMock(return_value=object())
+        start = AsyncMock(return_value=type("Run", (), {
+            "task_id": "task_batch_01",
+            "reused": False,
+        })())
+        with (
+            patch.object(qijia_api.runtime, "service", service),
+            patch.object(qijia_api, "start_run", start),
+            patch.object(qijia_api, "public_job_payload", return_value={"id": "job"}),
+        ):
+            result = await qijia_api.apply_pending_shot_media(
+                "job",
+                qijia_api.RevisionRequest(expected_revision=12),
+                user,
+            )
+
+        self.assertEqual(result["data"]["task_id"], "task_batch_01")
+        self.assertEqual(start.await_args.args[0], "apply_pending_shot_media")
+        parameters = start.await_args.args[3]
+        self.assertEqual(parameters["expected_pending_fingerprint"], "a" * 64)
+        self.assertRegex(parameters["batch_id"], r"^batch_[a-f0-9]{24}$")
+
+    async def test_selecting_an_upload_only_stages_it_without_a_task(self):
+        user = {"id": 7, "username": "editor", "role": "member"}
+        staged_job = object()
+        service = type("Service", (), {})()
+        service.stage_shot_media_selection = AsyncMock(return_value=staged_job)
+        with (
+            patch.object(qijia_api.runtime, "service", service),
+            patch.object(qijia_api, "public_job_payload", return_value={
+                "id": "job",
+                "pending_shot_media_edits": [{
+                    "shot_id": "shot",
+                    "media_id": "upload_01",
+                }],
+            }),
+            patch.object(qijia_api, "start_run", AsyncMock()) as start,
+        ):
+            result = await qijia_api.select_uploaded_shot_media(
+                "job",
+                "shot",
+                "upload_01",
+                qijia_api.ShotVersionSelectionRequest(expected_revision=9),
+                user,
+            )
+
+        service.stage_shot_media_selection.assert_awaited_once_with(
+            "job",
+            "shot",
+            "upload_01",
+            9,
+            unittest.mock.ANY,
+        )
+        start.assert_not_awaited()
+        self.assertEqual(
+            result["data"]["pending_shot_media_edits"][0]["media_id"],
+            "upload_01",
+        )
 
     async def test_tos_rejects_legacy_sync_upload_before_second_storage_hop(self):
         storage = type("Storage", (), {"name": "tos"})()
@@ -4154,6 +4273,261 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(job.shot_media_versions), 2)
         self.assertEqual([item.kind for item in job.approvals], ["script"])
+
+    async def test_three_prepared_media_edits_render_the_film_only_once(self):
+        card = await self.service.create_source_card(valid_card(), self.actor)
+        card = await self.service.verify_source_card(
+            card.id, card.revision, self.actor
+        )
+        job = await self.service.create_job(card.id, self.actor)
+        job = await self.service.generate_script(job.id, self.actor)
+        job = await self.service.approve_script(
+            job.id, job.revision, job.script_hash, self.actor
+        )
+        job = await self.service.produce(job.id, self.actor)
+        renderer = self.service.renderer
+        baseline_render_calls = renderer.render_calls
+        baseline_cover_calls = renderer.cover_calls
+        original_bundle = job.review_bundle_hash
+        original_artifacts = [
+            (item.name, item.asset.asset_id) for item in job.artifacts
+        ]
+        shots = job.storyboard_plan.shots[:3]
+        uploads = [
+            ("image", "image/png", ".png", bytes.fromhex("89504e470d0a1a0a") + b"one"),
+            ("video", "video/mp4", ".mp4", bytes.fromhex("000000186674797069736f6d") + b"two"),
+            ("image", "image/jpeg", ".jpg", bytes.fromhex("ffd8ff") + b"three"),
+        ]
+        expected_selections = {}
+
+        for index, (shot, upload) in enumerate(zip(shots, uploads), 1):
+            media_kind, media_type, extension, payload = upload
+            source = self.root / f"batch-source-{index}{extension}"
+            source.write_bytes(payload)
+            media_id = f"upload_batch_{index:02d}"
+            raw_asset = await self.storage.put_file(
+                object_key=f"tests/raw-batch-{index}{extension}",
+                path=source,
+                asset_id=f"raw_batch_{index}",
+                media_type=media_type,
+            )
+            job = await self.service.prepare_shot_media(
+                job.id,
+                shot.shot_id,
+                raw_asset,
+                media_kind,
+                media_id,
+                source.name,
+                "",
+                self.actor,
+            )
+            expected_selections[shot.shot_id] = media_id
+            self.assertEqual(renderer.render_calls, baseline_render_calls)
+            self.assertEqual(renderer.cover_calls, baseline_cover_calls)
+            self.assertEqual(job.review_bundle_hash, original_bundle)
+            self.assertEqual(
+                [(item.name, item.asset.asset_id) for item in job.artifacts],
+                original_artifacts,
+            )
+            self.assertEqual(
+                next(
+                    item.selected_media_id
+                    for item in job.storyboard_plan.shots
+                    if item.shot_id == shot.shot_id
+                ),
+                "",
+            )
+
+        self.assertEqual(
+            {
+                item.shot_id: item.media_id
+                for item in job.pending_shot_media_edits
+            },
+            expected_selections,
+        )
+        with self.assertRaisesRegex(InvalidTransition, "先应用或撤销"):
+            await self.service.approve_final(
+                job.id,
+                job.revision,
+                job.review_bundle_hash,
+                self.actor,
+                package_immediately=False,
+            )
+
+        fingerprint = await self.service.validate_pending_shot_media_action(
+            job.id,
+            job.revision,
+            self.actor,
+        )
+        job = await self.service.apply_pending_shot_media(
+            job.id,
+            fingerprint,
+            "batch_test_three",
+            self.actor,
+        )
+
+        self.assertEqual(renderer.render_calls, baseline_render_calls + 1)
+        self.assertEqual(renderer.cover_calls, baseline_cover_calls + 1)
+        self.assertEqual(job.state, JobState.FINAL_REVIEW_REQUIRED)
+        self.assertFalse(job.pending_shot_media_edits)
+        self.assertEqual(
+            {
+                item.shot_id: item.selected_media_id
+                for item in job.storyboard_plan.shots
+                if item.shot_id in expected_selections
+            },
+            expected_selections,
+        )
+        self.assertTrue(any(
+            "-batch_test_three/" in item.asset.object_key
+            for item in job.artifacts
+        ))
+        job = await self.service.stage_shot_media_selection(
+            job.id,
+            shots[0].shot_id,
+            "",
+            job.revision,
+            self.actor,
+        )
+        recovered = await self.service.apply_pending_shot_media(
+            job.id,
+            fingerprint,
+            "batch_test_three",
+            self.actor,
+        )
+        self.assertEqual(renderer.render_calls, baseline_render_calls + 1)
+        self.assertEqual(len(recovered.pending_shot_media_edits), 1)
+        self.assertEqual(recovered.pending_shot_media_edits[0].media_id, "")
+
+    async def test_pending_media_can_be_replaced_and_discarded_without_render(self):
+        card = await self.service.create_source_card(valid_card(), self.actor)
+        card = await self.service.verify_source_card(
+            card.id, card.revision, self.actor
+        )
+        job = await self.service.create_job(card.id, self.actor)
+        job = await self.service.generate_script(job.id, self.actor)
+        job = await self.service.approve_script(
+            job.id, job.revision, job.script_hash, self.actor
+        )
+        job = await self.service.produce(job.id, self.actor)
+        baseline_render_calls = self.service.renderer.render_calls
+        shot_id = job.storyboard_plan.shots[0].shot_id
+
+        for index in (1, 2):
+            source = self.root / f"pending-replacement-{index}.png"
+            source.write_bytes(
+                bytes.fromhex("89504e470d0a1a0a") + f"image-{index}".encode()
+            )
+            raw_asset = await self.storage.put_file(
+                object_key=f"tests/raw-pending-{index}.png",
+                path=source,
+                asset_id=f"raw_pending_{index}",
+                media_type="image/png",
+            )
+            job = await self.service.prepare_shot_media(
+                job.id,
+                shot_id,
+                raw_asset,
+                "image",
+                f"upload_pending_{index}",
+                source.name,
+                "",
+                self.actor,
+            )
+
+        self.assertEqual(self.service.renderer.render_calls, baseline_render_calls)
+        self.assertEqual(len(job.shot_media_versions), 2)
+        self.assertEqual(len(job.pending_shot_media_edits), 1)
+        self.assertEqual(
+            job.pending_shot_media_edits[0].media_id,
+            "upload_pending_2",
+        )
+        job = await self.service.discard_pending_shot_media_edits(
+            job.id,
+            job.revision,
+            self.actor,
+            shot_id=shot_id,
+        )
+        self.assertFalse(job.pending_shot_media_edits)
+        self.assertEqual(len(job.shot_media_versions), 2)
+        self.assertEqual(self.service.renderer.render_calls, baseline_render_calls)
+
+    async def test_failed_batch_render_keeps_draft_and_pending_edits(self):
+        card = await self.service.create_source_card(valid_card(), self.actor)
+        card = await self.service.verify_source_card(
+            card.id, card.revision, self.actor
+        )
+        job = await self.service.create_job(card.id, self.actor)
+        job = await self.service.generate_script(job.id, self.actor)
+        job = await self.service.approve_script(
+            job.id, job.revision, job.script_hash, self.actor
+        )
+        job = await self.service.produce(job.id, self.actor)
+        original_bundle = job.review_bundle_hash
+        original_artifacts = [
+            (item.name, item.asset.asset_id) for item in job.artifacts
+        ]
+        shot_id = job.storyboard_plan.shots[0].shot_id
+        source = self.root / "batch-failure.png"
+        source.write_bytes(bytes.fromhex("89504e470d0a1a0a") + b"failure")
+        raw_asset = await self.storage.put_file(
+            object_key="tests/raw-batch-failure.png",
+            path=source,
+            asset_id="raw_batch_failure",
+            media_type="image/png",
+        )
+        job = await self.service.prepare_shot_media(
+            job.id,
+            shot_id,
+            raw_asset,
+            "image",
+            "upload_batch_failure",
+            source.name,
+            "",
+            self.actor,
+        )
+        fingerprint = await self.service.validate_pending_shot_media_action(
+            job.id,
+            job.revision,
+            self.actor,
+        )
+
+        class FailingBatchRenderer(FakeRenderer):
+            async def render(self, manifest, storage, workspace):
+                del manifest, storage, workspace
+                self.render_calls += 1
+                raise ProviderUnavailable("测试中的批量渲染失败")
+
+        self.service.renderer = FailingBatchRenderer()
+        with self.assertRaisesRegex(ProviderUnavailable, "批量渲染失败"):
+            await self.service.apply_pending_shot_media(
+                job.id,
+                fingerprint,
+                "batch_failure",
+                self.actor,
+            )
+
+        latest = await self.service.get_job(job.id, self.actor)
+        self.assertEqual(latest.state, JobState.FINAL_REVIEW_REQUIRED)
+        self.assertEqual(latest.review_bundle_hash, original_bundle)
+        self.assertEqual(
+            [(item.name, item.asset.asset_id) for item in latest.artifacts],
+            original_artifacts,
+        )
+        self.assertEqual(len(latest.pending_shot_media_edits), 1)
+        self.assertEqual(
+            latest.pending_shot_media_edits[0].media_id,
+            "upload_batch_failure",
+        )
+        self.assertEqual(
+            next(
+                item.selected_media_id
+                for item in latest.storyboard_plan.shots
+                if item.shot_id == shot_id
+            ),
+            "",
+        )
+        self.assertIn("原成片和待应用修改均已保留", latest.error)
 
     async def test_failed_uploaded_video_keeps_the_reviewable_draft(self):
         card = await self.service.create_source_card(valid_card(), self.actor)
