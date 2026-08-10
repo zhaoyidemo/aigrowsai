@@ -318,6 +318,21 @@ function renderVisualStyleSelector(preferredStyleId = '') {
   updateVisualStyleDescription();
 }
 
+function promptWritingProfile() {
+  const profile = state.capabilities?.prompt_writing_profile;
+  return profile && typeof profile === 'object' ? profile : null;
+}
+
+function renderPromptWritingProfile() {
+  const profile = promptWritingProfile();
+  $('#prompt-profile-name').textContent = profile?.display_name || '结构化多模态提示词';
+  $('#prompt-profile-version').textContent = profile?.version
+    ? '自动启用 · v' + profile.version
+    : '自动启用';
+  $('#prompt-profile-description').textContent = profile?.description
+    || '系统会自动把视觉意图整理成分镜、首帧和视频提示词，不需要手动选择。';
+}
+
 const SEEDANCE_EFFICIENT_MODEL = 'doubao-seedance-1-0-pro-fast-251015';
 const SEEDANCE_FLAGSHIP_MODEL = 'doubao-seedance-2-0-260128';
 const MIN_IMAGE_CHAPTER_COUNT = 2;
@@ -624,6 +639,7 @@ function initializePromptFields() {
     && saved.visual_style_id !== selectedStyleId;
   renderContentSkillSelector(selectedSkillId);
   renderVisualStyleSelector(selectedStyleId);
+  renderPromptWritingProfile();
   const selectedDefaults = visualStyleGenerationDefaults(
     selectedSkillId,
     selectedStyleId,
@@ -2624,6 +2640,33 @@ function applyJobReadOnly(job) {
     || job.state !== 'final_review_required';
 }
 
+function jobGenerationMethodCard(label, snapshot, legacyName) {
+  const frozen = !!snapshot;
+  const name = snapshot?.display_name || legacyName;
+  const status = frozen
+    ? 'v' + (snapshot.version || '未知') + ' · 已随任务冻结'
+    : '兼容模式 · 未使用新版快照';
+  return [
+    '<article class="job-generation-method">',
+    '<span>' + escapeHtml(label) + '</span>',
+    '<strong>' + escapeHtml(name) + '</strong>',
+    '<small>' + escapeHtml(status) + '</small>',
+    '</article>',
+  ].join('');
+}
+
+function renderJobGenerationMethods(job) {
+  $('#job-generation-methods').innerHTML = [
+    jobGenerationMethodCard('内容方法', job.skill_snapshot, '旧版内容流程'),
+    jobGenerationMethodCard('视觉表现', job.visual_style_snapshot, '旧版视觉逻辑'),
+    jobGenerationMethodCard(
+      '提示词方法',
+      job.prompt_writing_profile_snapshot,
+      '旧版提示词逻辑',
+    ),
+  ].join('');
+}
+
 function renderDetail() {
   const job = state.selectedJob;
   const detail = $('#job-detail');
@@ -2636,6 +2679,7 @@ function renderDetail() {
   accessNote.textContent = canEditResource(job)
     ? ''
     : `这是 ${job.created_by || '其他同事'} 创建的团队内容，你可以查看和下载，但不能修改、重试或继续产生费用。`;
+  renderJobGenerationMethods(job);
   const hasReferenceImage = (job.source_card_snapshot?.reference_assets || []).length > 0;
   const referenceNode = $('#job-reference-image');
   const referencePreview = $('#job-reference-preview');
@@ -2733,6 +2777,7 @@ function renderDetail() {
     $('#script-review-spec').textContent = [
       job.skill_snapshot?.display_name || '旧版工作流',
       job.visual_style_snapshot?.display_name || '旧版视觉设定',
+      job.prompt_writing_profile_snapshot?.display_name || '旧版提示词方法',
       `本任务 ${jobResolution(job).toUpperCase()}`,
       ttsVoiceLabel(ttsSettings.tts_voice_id),
       `${normalizedTtsSpeedRatio(ttsSettings.tts_speed_ratio).toFixed(1)}x`,

@@ -74,6 +74,19 @@ test('visual styles are selected and frozen independently from content Skills an
   assert.match(styles, /\.visual-style-setting/);
 });
 
+test('the automatic prompt-writing profile is visible without becoming another selector', () => {
+  assert.match(page, /id="prompt-profile-name"/);
+  assert.match(page, /id="prompt-profile-version">自动启用/);
+  assert.match(page, /id="job-generation-methods"/);
+  assert.match(app, /function promptWritingProfile/);
+  assert.match(app, /state\.capabilities\?\.prompt_writing_profile/);
+  assert.match(app, /job\.prompt_writing_profile_snapshot/);
+  assert.match(app, /已随任务冻结/);
+  assert.doesNotMatch(page, /<select id="prompt-profile/);
+  assert.match(styles, /\.prompt-profile-setting/);
+  assert.match(styles, /\.job-generation-methods/);
+});
+
 test('administrator can manage bounded colleague access without exposing passwords', () => {
   assert.match(page, /id="account-management-link"/);
   assert.match(accountsPage, /同事账号与使用权限/);

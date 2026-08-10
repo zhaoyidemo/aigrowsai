@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.19.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.19.1">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -123,6 +123,16 @@
             </span>
             <select id="visual-style" aria-label="视觉表现"></select>
           </label>
+          <section class="video-quality-setting prompt-profile-setting" aria-labelledby="prompt-profile-label">
+            <span class="video-quality-copy">
+              <strong id="prompt-profile-label">提示词方法</strong>
+              <small id="prompt-profile-description">系统会自动把视觉意图整理成分镜、首帧和视频提示词，不需要手动选择。</small>
+            </span>
+            <span class="prompt-profile-value" aria-live="polite">
+              <strong id="prompt-profile-name">正在读取当前方法</strong>
+              <small id="prompt-profile-version">自动启用</small>
+            </span>
+          </section>
           <label class="video-quality-setting" for="video-resolution">
             <span class="video-quality-copy">
               <strong>视频画质</strong>
@@ -288,6 +298,7 @@
             <span id="job-state" class="state-pill"></span>
           </div>
           <p id="job-access-note" class="resource-access-note" hidden></p>
+          <section id="job-generation-methods" class="job-generation-methods" aria-label="本任务使用的生成方法"></section>
           <section id="job-reference-image" class="job-reference-image" hidden>
             <img id="job-reference-preview" alt="本任务的全局参考图">
             <div><strong>全局参考图已应用</strong><span>优先统一全部视觉章节的画风、色彩与人物造型</span></div>
@@ -504,6 +515,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.19.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.19.1"></script>
 </body>
 </html>

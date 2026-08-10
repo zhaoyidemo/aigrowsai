@@ -31,6 +31,8 @@
 
 视觉风格位于 `qijia_video/visual_styles/`，内部提示词方法位于 `qijia_video/prompt_writing_profiles/`。创建任务时分别冻结 `visual_style_snapshot`、`prompt_writing_profile_snapshot` 及对应版本；旧任务没有这些快照时继续使用原提示词。全局参考图始终拥有最高视觉优先级。只读目录接口为 `GET /api/qijia-video/visual-styles`。
 
+工作台会在创建区以只读状态显示当前自动启用的 Prompt Writing Profile，并在任务详情持续展示本任务冻结的 Content Skill、Visual Style 与 Prompt Writing Profile；旧任务则明确标记为兼容模式。
+
 ## 当前真实链路
 
 ```text
