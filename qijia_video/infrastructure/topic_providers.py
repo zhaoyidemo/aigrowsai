@@ -325,7 +325,9 @@ class OpenRouterTopicEditor:
                 },
             ],
             "reasoning": {"effort": "medium", "exclude": True},
-            "max_completion_tokens": 6000,
+            # Grok 4.5 advertises `max_tokens`; with require_parameters enabled,
+            # max_completion_tokens leaves OpenRouter with no eligible endpoint.
+            "max_tokens": 6000,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {

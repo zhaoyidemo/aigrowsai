@@ -1174,10 +1174,10 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(request_body["reasoning"]["exclude"])
         self.assertEqual(
-            request_body["max_completion_tokens"],
+            request_body["max_tokens"],
             SCRIPT_MAX_COMPLETION_TOKENS,
         )
-        self.assertNotIn("max_tokens", request_body)
+        self.assertNotIn("max_completion_tokens", request_body)
         self.assertNotIn("temperature", request_body)
         prompt = request_body["messages"][1]["content"]
         self.assertIn("一条视频只讲清一个核心观点", prompt)
@@ -1312,7 +1312,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             OPENROUTER_REASONING_EFFORT,
         )
         self.assertEqual(
-            request_body["max_completion_tokens"],
+            request_body["max_tokens"],
             PERSON_RESEARCH_MAX_COMPLETION_TOKENS,
         )
         self.assertEqual(request_body["max_tool_calls"], 2)
@@ -1447,7 +1447,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             api_key="test-key",
             base_url="https://openrouter.ai/api",
             model="test/script-model",
-            research_model="openai/gpt-5.6-terra",
+            research_model="x-ai/grok-4.5",
             transport=httpx.MockTransport(handler),
         )
         card_input = NewsTopicInput(
@@ -1473,9 +1473,9 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(calls), 1)
         request_body = json.loads(calls[0].content)
-        self.assertEqual(request_body["model"], "openai/gpt-5.6-terra")
+        self.assertEqual(request_body["model"], "x-ai/grok-4.5")
         self.assertEqual(
-            request_body["max_completion_tokens"],
+            request_body["max_tokens"],
             NEWS_RESEARCH_MAX_COMPLETION_TOKENS,
         )
         self.assertEqual(request_body["max_tool_calls"], 3)
@@ -2132,7 +2132,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 OPENROUTER_REASONING_EFFORT,
             )
             self.assertEqual(
-                payload["max_completion_tokens"],
+                payload["max_tokens"],
                 STORYBOARD_MAX_COMPLETION_TOKENS,
             )
             prompt = payload["messages"][1]["content"]

@@ -34,10 +34,10 @@ from qijia_video.prompts import (
 
 
 SCRIPT_PROMPT_VERSION = "qijia_script_v13_narrative_progression"
-STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v8_max_reasoning"
+STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v9_frontier_high_reasoning"
 PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_research_v1"
 NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v5"
-OPENROUTER_REASONING_EFFORT = "max"
+OPENROUTER_REASONING_EFFORT = "high"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 PERSON_RESEARCH_MAX_COMPLETION_TOKENS = 48_000
 NEWS_RESEARCH_MAX_COMPLETION_TOKENS = 48_000
@@ -752,10 +752,11 @@ async def _openrouter_json_request(
     payload = {
         "model": model,
         "messages": messages,
-        # GPT-5 reasoning tokens share this ceiling with the visible answer.
-        # Callers therefore pair max reasoning with a workload-sized ceiling.
+        # Reasoning tokens share this ceiling with the visible answer. OpenRouter's
+        # Grok endpoints currently advertise `max_tokens`, and `require_parameters`
+        # rejects the otherwise preferred `max_completion_tokens` before routing.
         "reasoning": {"effort": reasoning_effort, "exclude": True},
-        "max_completion_tokens": max_completion_tokens,
+        "max_tokens": max_completion_tokens,
         "response_format": {
             "type": "json_schema",
             "json_schema": {

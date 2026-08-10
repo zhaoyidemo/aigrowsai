@@ -739,7 +739,8 @@ class OpenRouterTopicEditorContractTests(unittest.IsolatedAsyncioTestCase):
                 [item.id for item in self._minimal_evidence()],
             )
             self.assertEqual(payload["reasoning"]["effort"], "medium")
-            self.assertEqual(payload["max_completion_tokens"], 6000)
+            self.assertEqual(payload["max_tokens"], 6000)
+            self.assertNotIn("max_completion_tokens", payload)
             self.assertTrue(payload["provider"]["require_parameters"])
             self.assertNotIn("plugins", payload)
             self.assertIn("不可信数据", payload["messages"][1]["content"])

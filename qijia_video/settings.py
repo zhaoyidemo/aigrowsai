@@ -23,8 +23,8 @@ class QijiaVideoSettings(BaseSettings):
 
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api"
-    QIJIA_VIDEO_SCRIPT_MODEL: str = "openai/gpt-5.6-sol"
-    QIJIA_VIDEO_RESEARCH_MODEL: str = "openai/gpt-5.6-terra"
+    QIJIA_VIDEO_SCRIPT_MODEL: str = "x-ai/grok-4.5"
+    QIJIA_VIDEO_RESEARCH_MODEL: str = "x-ai/grok-4.5"
 
     # 家庭教育选题研究：仅使用 TikHub 的抖音读接口。中国大陆默认走 .dev。
     TIKHUB_API_KEY: str = ""
