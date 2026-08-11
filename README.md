@@ -1,6 +1,6 @@
 # 齐家 AI 家庭教育内容工作台
 
-面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的研究与短视频生产服务。家庭教育仍是默认业务场景；内容策划、研究规则、脚本提示词和内容视觉策略由可版本化的 Content Skill 管理，视觉表现独立管理，H3 Prompt Writing 作为唯一内部视觉提示词编排层；Seedream、Seedance、TTS、Remotion、FFmpeg、存储、成本与任务状态机继续共用。
+面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的研究与短视频生产服务。家庭教育仍是默认业务场景；Content Skill 管理研究边界、写作策略和内容视觉策略，视觉表现独立管理，H3 Prompt Writing 以原始输入为最高优先级，作为联网研究、脚本语义与视觉提示词的唯一内部编排层；Seedream、Seedance、TTS、Remotion、FFmpeg、存储、成本与任务状态机继续共用。
 
 环境变量中的管理员账号可以创建、启停同事账号，授予或收回工作台使用权限，并重置密码。同事可以查看团队创建的全部内容、成本和抖音效果，只能修改和继续执行自己创建的内容；管理员可以管理全部内容。
 
@@ -8,7 +8,7 @@
 
 当前内置两套 Skill：
 
-- `explain-expert-view@1.2.0`：教育、心理与思想人物观点讲解。人物联网研究是可选增强；无法形成可靠研究简报时保留原始观点和边界继续。
+- `explain-expert-view@1.3.0`：思想、历史、教育、心理、科学与商业等领域的人物观点解读。H3 会先按完整输入编排出处、原文与语境研究；无法形成可靠简报时保留原始观点和明确边界继续。
 - `brief-recent-news@1.3.0`：科技、商业或通用最新新闻口播。用户输入仅是检索请求；至少需要一条与检索注释匹配的可追溯事实。时间缺失、单站点或来源类型不完整时会醒目标注并进入人工审核，只有没有可追溯证据时才停止。联网研究默认使用 `x-ai/grok-4.5`，通过 OpenRouter 托管的 Exa 工具完成检索，不需要额外的搜索 API Key，并与脚本模型独立配置。
 
 每个 Skill 位于 `qijia_video/content_skills/<skill-id>/`，由 `SKILL.md`、`manifest.json` 和 `references/` 中的研究、脚本及内容视觉策略组成。内容视觉策略只约束真实性、领域安全和允许表达的语义，不包含画风、构图或运镜。`skill_registry.py` 只加载符合固定 manifest 契约的目录，按内容格式推荐默认 Skill；创建任务时把 `skill_id`、`version`、manifest 哈希、研究策略、系统提示词、内容视觉策略和质量规则冻结到任务 JSON 中。后续修改 Skill 文件不会改变已创建任务，旧任务没有 `skill_snapshot` 时继续按原语义恢复。
@@ -25,7 +25,7 @@
 
 - Content Skill：决定输入、研究、脚本结构、每段可见语义和内容真实性/安全边界，不决定艺术风格与镜头方法；
 - Visual Style：只提供艺术语言与材质运动语法，目前提供“现代编辑插画”“编辑纸张拼贴”“纸艺定格讲解”；
-- Prompt Writing Profile：所有新任务固定使用 `h3-prompt-writing@1.0.0`。它先识别文本、参考素材和首帧驱动等输入模式，再统一生成可直接使用的首帧和 I2V 动作提示词；旧 `structured-multimodal@1.0.0` 仅用于读取历史任务。
+- Prompt Writing Profile：所有新任务固定使用 `h3-prompt-writing@1.1.0`。它从完整原始输入开始，先编译任务专属研究提示词和脚本语义，再统一生成分镜、首帧与 I2V 动作提示词；旧 `structured-multimodal@1.0.0` 仅用于读取历史任务。
 
 H3 编排和两种纸艺视觉风格是对 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 中提示词组织、纸张拼贴和纸艺定格方法的内部适配，没有复制其长流程门禁，也不引入 MiniMax 模型、API Key 或供应商调用。实际模型仍由现有 Provider 配置决定；今后替换图片或视频模型，只需调整 Provider 编译边界，不需要改写 Content Skill 或视觉风格资源。
 
@@ -49,6 +49,8 @@ H3 编排和两种纸艺视觉风格是对 [MiniMax-H3](https://github.com/MiniM
   → OpenRouter 脚本
   → 人工确认脚本
   → 豆包 TTS 2.0 完整旁白
+  → H3 按原始输入编排研究提示词，OpenRouter 联网核验出处、原文与语境
+  → H3 结合研究简报与 Content Skill 编排脚本语义
   → OpenRouter 按 H3 统一编排混合分镜与最终媒体提示词（固定 3 段视频，动态图片可选 2–10 段）
   → 可选：先按文字分镜连续上传自有图片 / 视频，并一次确认素材安排
   → Seedream 只为未上传素材的视觉章节生成首帧
@@ -133,6 +135,7 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 - `qijia_video/`：领域契约、工作流、Provider、API、鉴权和 Web 页面。
 - `qijia_video/content_skills/`、`qijia_video/skill_registry.py`：版本化内容工作流、兼容格式路由与内容快照冻结。
 - `qijia_video/visual_styles/`、`qijia_video/prompt_writing_profiles/`、`qijia_video/visual_style_registry.py`：模型无关的视觉风格、结构化多模态提示词方法与独立任务快照。
+- `qijia_video/prompt_orchestration.py`：把冻结的原始输入、H3 Profile 与 Content Skill 边界编译成可审计的研究提示词和脚本上游约束。
 - `qijia_video/visual_prompting.py`：按固定优先级把内容视觉策略、参考素材、视觉风格和 H3 方法编译为分镜规格，并把 H3 产出的首帧/I2V 提示词精简后交给媒体 Provider，不负责选择或调用模型。
 - `qijia_video/infrastructure/postgres_repository.py`：来源卡与视频任务聚合仓储。
 - `qijia_video/accounts.py`、`qijia_video/account_api.py`：同事账号、密码哈希、会话失效与管理员 API。

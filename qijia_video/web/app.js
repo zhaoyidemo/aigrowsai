@@ -382,7 +382,7 @@ function renderPromptWritingProfile() {
     ? '自动启用 · v' + profile.version
     : '自动启用';
   $('#prompt-profile-description').textContent = profile?.description
-    || 'H3 是唯一编排层：统一生成分镜、首帧和首帧驱动视频提示词。';
+    || 'H3 是唯一编排层：从原始输入统一生成研究、脚本、分镜、首帧和首帧驱动视频提示词。';
   renderOrchestrationSelection();
 }
 
@@ -969,6 +969,7 @@ const workflowStages = [
 ];
 const progressStageIndexes = {
   material_confirmed: 0,
+  research_prompt_compilation: 0,
   person_research: 0,
   recent_news_research: 0,
   script: 0,
@@ -999,6 +1000,7 @@ const progressStageIndexes = {
 const domainLabels = {
   parent_education: '家庭教育', developmental_psychology: '发展心理学', educational_psychology: '教育心理学',
   parent_child_relationship: '亲子关系', parent_growth: '家长成长',
+  general_knowledge: '通识观点',
   technology: '科技', business: '商业', general_news: '通用新闻',
 };
 
@@ -2598,17 +2600,45 @@ function renderResearchBrief(job) {
     ? '<div class="research-uncertainties"><strong>需保留的边界</strong>'
       + list(brief.uncertainties) + '</div>'
     : '';
+  const attributionLabels = {
+    verified: '已核验',
+    partially_supported: '部分支持',
+    unverified: '尚未核验',
+    not_applicable: '不适用',
+  };
+  const inputTypeLabels = {
+    attributed_quote: '候选人物引语',
+    paraphrased_viewpoint: '人物观点转述',
+    conceptual_claim: '观点命题',
+    unknown: '待确认输入',
+  };
+  const personResearchRows = isNews ? '' : [
+    '<article><span>输入判断</span><p>'
+      + escapeHtml(inputTypeLabels[brief.input_type] || '待确认输入')
+      + (brief.research_focus ? ' · ' + escapeHtml(brief.research_focus) : '')
+      + '</p></article>',
+    '<article><span>出处核验 · '
+      + escapeHtml(attributionLabels[brief.attribution_status] || '尚未核验')
+      + '</span><p>' + escapeHtml(brief.attribution_note || '未返回额外出处说明') + '</p></article>',
+    brief.verified_wording
+      ? '<article><span>可靠原文</span><p>' + escapeHtml(brief.verified_wording) + '</p></article>'
+      : '',
+    brief.source_context
+      ? '<article><span>原始语境</span><p>' + escapeHtml(brief.source_context) + '</p></article>'
+      : '',
+  ].join('');
   node.innerHTML = [
     '<div class="research-brief-heading"><div><strong>'
-      + (isNews ? '最新新闻研究简报' : '人物主题自动研究简报') + '</strong>',
-    '<span>有可追溯来源 · 已用于本次脚本'
+      + (isNews ? '最新新闻研究简报' : 'H3 输入驱动研究简报') + '</strong>',
+    '<span>原始输入已冻结 · 有可追溯来源 · 已用于本次脚本'
       + (isNews && brief.as_of ? ' · 截至 ' + escapeHtml(formatDateTime(brief.as_of)) : '')
       + '</span></div>',
     '<small>' + escapeHtml(brief.model_id || '') + '</small></div>',
     '<p class="research-summary">' + escapeHtml(brief.summary || '') + '</p>',
     '<div class="research-brief-grid">',
+    personResearchRows,
     '<article><span>最值得讲的张力</span><p>' + escapeHtml(brief.core_tension || '') + '</p></article>',
-    '<article><span>' + (isNews ? '受众现实关联' : '家长现实关联') + '</span>' + list(brief.audience_relevance) + '</article>',
+    '<article><span>受众现实关联</span>' + list(brief.audience_relevance) + '</article>',
     '<article><span>可展开角度</span>' + list(brief.content_angles) + '</article>',
     '<article><span>互动切口</span><p>' + escapeHtml(brief.interaction_opportunity || '—') + '</p></article>',
     '</div>',

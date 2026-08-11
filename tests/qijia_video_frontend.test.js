@@ -78,9 +78,9 @@ test('visual styles are selected and frozen independently from content Skills an
   assert.match(styles, /\.visual-style-preview/);
 });
 
-test('H3 is shown as the compiler between independent inputs and media prompts', () => {
+test('H3 is shown as the compiler from original input through research and media prompts', () => {
   assert.match(page, /<details id="generation-orchestration"/);
-  assert.match(page, /内容约束、视觉语言与可选参考图，由 H3 编译为三类镜头指令/);
+  assert.match(page, /原始输入、内容约束、视觉语言与参考素材，由 H3 分阶段编译/);
   assert.match(page, /先确定讲什么、依据什么/);
   assert.match(page, /选择观众实际会看到的画面语言/);
   assert.match(page, /不提供事实，也不覆盖镜头语义/);
@@ -88,7 +88,7 @@ test('H3 is shown as the compiler between independent inputs and media prompts',
   assert.match(page, /id="prompt-profile-version">自动启用/);
   assert.match(page, /唯一编排层/);
   assert.match(page, /事实与安全[\s\S]*镜头语义[\s\S]*参考图属性[\s\S]*视觉风格补全[\s\S]*Provider 语法/);
-  assert.match(page, /分镜语义[\s\S]*首帧提示词[\s\S]*I2V 动作提示词/);
+  assert.match(page, /研究提示词[\s\S]*脚本语义[\s\S]*分镜语义[\s\S]*首帧提示词[\s\S]*I2V 动作提示词/);
   assert.match(page, /模型只执行最终提示词，不参与职责分配/);
   assert.match(page, /<details id="job-generation-methods"/);
   assert.match(app, /function promptWritingProfile/);
@@ -211,7 +211,8 @@ test('creation intake asks only for one person and one viewpoint', () => {
   const manualForm = page.slice(manualStart, manualEnd);
   assert.match(page, /name="person_name"/);
   assert.match(page, /name="viewpoint"/);
-  assert.match(page, /冲突、反直觉与现实意义/);
+  assert.match(page, /核验出处与语境，再生成脚本和画面提示词/);
+  assert.doesNotMatch(manualForm, /阿尔弗雷德·阿德勒|真正影响孩子/);
   assert.doesNotMatch(manualForm, /name="source_material"|name="rights_confirmed"|补充出处|专业模式/);
   assert.doesNotMatch(page, /name="parent_question"|name="core_idea"|name="fact_text"|name="subject_name"/);
   assert.match(app, /\/source-cards\/idea/);
@@ -219,11 +220,14 @@ test('creation intake asks only for one person and one viewpoint', () => {
 });
 
 test('person viewpoint research is visible, cited, and non-blocking', () => {
-  assert.match(page, /会先自动研究可追溯资料/);
-  assert.match(page, /没有可靠来源时会使用原始观点继续/);
+  assert.match(page, /先判断它是引语、转述还是观点命题/);
+  assert.match(page, /没有可靠来源时会明确降级/);
   assert.match(page, /id="person-research-brief"/);
   assert.match(app, /function renderResearchBrief\(job\)/);
-  assert.match(app, /人物主题自动研究简报/);
+  assert.match(app, /H3 输入驱动研究简报/);
+  assert.match(app, /出处核验/);
+  assert.match(app, /可靠原文/);
+  assert.match(app, /原始语境/);
   assert.match(app, /自动研究已降级/);
   assert.match(app, /research_warning/);
   assert.match(app, /rel="noopener noreferrer"/);
@@ -489,12 +493,12 @@ test('person viewpoint flow starts a real job and polling resumes after refresh'
 test('custom script prompting is explicit, one-task-only, and never owns visuals', () => {
   assert.match(page, /id="script-generation-prompt"/);
   assert.match(page, /id="enable-custom-script-prompt"/);
-  assert.match(page, /为下一条任务显式启用自定义脚本提示词/);
+  assert.match(page, /为下一条任务显式启用自定义脚本策略/);
   assert.match(page, /此内容不会保存到浏览器，也不会静默影响下一条任务/);
   assert.doesNotMatch(page, /id="seedance-generation-prompt"/);
   assert.doesNotMatch(page, /id="job-seedance-prompt"/);
   assert.match(page, /来源卡和 JSON 输出结构仍由系统自动附加/);
-  assert.match(page, /视觉提示词始终由 H3 统一编排/);
+  assert.match(page, /视觉提示词也始终由 H3 统一编排/);
   assert.match(app, /generation_settings: generationSettings/);
   assert.doesNotMatch(app, /seedance_prompt: seedancePrompt/);
   assert.doesNotMatch(app, /job-seedance-prompt/);
@@ -520,6 +524,7 @@ test('production UI prioritizes the current task and stays usable on mobile', ()
   assert.match(styles, /\.job-list \{ max-height:/);
   assert.match(styles, /\.workspace-grid > \.mobile-pane-hidden/);
   assert.match(styles, /@media \(max-width: 900px\)[\s\S]*\.production-view-tabs \{ display: flex/);
+  assert.match(styles, /@media \(max-width: 560px\)[\s\S]*\.section-title \{ align-items: flex-start; flex-direction: column/);
   assert.ok(page.indexOf('id="current-action"') < page.indexOf('id="job-generation-methods"'));
   assert.match(app, /querySelectorAll\('\[data-busy-lock\]'\)/);
   for (const formId of ['topic-source-form', 'source-card-form', 'news-topic-form']) {

@@ -35,7 +35,7 @@ from qijia_video.prompts import (
 
 SCRIPT_PROMPT_VERSION = "qijia_script_v13_narrative_progression"
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v11_h3_orchestrated"
-PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_research_v1"
+PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_research_v2_input_driven"
 NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v5"
 OPENROUTER_REASONING_EFFORT = "high"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
@@ -120,6 +120,28 @@ _SCRIPT_RESPONSE_SCHEMA = {
 _PERSON_RESEARCH_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
+        "input_type": {
+            "type": "string",
+            "enum": [
+                "attributed_quote",
+                "paraphrased_viewpoint",
+                "conceptual_claim",
+                "unknown",
+            ],
+        },
+        "research_focus": {"type": "string"},
+        "attribution_status": {
+            "type": "string",
+            "enum": [
+                "verified",
+                "partially_supported",
+                "unverified",
+                "not_applicable",
+            ],
+        },
+        "verified_wording": {"type": "string"},
+        "attribution_note": {"type": "string"},
+        "source_context": {"type": "string"},
         "summary": {"type": "string"},
         "core_tension": {"type": "string"},
         "audience_relevance": {
@@ -139,8 +161,34 @@ _PERSON_RESEARCH_RESPONSE_SCHEMA = {
                     "claim": {"type": "string"},
                     "source_title": {"type": "string"},
                     "source_url": {"type": "string"},
+                    "source_kind": {
+                        "type": "string",
+                        "enum": [
+                            "official",
+                            "primary",
+                            "independent",
+                            "other",
+                        ],
+                    },
+                    "evidence_type": {
+                        "type": "string",
+                        "enum": [
+                            "attribution",
+                            "source_context",
+                            "biography",
+                            "interpretation",
+                            "current_relevance",
+                            "other",
+                        ],
+                    },
                 },
-                "required": ["claim", "source_title", "source_url"],
+                "required": [
+                    "claim",
+                    "source_title",
+                    "source_url",
+                    "source_kind",
+                    "evidence_type",
+                ],
                 "additionalProperties": False,
             },
         },
@@ -150,6 +198,12 @@ _PERSON_RESEARCH_RESPONSE_SCHEMA = {
         },
     },
     "required": [
+        "input_type",
+        "research_focus",
+        "attribution_status",
+        "verified_wording",
+        "attribution_note",
+        "source_context",
         "summary",
         "core_tension",
         "audience_relevance",
@@ -995,27 +1049,34 @@ class OpenRouterScriptProvider:
         person_name = card.subject.name
         viewpoint = card.core_idea
         research_date = timestamp()[:10]
-        prompt = (
-            "请为一条面向家长的知识短视频完成联网研究简报。必须先检索，再输出中文 JSON。\n\n"
+        compiled_prompt = research_prompt.strip() or (
+            "请先根据原始输入形成任务专属研究计划，再完成联网研究。\n"
             f"研究日期（UTC）：{research_date}\n"
             f"人物：{person_name}\n"
-            f"用户给出的主题观点：{viewpoint}\n\n"
-            + (
-                f"【本 Skill 的研究规则】\n{research_prompt.strip()}\n\n"
-                if research_prompt.strip()
-                else ""
-            )
-            + "研究目标：确认人物的专业背景与该主题相关的概念脉络，找到它对当代家长真正有用的"
-            "冲突、边界和现实场景。用户写下的观点只是创作命题，除非来源逐字支持，绝不能把它"
-            "写成该人物的原话。不要为了完整而补造履历、引语、书名、研究结论或因果关系。\n\n"
-            "检索时优先原始著作的可靠版本、大学/研究机构、专业协会、同行评议论文、权威出版社"
-            "或可信的传记资料；至少使用两个彼此独立的查询。忽略营销软文、短视频标题、百科搬运"
-            "和无来源的二手总结。资料有冲突或只能间接支持时，写入 uncertainties。\n\n"
-            "输出要求：summary 是可直接交给主编的研究结论；core_tension 只写一个最有价值的认知"
-            "张力；audience_relevance 写 2-4 个家长能识别的现实关联；content_angles 写 2-4 个"
-            "可展开但不夸大的角度；interaction_opportunity 设计一个具体、低压力、无需暴露隐私的"
-            "评论讨论点。evidence 写 3-6 条可安全转述的事实或概念，每条 source_url 必须原样使用"
-            "本次检索结果中的 URL，source_title 必须与页面一致。只返回 schema 要求的 JSON。"
+            f"用户原始表述：{viewpoint}\n"
+            f"目标受众：{card.target_audience}\n"
+            "不得预设学科或应用场景。先判断输入类型；若可能是人物原话，"
+            "先核验归属、可靠原文、出处、文字异同与上下文，再解释含义和现实价值。"
+        )
+        prompt = (
+            compiled_prompt
+            + "\n\n【人物研究 JSON 交付契约】\n"
+            "input_type 判断输入是 attributed_quote、paraphrased_viewpoint、"
+            "conceptual_claim 或 unknown。research_focus 用一句话写清本次实际研究问题。"
+            "attribution_status 只能是 verified、partially_supported、unverified 或"
+            " not_applicable；只有可靠来源直接支持人物归属和文字时才可写 verified。"
+            "verified_wording 只填写来源支持的可靠文字，未核验时必须为空。"
+            "attribution_note 说明归属证据、文字差异或未核验原因；source_context 说明"
+            "出处上下文及理解观点所需的时代、著作或专业语境。\n"
+            "summary 是可直接交给主编的研究结论；core_tension 只写一个由研究支持的核心张力；"
+            "audience_relevance 和 content_angles 各写 2-4 条，现实转译不得覆盖原意；"
+            "interaction_opportunity 设计具体、低压力、无需暴露隐私的讨论点。"
+            "evidence 写 3-8 条可安全转述的事实，每条只支持一个 claim；source_url 必须"
+            "原样使用本次检索结果 URL，source_title 必须与页面一致。source_kind 根据来源"
+            "填写 official、primary、independent 或 other；evidence_type 根据证据作用填写"
+            " attribution、source_context、biography、interpretation、current_relevance"
+            " 或 other。资料冲突、只能间接支持或无法定位原始出处时写入 uncertainties。"
+            "只返回 schema 要求的中文 JSON。"
         )
         response = await _openrouter_json_request(
             api_key=self.api_key,
@@ -1025,14 +1086,15 @@ class OpenRouterScriptProvider:
                 {
                     "role": "system",
                     "content": (
-                        "你是严谨的教育与心理学内容研究员。"
-                        "区分来源事实、合理解释和编辑角度，只返回有效 JSON。"
+                        "你是跨学科的严谨研究编辑。领域必须由原始输入决定；"
+                        "先核验出处和语境，再做解释与受众转译。"
+                        "严格区分来源事实、人物原话、合理解释和编辑角度，只返回有效 JSON。"
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
             label="人物主题研究",
-            schema_name="qijia_person_research_v1",
+            schema_name="qijia_person_research_v2",
             response_schema=_PERSON_RESEARCH_RESPONSE_SCHEMA,
             max_completion_tokens=PERSON_RESEARCH_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,
@@ -1044,10 +1106,10 @@ class OpenRouterScriptProvider:
                 "parameters": {
                     "engine": "exa",
                     "mode": "deep-lite",
-                    "max_results": 4,
-                    "max_uses": 2,
-                    "max_total_results": 8,
-                    "max_characters": 4000,
+                    "max_results": 5,
+                    "max_uses": 4,
+                    "max_total_results": 16,
+                    "max_characters": 6000,
                     "excluded_domains": [
                         "douyin.com",
                         "xiaohongshu.com",
@@ -1055,10 +1117,20 @@ class OpenRouterScriptProvider:
                     ],
                 },
             }],
-            max_tool_calls=2,
+            tool_choice="required",
+            max_tool_calls=4,
         )
         citations = _citation_catalog(response.message)
         grounded_evidence: list[dict[str, str]] = []
+        allowed_source_kinds = {"official", "primary", "independent", "other"}
+        allowed_evidence_types = {
+            "attribution",
+            "source_context",
+            "biography",
+            "interpretation",
+            "current_relevance",
+            "other",
+        }
         for raw in response.data.get("evidence") or []:
             if not isinstance(raw, dict):
                 continue
@@ -1078,6 +1150,18 @@ class OpenRouterScriptProvider:
                     or citation["url"]
                 )[:500],
                 "source_url": citation_url,
+                "source_kind": (
+                    str(raw.get("source_kind") or "other").strip()
+                    if str(raw.get("source_kind") or "other").strip()
+                    in allowed_source_kinds
+                    else "other"
+                ),
+                "evidence_type": (
+                    str(raw.get("evidence_type") or "other").strip()
+                    if str(raw.get("evidence_type") or "other").strip()
+                    in allowed_evidence_types
+                    else "other"
+                ),
             })
         if not grounded_evidence:
             raise ProviderUnavailable(
@@ -1085,18 +1169,67 @@ class OpenRouterScriptProvider:
             )
         generated = dict(response.data)
 
-        def bounded_list(key: str, maximum: int) -> list:
+        def bounded_text(key: str, maximum: int) -> str:
             value = generated.get(key)
-            return list(value[:maximum]) if isinstance(value, list) else []
+            return value.strip()[:maximum] if isinstance(value, str) else ""
+
+        def bounded_list(key: str, maximum: int) -> list[str]:
+            value = generated.get(key)
+            if not isinstance(value, list):
+                return []
+            return [
+                item.strip()[:1200]
+                for item in value
+                if isinstance(item, str) and item.strip()
+            ][:maximum]
+
+        input_type = bounded_text("input_type", 64)
+        if input_type not in {
+            "attributed_quote",
+            "paraphrased_viewpoint",
+            "conceptual_claim",
+            "unknown",
+        }:
+            input_type = "unknown"
+        attribution_status = bounded_text("attribution_status", 64)
+        if attribution_status not in {
+            "verified",
+            "partially_supported",
+            "unverified",
+            "not_applicable",
+        }:
+            attribution_status = "unverified"
+        verified_wording = bounded_text("verified_wording", 1800)
+        uncertainties = bounded_list("uncertainties", 8)
+        has_attribution_evidence = any(
+            item["evidence_type"] == "attribution"
+            for item in grounded_evidence
+        )
+        if attribution_status == "verified" and (
+            not verified_wording or not has_attribution_evidence
+        ):
+            attribution_status = "partially_supported"
+            message = (
+                "模型声称人物归属已经核验，但没有同时返回可靠原文和归属证据；"
+                "系统已自动降级为部分支持。"
+            )
+            if message not in uncertainties:
+                uncertainties.append(message)
 
         generated.update({
             "schema_version": "1.0",
             "person_name": person_name,
             "viewpoint": viewpoint,
+            "input_type": input_type,
+            "research_focus": bounded_text("research_focus", 1200),
+            "attribution_status": attribution_status,
+            "verified_wording": verified_wording,
+            "attribution_note": bounded_text("attribution_note", 1600),
+            "source_context": bounded_text("source_context", 2000),
             "audience_relevance": bounded_list("audience_relevance", 6),
             "content_angles": bounded_list("content_angles", 5),
             "evidence": grounded_evidence[:8],
-            "uncertainties": bounded_list("uncertainties", 8),
+            "uncertainties": uncertainties[:8],
             "model_id": response.model_id,
             "prompt_version": PERSON_RESEARCH_PROMPT_VERSION,
             "generated_at": timestamp(),

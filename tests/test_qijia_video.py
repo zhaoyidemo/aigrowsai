@@ -32,6 +32,7 @@ from qijia_video.contracts import (
     ResearchDiagnostics,
     RenderManifest,
     ScriptDraft,
+    SkillResearchMode,
     SourceCard,
     SourceCardInput,
     StoryboardShot,
@@ -93,6 +94,7 @@ from qijia_video.infrastructure.video_providers import (
     SeedanceVideoProvider,
 )
 from qijia_video.prompts import SCRIPT_HARD_MAX_CHARS, narration_char_count
+from qijia_video.prompt_orchestration import compile_research_prompt
 from qijia_video.service import QijiaVideoService, REQUIRED_PACKAGE_NAMES
 from qijia_video.skill_registry import default_skill_registry
 from qijia_video.visual_prompting import (
@@ -233,12 +235,9 @@ class QijiaVideoContractTests(unittest.TestCase):
         )
         expert = default_skill_registry.resolve("explain-expert-view")
         news = default_skill_registry.resolve("brief-recent-news")
-        self.assertEqual(expert.version, "1.2.0")
+        self.assertEqual(expert.version, "1.3.0")
         self.assertEqual(news.version, "1.3.0")
-        self.assertEqual(
-            GenerationSettings().script_prompt,
-            expert.script_prompt,
-        )
+        self.assertIn("来源卡目标受众", expert.script_prompt)
         self.assertEqual(news.research_mode.value, "recent_news_required")
         self.assertNotEqual(expert.manifest_hash, news.manifest_hash)
         self.assertIn("不要逐段独立创作后拼接", expert.script_prompt)
@@ -280,6 +279,8 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertIn("纸偶关节", papercraft.storyboard_rules)
         self.assertIn("先判断输入模式", profile.planning_framework)
         self.assertIn("I2V", profile.planning_framework)
+        self.assertIn("原始输入是任务范围的最高优先级", profile.research_framework)
+        self.assertIn("原始输入 → 已核验研究", profile.script_framework)
         self.assertIn("主体定义", legacy_profile.planning_framework)
         self.assertNotIn("MiniMax", profile.planning_framework)
         self.assertNotIn("Seedance", profile.planning_framework)
@@ -487,9 +488,98 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(card.subject.type, "person")
         self.assertEqual(card.subject.name, idea.person_name)
         self.assertEqual(card.content_format.value, "person_idea_explainer")
+        self.assertEqual(card.content_domain.value, "general_knowledge")
+        self.assertEqual(
+            card.target_audience,
+            "关注该人物与观点的普通中文受众",
+        )
         self.assertEqual(card.core_idea, idea.viewpoint)
-        self.assertEqual(card.verified_facts[0].text, idea.viewpoint)
-        self.assertIn("不补造人物经历", card.interpretation_boundary[0].text)
+        self.assertIn(idea.viewpoint, card.verified_facts[0].text)
+        self.assertIn("不证明人物归属", card.verified_facts[0].text)
+        self.assertIn("联网核验前", card.interpretation_boundary[0].text)
+
+    def test_h3_compiles_person_research_from_the_complete_original_input(self):
+        idea = PersonViewpointInput(
+            person_name="黄宗羲",
+            viewpoint=(
+                "大丈夫行事，论是非不论利害，论顺逆不论成败，"
+                "论万世不论一生。"
+            ),
+        )
+        card = SourceCard(
+            **idea.to_source_card_input().model_dump(mode="json"),
+            id="card-huang-zongxi",
+            revision=1,
+            status="verified",
+        )
+        skill = default_skill_registry.resolve(
+            "explain-expert-view"
+        ).snapshot()
+        profile = default_prompt_writing_profile_registry.resolve(
+            "h3-prompt-writing"
+        ).snapshot()
+
+        compiled = compile_research_prompt(
+            card,
+            skill=skill,
+            profile=profile,
+            research_mode=SkillResearchMode.PERSON_VIEWPOINT_OPTIONAL,
+            research_as_of="2026-08-11T10:00:00+08:00",
+        )
+
+        self.assertEqual(compiled.profile_version, "1.1.0")
+        self.assertIn(idea.viewpoint, compiled.prompt)
+        self.assertIn('"论万世不论一生"', compiled.prompt)
+        self.assertIn("人物归属、可靠原文、出处位置、文字异同与上下文", compiled.prompt)
+        self.assertIn("至少执行三个意图不同的查询", compiled.prompt)
+        self.assertNotIn("面向家长", compiled.prompt)
+        self.assertEqual(compiled.prompt_hash, content_hash(compiled.prompt))
+
+    def test_verified_research_wording_becomes_a_source_bound_quote(self):
+        idea = PersonViewpointInput(
+            person_name="黄宗羲",
+            viewpoint="论是非不论利害，论万世不论一生。",
+        )
+        card = SourceCard(
+            **idea.to_source_card_input().model_dump(mode="json"),
+            id="card-verified-wording",
+            revision=1,
+            status="verified",
+        )
+        brief = PersonResearchBrief(
+            person_name=idea.person_name,
+            viewpoint=idea.viewpoint,
+            input_type="attributed_quote",
+            research_focus="核验归属、原文与上下文。",
+            attribution_status="verified",
+            verified_wording=idea.viewpoint,
+            attribution_note="可靠来源直接支持该文字与人物归属。",
+            source_context="来源提供了理解这段文字所需的上下文。",
+            summary="研究已确认归属与基本语境。",
+            core_tension="当下利害与长期是非之间的选择。",
+            audience_relevance=["帮助普通受众区分原则和即时结果。"],
+            content_angles=["先讲出处，再解释三组对举。"],
+            evidence=[{
+                "claim": "可靠来源收录了该段文字及其上下文。",
+                "source_title": "可靠原始资料",
+                "source_url": "https://example.edu/huang-zongxi",
+                "source_kind": "primary",
+                "evidence_type": "attribution",
+            }],
+            generated_at=timestamp(),
+        )
+
+        enriched = QijiaVideoService._card_with_person_research(card, brief)
+
+        self.assertEqual(len(enriched.verified_quotes), 1)
+        self.assertEqual(enriched.verified_quotes[0].text, idea.viewpoint)
+        self.assertTrue(
+            enriched.verified_quotes[0].source_id.startswith("research_source")
+        )
+        self.assertTrue(any(
+            "verified_quote" in item.text
+            for item in enriched.interpretation_boundary
+        ))
 
     def test_generation_settings_default_to_ten_images_and_preserve_legacy(self):
         settings = GenerationSettings(
@@ -658,22 +748,20 @@ class QijiaVideoContractTests(unittest.TestCase):
             "父母先停一下，让孩子把自己的想法完整说出来，再一起讨论下一步。",
         )
 
-    def test_default_script_prompt_targets_retention_without_clickbait(self):
+    def test_default_script_prompt_preserves_input_context_and_retention(self):
         prompt = GenerationSettings().script_prompt
         self.assertIn("降低 2 秒流失率、提高 5 秒完播率", prompt)
         self.assertIn("反常识翻转", prompt)
-        self.assertIn("因果反转", prompt)
         self.assertIn("具体场景冲突", prompt)
-        self.assertIn("不得用“毁掉孩子”", prompt)
-        self.assertIn("第一段画面从正在发生的动作", prompt)
-        self.assertIn("visual_direction 是内容语义", prompt)
-        self.assertIn("不负责画风、色彩、材质、构图、景别、运镜", prompt)
-        self.assertNotIn("【导演思维】", prompt)
-        self.assertNotIn("贯穿全片的可见变化", prompt)
-        self.assertIn("先完成一版从头到尾自然连贯的完整口播", prompt)
-        self.assertIn("每个叙事段只承担一个主要信息任务", prompt)
-        self.assertIn("最后一段必须直接回应开场冲突和中心问题", prompt)
-        self.assertIn("不追求机械等字数", prompt)
+        self.assertIn("不得为了适配平台、目标受众或熟悉的内容模板", prompt)
+        self.assertIn("只有来源卡中的 verified_quote", prompt)
+        self.assertIn("先交代必要出处或语境", prompt)
+        self.assertIn("visual_direction 只写观众必须看懂", prompt)
+        self.assertIn("不写画风、色彩、材质、构图、景别、运镜", prompt)
+        self.assertIn("先写完一版连贯口播", prompt)
+        self.assertIn("每段只承担一个主要信息任务", prompt)
+        self.assertIn("最后回收开场问题", prompt)
+        self.assertNotIn("写成一版面向家长", prompt)
 
     def test_longest_later_chapters_become_images(self):
         self.assertEqual(
@@ -1513,13 +1601,13 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("temperature", request_body)
         prompt = request_body["messages"][1]["content"]
         self.assertIn("一条视频只讲清一个核心观点", prompt)
-        self.assertIn("语言自然、具体，有思考感但不说教", prompt)
-        self.assertIn("非共识价值", prompt)
-        self.assertIn("不要写成模板化的五段论", prompt)
+        self.assertIn("语言自然、具体、有思考感但不说教", prompt)
+        self.assertIn("真实存在的张力", prompt)
+        self.assertIn("不要逐段独立创作后拼接", prompt)
         self.assertIn("降低 2 秒流失率、提高 5 秒完播率", prompt)
-        self.assertIn("强钩子设计", prompt)
+        self.assertIn("前 2 秒直接呈现观点中最有力量的矛盾", prompt)
         self.assertNotIn("【导演思维】", prompt)
-        self.assertIn("visual_direction 是内容语义", prompt)
+        self.assertIn("visual_direction 只写观众必须看懂", prompt)
         self.assertIn("可复用的判断框架", prompt)
         self.assertIn("具体、低压力、无需暴露隐私", prompt)
         self.assertIn("5-8 段", prompt)
@@ -1648,16 +1736,17 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             request_body["max_tokens"],
             PERSON_RESEARCH_MAX_COMPLETION_TOKENS,
         )
-        self.assertEqual(request_body["max_tool_calls"], 2)
+        self.assertEqual(request_body["max_tool_calls"], 4)
+        self.assertEqual(request_body["tool_choice"], "required")
         tool = request_body["tools"][0]
         self.assertEqual(tool["type"], "openrouter:web_search")
         self.assertEqual(tool["parameters"]["engine"], "exa")
         self.assertEqual(tool["parameters"]["mode"], "deep-lite")
-        self.assertEqual(tool["parameters"]["max_uses"], 2)
-        self.assertEqual(tool["parameters"]["max_total_results"], 8)
+        self.assertEqual(tool["parameters"]["max_uses"], 4)
+        self.assertEqual(tool["parameters"]["max_total_results"], 16)
         prompt = request_body["messages"][1]["content"]
         self.assertIn("研究日期（UTC）", prompt)
-        self.assertIn("至少使用两个彼此独立的查询", prompt)
+        self.assertIn("先核验归属、可靠原文、出处、文字异同与上下文", prompt)
         self.assertEqual(brief.person_name, card.subject.name)
         self.assertEqual(brief.viewpoint, card.core_idea)
         self.assertEqual(brief.prompt_version, PERSON_RESEARCH_PROMPT_VERSION)
@@ -3146,7 +3235,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         job = await self.service.create_job(card.id, self.actor)
 
         self.assertEqual(job.skill_snapshot.skill_id, "explain-expert-view")
-        self.assertEqual(job.skill_snapshot.version, "1.2.0")
+        self.assertEqual(job.skill_snapshot.version, "1.3.0")
         self.assertEqual(job.skill_snapshot.research_mode.value, "none")
         self.assertEqual(
             job.generation_settings.skill_id,
@@ -3290,10 +3379,20 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 self.research_calls = 0
                 self.generated_card: SourceCard | None = None
                 self.generated_prompt = ""
+                self.compiled_research_prompt = ""
 
-            async def research_person_viewpoint(self, card, *, on_usage=None):
-                del card, on_usage
+            async def research_for_skill(
+                self,
+                card,
+                *,
+                research_mode,
+                research_prompt,
+                research_as_of="",
+                on_usage=None,
+            ):
+                del card, research_mode, research_as_of, on_usage
                 self.research_calls += 1
+                self.compiled_research_prompt = research_prompt
                 return brief
 
             async def generate(self, card, prompt=None):
@@ -3321,7 +3420,18 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(provider.research_calls, 1)
         self.assertEqual(generated.research_brief, brief)
         self.assertEqual(generated.research_warning, "")
+        self.assertIsNotNone(generated.research_prompt_snapshot)
+        self.assertEqual(
+            generated.research_prompt_snapshot.prompt,
+            provider.compiled_research_prompt,
+        )
+        self.assertIn(brief.viewpoint, provider.compiled_research_prompt)
+        self.assertIn(
+            "H3 输入驱动研究方法",
+            provider.compiled_research_prompt,
+        )
         self.assertIn("【自动研究简报】", provider.generated_prompt)
+        self.assertIn("【唯一上游编排层】", provider.generated_prompt)
         self.assertIn(brief.content_angles[0], provider.generated_prompt)
         enriched = SourceCard.model_validate(generated.source_card_snapshot)
         self.assertEqual(
@@ -5404,7 +5514,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             card.id, self.actor, settings
         )
         job = await self.service.generate_script(job.id, self.actor)
-        self.assertTrue(provider.prompt.startswith(settings.script_prompt))
+        self.assertTrue(provider.prompt.startswith("【唯一上游编排层】"))
+        self.assertIn(settings.script_prompt, provider.prompt)
         self.assertIn("语速 1.1x", provider.prompt)
         self.assertIn("245-325 个汉字", provider.prompt)
 

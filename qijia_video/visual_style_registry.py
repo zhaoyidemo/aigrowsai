@@ -47,6 +47,10 @@ _PROFILE_KEYS = {
     "audio_policy",
     "negative_rules",
 }
+_PROFILE_OPTIONAL_KEYS = {
+    "research_framework_file",
+    "script_framework_file",
+}
 
 
 class VisualStyleRegistryError(ValueError):
@@ -62,7 +66,13 @@ def _version_key(version: str) -> tuple[int, int, int, bool, str]:
     return major, minor, patch, not bool(suffix), suffix
 
 
-def _manifest(path: Path, expected: set[str], label: str) -> dict[str, Any]:
+def _manifest(
+    path: Path,
+    expected: set[str],
+    label: str,
+    *,
+    optional: set[str] | None = None,
+) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -70,7 +80,7 @@ def _manifest(path: Path, expected: set[str], label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RuntimeError(f"{label} manifest 必须是 JSON 对象：{path}")
     missing = expected - set(value)
-    unknown = set(value) - expected
+    unknown = set(value) - expected - (optional or set())
     if missing or unknown:
         raise RuntimeError(
             f"{label} manifest 字段不完整：missing={sorted(missing)}, "
@@ -149,6 +159,8 @@ class PromptWritingProfileDefinition:
     display_name: str
     description: str
     default: bool
+    research_framework: str
+    script_framework: str
     planning_framework: str
     image_framework: str
     video_framework: str
@@ -163,6 +175,8 @@ class PromptWritingProfileDefinition:
             version=self.version,
             display_name=self.display_name,
             description=self.description,
+            research_framework=self.research_framework,
+            script_framework=self.script_framework,
             planning_framework=self.planning_framework,
             image_framework=self.image_framework,
             video_framework=self.video_framework,
@@ -179,6 +193,17 @@ class PromptWritingProfileDefinition:
             "version": self.version,
             "display_name": self.display_name,
             "description": self.description,
+            "stages": [
+                stage
+                for stage, enabled in (
+                    ("research", bool(self.research_framework)),
+                    ("script", bool(self.script_framework)),
+                    ("storyboard", True),
+                    ("image", True),
+                    ("video", True),
+                )
+                if enabled
+            ],
         }
 
 
@@ -221,8 +246,23 @@ def _load_style(root: Path) -> VisualStyleDefinition:
 
 
 def _load_profile(root: Path) -> PromptWritingProfileDefinition:
-    manifest = _manifest(root / "manifest.json", _PROFILE_KEYS, "提示词方法")
+    manifest = _manifest(
+        root / "manifest.json",
+        _PROFILE_KEYS,
+        "提示词方法",
+        optional=_PROFILE_OPTIONAL_KEYS,
+    )
     resources = {
+        "research_framework": _read_resource(
+            root,
+            manifest.get("research_framework_file"),
+            required=False,
+        ),
+        "script_framework": _read_resource(
+            root,
+            manifest.get("script_framework_file"),
+            required=False,
+        ),
         "planning_framework": _read_resource(
             root, manifest["planning_framework_file"]
         ),
@@ -240,6 +280,8 @@ def _load_profile(root: Path) -> PromptWritingProfileDefinition:
             display_name=str(manifest["display_name"]),
             description=str(manifest["description"]),
             default=bool(manifest["default"]),
+            research_framework=resources["research_framework"],
+            script_framework=resources["script_framework"],
             planning_framework=resources["planning_framework"],
             image_framework=resources["image_framework"],
             video_framework=resources["video_framework"],

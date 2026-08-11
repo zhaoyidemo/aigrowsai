@@ -35,6 +35,7 @@ from qijia_video.contracts import (
     PendingShotMediaEdit,
     PersonResearchBrief,
     PreGenerationMediaMode,
+    PromptWritingProfileSnapshot,
     ProviderTask,
     ProviderTaskState,
     ProviderUsageRecord,
@@ -62,6 +63,7 @@ from qijia_video.contracts import (
     VisualShotVersion,
     VisualBlock,
     VerifiedFact,
+    VerifiedQuote,
     content_hash,
     timestamp,
 )
@@ -91,6 +93,10 @@ from qijia_video.ports import (
 from qijia_video.prompts import (
     SCRIPT_HARD_MAX_CHARS,
     narration_char_count,
+)
+from qijia_video.prompt_orchestration import (
+    compile_research_prompt,
+    compile_script_prompt,
 )
 from qijia_video.skill_registry import (
     ContentSkillRegistry,
@@ -465,6 +471,7 @@ class QijiaVideoService:
             if item.url
         }
         existing_claims = {item.text for item in enriched.verified_facts}
+        evidence_source_ids: list[tuple[object, str]] = []
 
         def next_id(prefix: str, used: set[str]) -> str:
             index = 1
@@ -492,6 +499,7 @@ class QijiaVideoService:
                     rights_status="verified_for_citation",
                 ))
                 source_by_url[normalized_url] = source_id
+            evidence_source_ids.append((evidence, source_id))
             if evidence.claim in existing_claims:
                 continue
             enriched.verified_facts.append(VerifiedFact(
@@ -524,17 +532,65 @@ class QijiaVideoService:
             ]
             return SourceCard.model_validate(enriched)
 
-        legacy_boundary_text = (
-            "只围绕用户输入的观点展开，不补造人物经历、逐字引语、"
-            "研究数据或来源出处。"
+        attribution_source_id = next(
+            (
+                source_id
+                for evidence, source_id in evidence_source_ids
+                if getattr(evidence, "evidence_type", "") == "attribution"
+            ),
+            "",
         )
+        if (
+            brief.attribution_status == "verified"
+            and brief.verified_wording.strip()
+            and attribution_source_id
+            and not any(
+                item.text == brief.verified_wording.strip()
+                for item in enriched.verified_quotes
+            )
+        ):
+            used_quote_ids = {item.id for item in enriched.verified_quotes}
+            enriched.verified_quotes.append(VerifiedQuote(
+                id=next_id("research_quote", used_quote_ids),
+                text=brief.verified_wording.strip(),
+                source_id=attribution_source_id,
+            ))
+
+        boundary_candidates = {
+            (
+                "只围绕用户输入的观点展开，不补造人物经历、逐字引语、"
+                "研究数据或来源出处。"
+            ),
+            (
+                "输入中的人物归属、逐字表述、出处与语境在联网核验前均视为待确认；"
+                "可以解释观点本身，但不得把它写成人物原话或历史事实。"
+            ),
+            (
+                "只围绕用户输入的观点和自动研究中有来源支持的事实展开；不得补造人物经历、"
+                "逐字引语、研究数据或来源出处，也不得把用户观点、研究摘要或编辑角度写成人物"
+                "原话。资料存在冲突或不确定时，必须保留限定语。"
+            ),
+            (
+                "只有来源卡中的 verified_quote 可以写成人物逐字原话；其他用户输入、研究摘要"
+                "和编辑解释只能按其证据强度转述。必须先保留出处与原始语境，再做现实应用。"
+            ),
+        }
         boundary_text = (
-            "只围绕用户输入的观点和自动研究中有来源支持的事实展开；不得补造人物经历、"
-            "逐字引语、研究数据或来源出处，也不得把用户观点、研究摘要或编辑角度写成人物"
-            "原话。资料存在冲突或不确定时，必须保留限定语。"
+            "只有来源卡中的 verified_quote 可以写成人物逐字原话；其他用户输入、研究摘要"
+            "和编辑解释只能按其证据强度转述。必须先保留出处与原始语境，再做现实应用。"
+            if brief.attribution_status == "verified"
+            and brief.verified_wording.strip()
+            and attribution_source_id
+            else (
+                "只围绕用户原始输入和自动研究中有来源支持的事实展开；当前表述不得写成人物"
+                "逐字原话。不得补造人物经历、著作内容、数据、出处或因果关系；资料存在冲突"
+                "或不确定时，必须保留限定语。"
+            )
         )
         for index, boundary in enumerate(enriched.interpretation_boundary):
-            if boundary.text == legacy_boundary_text:
+            if boundary.text in boundary_candidates or boundary.text.startswith(
+                "只围绕用户原始输入和自动研究中有来源支持的事实展开"
+            ):
                 enriched.interpretation_boundary[index] = boundary.model_copy(
                     update={"text": boundary_text}
                 )
@@ -552,14 +608,16 @@ class QijiaVideoService:
 
     @staticmethod
     def _script_prompt_for_settings(
+        card: SourceCard,
         settings: GenerationSettings,
+        profile: PromptWritingProfileSnapshot | None,
         research_brief: PersonResearchBrief | NewsResearchBrief | None = None,
     ) -> str:
         minimum, maximum = TTS_SCRIPT_CHARACTER_TARGETS[
             settings.tts_speed_ratio
         ]
         prompt = (
-            settings.script_prompt.rstrip()
+            compile_script_prompt(card, settings.script_prompt, profile).rstrip()
             + "\n\n【本任务配音节奏】"
             + f"已选 Seed-TTS 2.0 语速 {settings.tts_speed_ratio:.1f}x。"
             + f"所有 narration 的纯旁白合计建议 {minimum}-{maximum} 个汉字，"
@@ -576,7 +634,16 @@ class QijiaVideoService:
             "interaction_opportunity": research_brief.interaction_opportunity,
             "uncertainties": research_brief.uncertainties,
         }
-        if isinstance(research_brief, NewsResearchBrief):
+        if isinstance(research_brief, PersonResearchBrief):
+            editorial_context.update({
+                "input_type": research_brief.input_type,
+                "research_focus": research_brief.research_focus,
+                "attribution_status": research_brief.attribution_status,
+                "verified_wording": research_brief.verified_wording,
+                "attribution_note": research_brief.attribution_note,
+                "source_context": research_brief.source_context,
+            })
+        else:
             editorial_context.update({
                 "topic": research_brief.topic,
                 "research_as_of": research_brief.as_of,
@@ -1141,6 +1208,11 @@ class QijiaVideoService:
             research_required = (
                 research_mode == SkillResearchMode.RECENT_NEWS_REQUIRED
             )
+            research_as_of = (
+                job.skill_snapshot.frozen_at
+                if job.skill_snapshot
+                else job.created_at
+            )
             research_operation = {
                 SkillResearchMode.PERSON_VIEWPOINT_OPTIONAL: "person_research",
                 SkillResearchMode.RECENT_NEWS_REQUIRED: "recent_news_research",
@@ -1199,6 +1271,28 @@ class QijiaVideoService:
                 research_mode != SkillResearchMode.NONE
                 and (callable(skill_research) or callable(specific_research))
             ):
+                if not job.research_prompt_snapshot:
+                    self._report(
+                        progress,
+                        message="H3 正在根据原始输入编排本次研究问题…",
+                        stage="research_prompt_compilation",
+                        percent=5,
+                    )
+                    job.research_prompt_snapshot = compile_research_prompt(
+                        card,
+                        skill=job.skill_snapshot,
+                        profile=job.prompt_writing_profile_snapshot,
+                        research_mode=research_mode,
+                        research_as_of=research_as_of,
+                    )
+                    job = await self._save_job(job, actor)
+                elif (
+                    job.research_prompt_snapshot.research_mode
+                    != research_mode
+                ):
+                    raise QualityGateFailed(
+                        "冻结的研究提示词与当前 Content Skill 研究模式不一致"
+                    )
                 self._report(
                     progress,
                     message=(
@@ -1214,16 +1308,8 @@ class QijiaVideoService:
                         brief = await skill_research(
                             card,
                             research_mode=research_mode.value,
-                            research_prompt=(
-                                job.skill_snapshot.research_prompt
-                                if job.skill_snapshot
-                                else ""
-                            ),
-                            research_as_of=(
-                                job.skill_snapshot.frozen_at
-                                if job.skill_snapshot
-                                else job.created_at
-                            ),
+                            research_prompt=job.research_prompt_snapshot.prompt,
+                            research_as_of=research_as_of,
                             on_usage=persist_script_usage,
                         )
                     else:
@@ -1231,11 +1317,7 @@ class QijiaVideoService:
                             "on_usage": persist_script_usage,
                         }
                         if research_required:
-                            research_kwargs["as_of"] = (
-                                job.skill_snapshot.frozen_at
-                                if job.skill_snapshot
-                                else job.created_at
-                            )
+                            research_kwargs["as_of"] = research_as_of
                         brief = await specific_research(card, **research_kwargs)
                     if (
                         research_required
@@ -1316,7 +1398,10 @@ class QijiaVideoService:
                 percent=14,
             )
             script_prompt = self._script_prompt_for_settings(
-                settings, job.research_brief
+                card,
+                settings,
+                job.prompt_writing_profile_snapshot,
+                job.research_brief,
             )
 
             generate_for_skill = getattr(

@@ -200,17 +200,17 @@
               <button id="topic-source-submit" class="button primary" type="submit" data-busy-lock>确认资料并生成脚本</button>
             </form>
           </section>
-          <p id="manual-intake-intro" class="panel-note intake-intro">输入一个人物和他的核心观点，系统会先自动研究可追溯资料，再把观点中的冲突、反直觉与现实意义展开成完整视频脚本。</p>
+          <p id="manual-intake-intro" class="panel-note intake-intro">输入一个人物和他的核心观点。H3 会先根据原始表述编排本次专属研究问题，核验出处与语境，再生成脚本和画面提示词。</p>
           <form id="source-card-form" class="form-stack">
             <label class="primary-field">
               <span class="question-line"><span class="question-number">1</span>你想讲谁？</span>
-              <input name="person_name" required maxlength="120" autocomplete="off" placeholder="例如：阿尔弗雷德·阿德勒">
-              <span class="field-hint">输入教育、心理学或思想领域的人物。</span>
+              <input name="person_name" required maxlength="120" autocomplete="off" placeholder="例如：黄宗羲">
+              <span class="field-hint">可以输入思想、历史、教育、心理学、科学、商业等领域的人物。</span>
             </label>
             <label class="primary-field">
               <span class="question-line"><span class="question-number">2</span>这个人物最值得展开的观点是什么？</span>
-              <textarea name="viewpoint" required minlength="10" maxlength="1800" rows="7" placeholder="例如：真正影响孩子的，不是父母说了什么，而是孩子如何理解自己在家庭中的位置。"></textarea>
-              <span class="field-hint">直接写观点即可。系统会联网整理人物与主题简报；没有可靠来源时会使用原始观点继续，不会虚构人物经历或引语。</span>
+              <textarea name="viewpoint" required minlength="10" maxlength="1800" rows="7" placeholder="直接粘贴原话、流传表述或你的观点概括，系统会先核验归属与语境。"></textarea>
+              <span class="field-hint">直接写完整原始表述。系统会先判断它是引语、转述还是观点命题，并优先核验人物归属、可靠原文、出处和语境；没有可靠来源时会明确降级，不会虚构人物经历或引语。</span>
             </label>
             <section class="reference-input" aria-labelledby="reference-input-title">
               <div class="reference-input-heading">
@@ -264,14 +264,14 @@
           </form>
           <details id="generation-orchestration" class="generation-orchestration">
             <summary>
-              <span><strong>H3 如何统领画面生成</strong><small>固定编排层 · 可选查看</small></span>
+              <span><strong>H3 如何从输入统领整条生成链路</strong><small>固定编排层 · 可选查看</small></span>
               <span>查看方法</span>
             </summary>
             <div class="generation-orchestration-body">
               <div class="orchestration-heading">
                 <div>
                   <p class="step">生成架构</p>
-                  <h3>内容约束、视觉语言与可选参考图，由 H3 编译为三类镜头指令</h3>
+                  <h3>原始输入、内容约束、视觉语言与参考素材，由 H3 分阶段编译</h3>
                 </div>
                 <span class="orchestration-lock">编排层固定</span>
               </div>
@@ -283,7 +283,7 @@
                   </div>
                   <small id="prompt-profile-version">自动启用</small>
                 </div>
-                <p id="prompt-profile-description">H3 统一判断每个镜头该呈现什么，再生成首帧和首帧驱动视频提示词。</p>
+                <p id="prompt-profile-description">H3 从原始输入开始，先编排研究和脚本语义，再生成分镜、首帧与首帧驱动视频提示词。</p>
                 <p class="orchestration-selection" aria-live="polite">
                   <span id="orchestration-content-name">正在读取内容 Skill</span>
                   <b>+</b>
@@ -300,11 +300,13 @@
                 </ol>
               </section>
               <div class="orchestration-output">
-                <span class="orchestration-output-label">H3 编译输出</span>
+                <span class="orchestration-output-label">H3 分阶段编译输出</span>
                 <div class="orchestration-output-grid">
-                  <article><span>01</span><strong>分镜语义</strong><small>每个镜头表达什么</small></article>
-                  <article><span>02</span><strong>首帧提示词</strong><small>交给 Seedream 执行</small></article>
-                  <article><span>03</span><strong>I2V 动作提示词</strong><small>锚定首帧驱动 Seedance</small></article>
+                  <article><span>01</span><strong>研究提示词</strong><small>从原始输入生成专属检索问题</small></article>
+                  <article><span>02</span><strong>脚本语义</strong><small>保留出处、语境和证据边界</small></article>
+                  <article><span>03</span><strong>分镜语义</strong><small>每个镜头表达什么</small></article>
+                  <article><span>04</span><strong>首帧提示词</strong><small>交给 Seedream 执行</small></article>
+                  <article><span>05</span><strong>I2V 动作提示词</strong><small>锚定首帧驱动 Seedance</small></article>
                 </div>
               </div>
               <p class="orchestration-boundary">参考图只接管已经定义的视觉属性，不提供事实，也不覆盖镜头语义。Seedream、Seedance 等模型只执行最终提示词，不参与职责分配。</p>
@@ -312,10 +314,10 @@
           </details>
           <details id="generation-prompt-settings" class="advanced-settings prompt-settings global-prompt-settings">
             <summary><span>脚本提示词高级设置</span><span id="script-prompt-mode-badge">系统默认</span></summary>
-            <p class="field-hint">默认由当前 Content Skill 提供并锁定，不会继承浏览器里的旧自定义内容。视觉提示词始终由 H3 统一编排。</p>
+            <p class="field-hint">默认由 H3 以原始输入为上游约束，再结合当前 Content Skill 编译；不会继承浏览器里的旧自定义内容。视觉提示词也始终由 H3 统一编排。</p>
             <label class="confirmation-check custom-prompt-toggle">
               <input id="enable-custom-script-prompt" type="checkbox">
-              <span><strong>为下一条任务显式启用自定义脚本提示词</strong><small>只影响脚本内容，不改变 H3、视觉表现或 Provider 边界。</small></span>
+              <span><strong>为下一条任务显式启用自定义脚本策略</strong><small>仍受 H3 的原始输入、研究证据、视觉表现与 Provider 边界约束。</small></span>
             </label>
             <div id="custom-script-prompt-fields" hidden>
               <p id="custom-script-prompt-warning" class="prompt-mode-warning">自定义模式已启用。当前任务将不再使用 Content Skill 的标准脚本提示词。</p>
@@ -397,7 +399,7 @@
           <div id="job-error" class="error-box" hidden></div>
           <section id="script-review" class="review-section" hidden>
             <div class="section-title"><h3>脚本确认</h3><span id="script-review-spec">确认后开始配音与画面生成</span></div>
-            <section id="person-research-brief" class="person-research-brief" aria-label="人物主题自动研究简报" hidden></section>
+            <section id="person-research-brief" class="person-research-brief" aria-label="H3 输入驱动研究简报" hidden></section>
             <section class="tts-review-settings" aria-label="本任务配音设置">
               <div class="tts-review-heading">
                 <div><strong>配音试听</strong><span>试听当前开场，确认后用于整条视频</span></div>

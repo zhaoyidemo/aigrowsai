@@ -56,6 +56,7 @@ class ContentDomain(StrEnum):
     EDUCATIONAL_PSYCHOLOGY = "educational_psychology"
     PARENT_CHILD_RELATIONSHIP = "parent_child_relationship"
     PARENT_GROWTH = "parent_growth"
+    GENERAL_KNOWLEDGE = "general_knowledge"
     TECHNOLOGY = "technology"
     BUSINESS = "business"
     GENERAL_NEWS = "general_news"
@@ -250,13 +251,14 @@ class PersonViewpointInput(ContractModel):
         person_name = re.sub(r"\s+", " ", self.person_name).strip()
         viewpoint = re.sub(r"\s+", " ", self.viewpoint).strip()
         return SourceCardInput(
-            content_domain=ContentDomain.PARENT_EDUCATION,
+            content_domain=ContentDomain.GENERAL_KNOWLEDGE,
             content_format=ContentFormat.PERSON_IDEA,
+            target_audience="关注该人物与观点的普通中文受众",
             subject={"type": "person", "name": person_name},
             title=f"{person_name}：{viewpoint}"[:300],
             core_idea=viewpoint,
             parent_question=(
-                f"{person_name}的这个观点为什么值得家长重新思考？"
+                f"这段观点在{person_name}的原始语境中是什么意思，今天为什么值得理解？"
             ),
             sources=[{
                 "id": "source_01",
@@ -267,14 +269,17 @@ class PersonViewpointInput(ContractModel):
             }],
             verified_facts=[{
                 "id": "fact_01",
-                "text": viewpoint,
+                "text": (
+                    f"用户为本任务提供的原始观点文本是：“{viewpoint}”。"
+                    "这只证明创作输入，不证明人物归属、逐字表述或历史出处。"
+                ),
                 "source_refs": ["source_01"],
             }],
             interpretation_boundary=[{
                 "id": "boundary_01",
                 "text": (
-                    "只围绕用户输入的观点展开，不补造人物经历、逐字引语、"
-                    "研究数据或来源出处。"
+                    "输入中的人物归属、逐字表述、出处与语境在联网核验前均视为待确认；"
+                    "可以解释观点本身，但不得把它写成人物原话或历史事实。"
                 ),
             }],
         )
@@ -457,6 +462,14 @@ class PersonResearchEvidence(ContractModel):
     source_kind: Literal[
         "official", "primary", "independent", "other"
     ] = "other"
+    evidence_type: Literal[
+        "attribution",
+        "source_context",
+        "biography",
+        "interpretation",
+        "current_relevance",
+        "other",
+    ] = "other"
     published_at: str = Field(default="", max_length=64)
     event_at: str = Field(default="", max_length=64)
 
@@ -474,6 +487,22 @@ class PersonResearchBrief(ContractModel):
     kind: Literal["person_viewpoint"] = "person_viewpoint"
     person_name: str = Field(min_length=1, max_length=120)
     viewpoint: str = Field(min_length=10, max_length=1800)
+    input_type: Literal[
+        "attributed_quote",
+        "paraphrased_viewpoint",
+        "conceptual_claim",
+        "unknown",
+    ] = "unknown"
+    research_focus: str = Field(default="", max_length=1200)
+    attribution_status: Literal[
+        "verified",
+        "partially_supported",
+        "unverified",
+        "not_applicable",
+    ] = "unverified"
+    verified_wording: str = Field(default="", max_length=1800)
+    attribution_note: str = Field(default="", max_length=1600)
+    source_context: str = Field(default="", max_length=2000)
     summary: str = Field(min_length=1, max_length=2000)
     core_tension: str = Field(min_length=1, max_length=1200)
     audience_relevance: list[str] = Field(
@@ -785,6 +814,10 @@ class PromptWritingProfileSnapshot(ContractModel):
     )
     display_name: str = Field(min_length=1, max_length=120)
     description: str = Field(min_length=1, max_length=1000)
+    # Added in h3-prompt-writing@1.1.0. Empty defaults preserve historical
+    # frozen snapshots whose prompt method only covered visual generation.
+    research_framework: str = Field(default="", max_length=6000)
+    script_framework: str = Field(default="", max_length=6000)
     planning_framework: str = Field(min_length=1, max_length=4000)
     image_framework: str = Field(min_length=1, max_length=4000)
     video_framework: str = Field(min_length=1, max_length=4000)
@@ -793,6 +826,19 @@ class PromptWritingProfileSnapshot(ContractModel):
     negative_rules: list[str] = Field(default_factory=list, max_length=30)
     manifest_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     frozen_at: str = Field(min_length=1, max_length=64)
+
+
+class ResearchPromptSnapshot(ContractModel):
+    """One input-bound research instruction frozen before a paid web call."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    research_mode: SkillResearchMode
+    profile_id: str = Field(default="", max_length=64)
+    profile_version: str = Field(default="", max_length=32)
+    input_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    prompt_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    prompt: str = Field(min_length=1, max_length=20000)
+    compiled_at: str = Field(min_length=1, max_length=64)
 
 
 class GenerationSettings(ContractModel):
@@ -1360,6 +1406,7 @@ class VideoJob(ContractModel):
     )
     # Research results and bounded failure diagnostics live in the aggregate so
     # retries never silently repeat a paid search.
+    research_prompt_snapshot: ResearchPromptSnapshot | None = None
     research_brief: PersonResearchBrief | NewsResearchBrief | None = None
     research_warning: str = Field(default="", max_length=2000)
     research_diagnostics: ResearchDiagnostics | None = None

@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "display_name": "人物观点解读",
   "input_mode": "person_viewpoint",
   "compatible_formats": [
@@ -23,13 +23,14 @@
   "policy_ids": [
     "source-grounding",
     "quote-integrity",
-    "education-psychology-safety",
+    "context-preservation",
     "minor-safety"
   ],
   "quality_rules": [
     "所有事实性旁白必须引用来源卡中的 fact 或 quote ID",
     "用户输入的观点不得冒充人物逐字原话",
-    "不得诊断具体儿童或提供治疗建议",
+    "出处与原始语境必须先于受众应用",
+    "教育与心理主题不得诊断具体儿童或提供治疗建议",
     "开场钩子不得依赖恐吓、羞辱或虚构危机"
   ]
 }

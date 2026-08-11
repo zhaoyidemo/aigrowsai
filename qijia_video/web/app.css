@@ -810,6 +810,9 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
   .stage-track li.done { border-left-color: #4f8275; }
   .stage-track li.active { border-left-color: #d49a34; }
   .workflow-summary { grid-template-columns: 1fr; }
+  .section-title { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .section-title h3 { flex: none; }
+  .section-title span { text-align: left; overflow-wrap: anywhere; }
   .script-cost-estimate > div { align-items: flex-start; flex-direction: column; }
   .script-cost-estimate strong { text-align: left; }
   .usage-summary { grid-template-columns: 1fr; }
