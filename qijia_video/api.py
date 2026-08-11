@@ -21,6 +21,7 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field
 
 from qijia_video import MODULE_VERSION
+from qijia_video import run_service
 from qijia_video.contracts import (
     AssetRef,
     CreativeRequestInput,
@@ -720,6 +721,40 @@ async def list_jobs(
 async def get_job(job_id: str, user: dict = Depends(get_current_user)):
     job = await runtime.service.view_job(job_id, actor_from_user(user))
     return ok(public_job_payload(job, user))
+
+
+@api_router.delete("/jobs/{job_id}")
+@boundary
+async def delete_job(
+    job_id: str,
+    body: RevisionRequest,
+    user: dict = Depends(get_current_user),
+):
+    actor = actor_from_user(user)
+    job = await runtime.service.get_job(job_id, actor)
+    active_run = False
+    if job.last_run_task_id:
+        task = await run_service.get_task_async(
+            job.last_run_task_id,
+            refresh=True,
+        )
+        active_run = bool(
+            task and task.get("status") in ("running", "recovering")
+        )
+    deleted = await runtime.service.delete_job(
+        job_id,
+        body.expected_revision,
+        actor,
+        active_run=active_run,
+    )
+    return ok(
+        {
+            "job_id": deleted.id,
+            "deleted_at": deleted.deleted_at,
+            "retained_assets": True,
+        },
+        "视频任务已删除；生成资产与费用记录仍为审计保留",
+    )
 
 
 @api_router.put("/jobs/{job_id}/douyin-performance")

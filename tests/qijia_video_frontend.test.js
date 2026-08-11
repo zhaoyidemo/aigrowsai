@@ -83,13 +83,25 @@ test('Director Skill and Visual Style are selected and frozen independently', ()
       root,
       'qijia_video',
       'web',
-      'assets',
       'style-previews',
       asset,
     );
     assert.ok(fs.existsSync(assetPath));
     assert.ok(fs.statSync(assetPath).size < 100000);
   }
+});
+
+test('video jobs expose guarded deletion without erasing audit history', () => {
+  assert.match(app, /data-delete-job-id/);
+  assert.match(app, /window\.confirm/);
+  assert.match(app, /await api\('DELETE', `\/jobs\/\$\{encodeURIComponent\(job\.id\)\}`/);
+  assert.match(app, /expected_revision: job\.revision/);
+  assert.match(app, /已产生的费用和生成资产仍会保留/);
+  assert.match(app, /任务运行完成后才能删除/);
+  assert.match(app, /data-locked="\$\{String\(deleteLocked\)\}"/);
+  assert.match(app, /busy \|\| control\.dataset\.locked === 'true'/);
+  assert.match(styles, /\.job-delete-button/);
+  assert.match(costsApi, /include_deleted=True/);
 });
 
 test('Director v3 visibly separates directing, visual language, and provider compilation', () => {

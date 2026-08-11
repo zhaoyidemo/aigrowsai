@@ -70,7 +70,11 @@ async def cost_analysis(
     # Read the aggregates directly. TopicRuntime.list_runs performs interrupted
     # task reconciliation and may write, which a reporting endpoint must never do.
     jobs, topic_runs = await asyncio.gather(
-        runtime.service.list_jobs(actor, limit=SOURCE_LIMIT),
+        runtime.service.list_jobs(
+            actor,
+            limit=SOURCE_LIMIT,
+            include_deleted=True,
+        ),
         topic_runtime.service.list_runs(actor, limit=SOURCE_LIMIT),
     )
     response.headers["Cache-Control"] = "no-store"

@@ -292,9 +292,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .card-list, .job-list { display: grid; gap: 9px; }
 .job-list { max-height: min(42vh, 440px); overflow-y: auto; padding: 2px 4px 2px 2px; }
 .list-card, .job-card { border: 1px solid var(--line); background: white; border-radius: 9px; padding: 13px; }
+.job-card-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; gap: 7px; }
 .job-card { width: 100%; color: var(--ink); cursor: pointer; text-align: left; }
 .job-card:hover { border-color: #9eb8b0; background: #fbfdfc; }
 .job-card.selected { border-color: #75a298; box-shadow: 0 0 0 2px rgba(49,95,86,.1); }
+.job-delete-button { align-self: stretch; min-width: 52px; border: 1px solid #e3c5c3; border-radius: 9px; padding: 8px; color: #974746; background: #fff8f7; font-size: 11px; font-weight: 720; cursor: pointer; }
+.job-delete-button:hover:not(:disabled) { border-color: #ce9793; color: #7f3432; background: #fff0ef; }
+.job-delete-button:focus-visible { outline: 3px solid rgba(151,71,70,.16); outline-offset: 2px; }
+.job-delete-button:disabled { color: #aaa39d; border-color: #dedbd5; background: #f3f1ed; cursor: not-allowed; }
 .list-card h3, .job-card-title { display: block; margin: 0 0 5px; font-size: 14px; font-weight: 750; line-height: 1.45; }
 .meta { display: flex; flex-wrap: wrap; gap: 7px; color: var(--muted); font-size: 11px; }
 .list-actions { margin-top: 11px; display: flex; gap: 8px; }

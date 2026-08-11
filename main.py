@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import logging
+import mimetypes
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,6 +36,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent
 WEB_DIR = ROOT / "qijia_video" / "web"
+mimetypes.add_type("image/webp", ".webp")
 
 
 def ok(data=None, message: str = "") -> dict:

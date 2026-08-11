@@ -377,9 +377,9 @@ function visualStylePreviewKey(styleId) {
 
 function visualStylePreviewAsset(styleId) {
   const assets = {
-    [DEFAULT_VISUAL_STYLE_ID]: '/qijia-video/assets/style-previews/modern-editorial.webp?v=1.28.0',
-    'paper-collage-explainer': '/qijia-video/assets/style-previews/paper-collage.webp?v=1.28.0',
-    'papercraft-stop-motion': '/qijia-video/assets/style-previews/papercraft-stop-motion.webp?v=1.28.0',
+    [DEFAULT_VISUAL_STYLE_ID]: '/qijia-video/assets/style-previews/modern-editorial.webp?v=1.29.0',
+    'paper-collage-explainer': '/qijia-video/assets/style-previews/paper-collage.webp?v=1.29.0',
+    'papercraft-stop-motion': '/qijia-video/assets/style-previews/papercraft-stop-motion.webp?v=1.29.0',
   };
   return assets[styleId] || assets[DEFAULT_VISUAL_STYLE_ID];
 }
@@ -966,7 +966,7 @@ function setDouyinRefreshFeedback(jobId, tone, message) {
 function setBusy(busy) {
   state.busy = busy;
   document.querySelectorAll('[data-busy-lock]').forEach((control) => {
-    control.disabled = busy;
+    control.disabled = busy || control.dataset.locked === 'true';
     control.setAttribute('aria-busy', String(busy));
   });
   document.querySelectorAll('[data-shot-upload]').forEach((input) => {
@@ -1438,10 +1438,16 @@ function renderJobs() {
   node.innerHTML = state.jobs.map((job) => {
     const title = job.source_card_snapshot?.title || job.id;
     const skillName = job.skill_snapshot?.display_name || '旧版工作流';
-    return `<button class="job-card ${state.selectedJob?.id === job.id ? 'selected' : ''}" data-job-id="${escapeHtml(job.id)}" type="button" aria-pressed="${String(state.selectedJob?.id === job.id)}">
-      <span class="job-card-title">${escapeHtml(title)}</span>
-      <span class="meta"><span>${escapeHtml(skillName)}</span><span>${escapeHtml(stateLabels[job.state] || job.state)}</span><span>v${job.revision}</span><span>${escapeHtml(job.created_by || '创建者未知')}</span><span>${escapeHtml(formatDateTime(job.updated_at || ''))}</span>${canEditResource(job) ? '' : '<span>只读</span>'}</span>
-    </button>`;
+    const deleteLocked = [
+      'script_generating', 'producing', 'quality_checking', 'final_approved',
+    ].includes(job.state);
+    return `<article class="job-card-row">
+      <button class="job-card ${state.selectedJob?.id === job.id ? 'selected' : ''}" data-job-id="${escapeHtml(job.id)}" type="button" aria-pressed="${String(state.selectedJob?.id === job.id)}">
+        <span class="job-card-title">${escapeHtml(title)}</span>
+        <span class="meta"><span>${escapeHtml(skillName)}</span><span>${escapeHtml(stateLabels[job.state] || job.state)}</span><span>v${job.revision}</span><span>${escapeHtml(job.created_by || '创建者未知')}</span><span>${escapeHtml(formatDateTime(job.updated_at || ''))}</span>${canEditResource(job) ? '' : '<span>只读</span>'}</span>
+      </button>
+      ${canEditResource(job) ? `<button class="job-delete-button" type="button" data-delete-job-id="${escapeHtml(job.id)}" data-busy-lock data-locked="${String(deleteLocked)}" ${state.busy || deleteLocked ? 'disabled' : ''} aria-label="删除视频任务：${escapeHtml(title)}" title="${deleteLocked ? '任务运行完成后才能删除' : '删除视频任务'}">删除</button>` : ''}
+    </article>`;
   }).join('');
 }
 
@@ -3608,7 +3614,49 @@ function clearOneTaskPromptOverride() {
   persistPromptFields();
 }
 
+async function deleteVideoJob(job) {
+  if (!job || !canEditResource(job)) return;
+  const title = job.source_card_snapshot?.title || job.id;
+  const confirmed = window.confirm(
+    `删除“${title}”任务？\n\n任务会从工作台移除。已产生的费用和生成资产仍会保留，以保证记录可追溯。`,
+  );
+  if (!confirmed) return;
+  notify('');
+  setBusy(true);
+  try {
+    await api('DELETE', `/jobs/${encodeURIComponent(job.id)}`, {
+      expected_revision: job.revision,
+    });
+    if (state.selectedJob?.id === job.id) {
+      stopPolling();
+      clearTtsPreview();
+      state.selectedJob = null;
+      state.activeTask = null;
+      state.selectedShotId = '';
+      state.previewVersionId = '';
+      state.previewUploadId = '';
+      state.previewFrameCandidateId = '';
+      state.storyboardKey = '';
+      state.inspectorKey = '';
+    }
+    await loadAll();
+    notify('视频任务已删除。生成资产与费用记录仍保留。');
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
 $('#job-list').addEventListener('click', async (event) => {
+  const deleteButton = event.target.closest('[data-delete-job-id]');
+  if (deleteButton) {
+    const job = state.jobs.find(
+      (item) => item.id === deleteButton.dataset.deleteJobId,
+    );
+    await deleteVideoJob(job);
+    return;
+  }
   const card = event.target.closest('[data-job-id]');
   if (!card) return;
   switchProductionPane('jobs');

@@ -1791,6 +1791,8 @@ class VideoJob(ContractModel):
     created_by: str = ""
     created_at: str = ""
     updated_at: str = ""
+    deleted_at: str = ""
+    deleted_by: str = ""
 
     @model_validator(mode="before")
     @classmethod

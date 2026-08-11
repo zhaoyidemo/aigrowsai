@@ -54,6 +54,7 @@ from qijia_video.errors import (
     InvalidTransition,
     ProviderUnavailable,
     QualityGateFailed,
+    ResourceNotFound,
     RevisionConflict,
 )
 from qijia_video.director_skill_registry import (
@@ -581,6 +582,13 @@ class QijiaVideoContractTests(unittest.TestCase):
             f"{prefix}/jobs/{{job_id}}/actions/retry-news-research",
             paths,
         )
+        delete_route = next(
+            route
+            for route in qijia_api.api_router.routes
+            if route.path == f"{prefix}/jobs/{{job_id}}"
+            and "DELETE" in route.methods
+        )
+        self.assertIn("DELETE", delete_route.methods)
 
     def test_script_skill_uses_model_knowledge_from_complete_original_input(self):
         request = CreativeRequestInput(
@@ -2829,6 +2837,41 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 self.actor,
                 GenerationSettings(skill_id="brief-recent-news"),
             )
+
+    async def test_job_deletion_is_hidden_but_keeps_auditable_history(self):
+        card = await self.service.create_source_card(valid_card(), self.actor)
+        card = await self.service.verify_source_card(
+            card.id, card.revision, self.actor
+        )
+        job = await self.service.create_job(card.id, self.actor)
+
+        with self.assertRaisesRegex(InvalidTransition, "正在处理中"):
+            await self.service.delete_job(
+                job.id,
+                job.revision,
+                self.actor,
+                active_run=True,
+            )
+
+        deleted = await self.service.delete_job(
+            job.id,
+            job.revision,
+            self.actor,
+        )
+
+        self.assertTrue(deleted.deleted_at)
+        self.assertEqual(deleted.deleted_by, self.actor.username)
+        self.assertEqual(deleted.revision, job.revision + 1)
+        self.assertEqual(await self.service.list_jobs(self.actor), [])
+        retained = await self.service.list_jobs(
+            self.actor,
+            include_deleted=True,
+        )
+        self.assertEqual([item.id for item in retained], [job.id])
+        with self.assertRaisesRegex(ResourceNotFound, "视频任务不存在"):
+            await self.service.get_job(job.id, self.actor)
+        with self.assertRaisesRegex(ResourceNotFound, "视频任务不存在"):
+            await self.service.view_job(job.id, self.actor)
 
     async def test_job_freezes_single_owner_pipeline_snapshots(self):
         card = await self.service.create_source_card(valid_card(), self.actor)

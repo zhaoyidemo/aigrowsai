@@ -78,6 +78,7 @@ from qijia_video.errors import (
     InvalidTransition,
     ProviderUnavailable,
     QualityGateFailed,
+    ResourceNotFound,
     RevisionConflict,
 )
 from qijia_video.ports import (
@@ -1128,23 +1129,56 @@ class QijiaVideoService:
 
         return self.prompt_writing_profile_registry.public_default()
 
-    async def list_jobs(self, actor: Actor, *, limit: int = 100) -> list[VideoJob]:
-        return [
+    async def list_jobs(
+        self,
+        actor: Actor,
+        *,
+        limit: int = 100,
+        include_deleted: bool = False,
+    ) -> list[VideoJob]:
+        rows = [
             VideoJob.model_validate(item)
             for item in await self.repository.list_visible(
-                "job", actor, limit=limit
+                "job", actor, limit=limit if include_deleted else 500
             )
         ]
+        if include_deleted:
+            return rows[:limit]
+        return [item for item in rows if not item.deleted_at][:limit]
 
     async def get_job(self, job_id: str, actor: Actor) -> VideoJob:
-        return VideoJob.model_validate(
+        job = VideoJob.model_validate(
             await self.repository.get("job", job_id, actor)
         )
+        if job.deleted_at:
+            raise ResourceNotFound("视频任务不存在")
+        return job
 
     async def view_job(self, job_id: str, actor: Actor) -> VideoJob:
-        return VideoJob.model_validate(
+        job = VideoJob.model_validate(
             await self.repository.get_visible("job", job_id, actor)
         )
+        if job.deleted_at:
+            raise ResourceNotFound("视频任务不存在")
+        return job
+
+    async def delete_job(
+        self,
+        job_id: str,
+        expected_revision: int,
+        actor: Actor,
+        *,
+        active_run: bool = False,
+    ) -> VideoJob:
+        """Hide a job without erasing paid usage or generated assets."""
+
+        job = await self.get_job(job_id, actor)
+        self._assert_revision(job.revision, expected_revision)
+        if active_run:
+            raise InvalidTransition("任务正在处理中，请等待本次运行完成后再删除")
+        job.deleted_at = timestamp()
+        job.deleted_by = actor.username
+        return await self._save_job(job, actor)
 
     async def _save_job(self, job: VideoJob, actor: Actor) -> VideoJob:
         current = job.revision

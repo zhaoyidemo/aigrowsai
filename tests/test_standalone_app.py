@@ -69,6 +69,12 @@ class StandaloneAuthenticationTests(unittest.TestCase):
         self.assertEqual(costs.status_code, 200)
         self.assertIn("内容成本与效果分析", costs.text)
         self.assertEqual(costs.headers["cache-control"], "no-store")
+        style_preview = self.client.get(
+            "/qijia-video/assets/style-previews/modern-editorial.webp"
+        )
+        self.assertEqual(style_preview.status_code, 200)
+        self.assertEqual(style_preview.headers["content-type"], "image/webp")
+        self.assertGreater(len(style_preview.content), 0)
 
     def test_wrong_password_fails_without_a_session(self):
         response = self.client.post(
