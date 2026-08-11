@@ -24,11 +24,15 @@ from qijia_video import MODULE_VERSION
 from qijia_video.contracts import (
     AssetRef,
     CreativeRequestInput,
+    DEFAULT_PROVIDER_ADAPTER_ID,
+    DEFAULT_SCRIPT_SKILL_ID,
+    DEFAULT_VISUAL_STYLE_ID,
     GenerationSettings,
     NewsTopicInput,
     PersonViewpointInput,
     PreGenerationMediaMode,
     QuickSourceCardInput,
+    SEEDANCE_EFFICIENT_MODEL,
     SeedanceModelId,
     ScriptDraft,
     SourceCardInput,
@@ -150,10 +154,62 @@ class ShotMediaUploadClaims(StrictRequest):
     expires_at: int = Field(gt=0)
 
 
+class CreateGenerationSettings(StrictRequest):
+    """Public v2 selections; legacy execution fields are intentionally absent."""
+
+    skill_id: str = Field(
+        default="",
+        max_length=64,
+        pattern=r"^$|^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    skill_version: str = Field(
+        default="",
+        max_length=32,
+        pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
+    )
+    script_skill_id: str = Field(
+        default=DEFAULT_SCRIPT_SKILL_ID,
+        max_length=64,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    script_skill_version: str = Field(
+        default="",
+        max_length=32,
+        pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
+    )
+    director_skill_id: str = Field(
+        default=DEFAULT_VISUAL_STYLE_ID,
+        max_length=64,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    director_skill_version: str = Field(
+        default="",
+        max_length=32,
+        pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
+    )
+    provider_adapter_id: str = Field(
+        default=DEFAULT_PROVIDER_ADAPTER_ID,
+        max_length=64,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    provider_adapter_version: str = Field(
+        default="",
+        max_length=32,
+        pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
+    )
+    video_resolution: Literal["480p", "720p", "1080p"] = "1080p"
+    tts_voice_id: TtsVoiceId = "zh_female_vv_uranus_bigtts"
+    tts_speed_ratio: TtsSpeedRatio = 1.2
+    seedance_model: SeedanceModelId = SEEDANCE_EFFICIENT_MODEL
+
+    def to_internal(self) -> GenerationSettings:
+        return GenerationSettings.model_validate(self.model_dump(mode="json"))
+
+
 class CreateJobRequest(StrictRequest):
     source_card_id: str = Field(min_length=1, max_length=64)
-    generation_settings: GenerationSettings = Field(
-        default_factory=GenerationSettings
+    generation_settings: CreateGenerationSettings = Field(
+        default_factory=CreateGenerationSettings
     )
 
 
@@ -416,11 +472,32 @@ async def list_content_skills(user: dict = Depends(get_current_user)):
     return ok(runtime.service.content_skills())
 
 
-@api_router.get("/visual-styles")
+@api_router.get("/visual-styles", deprecated=True)
 @boundary
 async def list_visual_styles(user: dict = Depends(get_current_user)):
     del user
     return ok(runtime.service.visual_styles())
+
+
+@api_router.get('/script-skills')
+@boundary
+async def list_script_skills(user: dict = Depends(get_current_user)):
+    del user
+    return ok(runtime.service.script_skills())
+
+
+@api_router.get('/director-skills')
+@boundary
+async def list_director_skills(user: dict = Depends(get_current_user)):
+    del user
+    return ok(runtime.service.director_skills())
+
+
+@api_router.get('/provider-adapter')
+@boundary
+async def get_provider_adapter(user: dict = Depends(get_current_user)):
+    del user
+    return ok(runtime.service.provider_adapter())
 
 
 @api_router.post("/source-cards")
@@ -613,7 +690,7 @@ async def create_job(body: CreateJobRequest, user: dict = Depends(get_current_us
     job = await runtime.service.create_job(
         body.source_card_id,
         actor,
-        body.generation_settings,
+        body.generation_settings.to_internal(),
     )
     run = await start_run("generate_script", job.id, actor)
     return ok({

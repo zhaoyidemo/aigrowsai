@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.24.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.25.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -114,17 +114,23 @@
           </div>
           <section class="creation-direction" aria-label="内容与视觉方向">
             <label class="creation-setting skill-setting" for="content-skill">
-              <span>任务类型</span>
-              <strong>只决定输入方式与证据规则</strong>
+              <span>任务与证据政策</span>
+              <strong>只决定输入方式、研究模式与事实边界</strong>
               <select id="content-skill" aria-label="内容 Skill"></select>
               <small id="content-skill-description">不再注入脚本或视觉提示词。</small>
             </label>
+            <label class="creation-setting script-skill-setting" for="script-skill">
+              <span>脚本主编</span>
+              <strong>唯一负责选角度、搭论证和写口播</strong>
+              <select id="script-skill" aria-label="Script Skill"></select>
+              <small id="script-skill-description">不会设计镜头或媒体模型提示词。</small>
+            </label>
             <section class="creation-setting visual-style-setting" aria-labelledby="visual-style-label">
-              <span id="visual-style-label">视觉表现</span>
-              <strong>选择观众实际会看到的画面语言</strong>
-              <select id="visual-style" aria-label="视觉表现"></select>
-              <small id="visual-style-description">只补全外观，不改写内容语义。</small>
-              <div id="visual-style-previews" class="visual-style-previews" aria-label="视觉风格预览"></div>
+              <span id="visual-style-label">视觉导演</span>
+              <strong>唯一负责视觉世界、隐喻、连续性与分镜</strong>
+              <select id="visual-style" aria-label="Director Skill"></select>
+              <small id="visual-style-description">读取已确认脚本，不改写事实和口播。</small>
+              <div id="visual-style-previews" class="visual-style-previews" aria-label="导演风格预览"></div>
             </section>
           </section>
           <details class="production-specs" aria-labelledby="production-specs-title">
@@ -136,7 +142,7 @@
           <label class="video-quality-setting" for="video-resolution">
             <span class="video-quality-copy">
               <strong>视频画质</strong>
-              <small>同时用于 H3 选择的 AI 视频镜头和最终竖屏成片；默认使用 Seedance 1.0 Pro Fast 无声模式，复杂镜头可在成片检查时单独升级 2.0。画质越高，Token、耗时和文件体积通常越大。</small>
+              <small>同时用于 Director Skill 选择的 AI 视频镜头和最终竖屏成片；默认使用 Seedance 1.0 Pro Fast 无声模式，复杂镜头可在成片检查时单独升级 2.0。画质越高，Token、耗时和文件体积通常越大。</small>
             </span>
             <select id="video-resolution" aria-label="视频画质">
               <option value="480p">480P · 480×854</option>
@@ -147,7 +153,7 @@
           <section class="video-quality-setting">
             <span class="video-quality-copy">
               <strong>镜头规划</strong>
-              <small>H3 按脚本中的真实语义变化决定章节数量。图片是默认媒介；只有连续动作或状态变化不可替代时才使用视频，最多三段但不要求凑满。</small>
+              <small>Director Skill 按已确认脚本的真实语义变化决定章节数量。图片是默认媒介；只有连续动作或状态变化不可替代时才使用视频，最多三段但不要求凑满。</small>
             </span>
           </section>
           <section class="video-quality-setting tts-creation-setting" aria-label="旁白设置">
@@ -198,7 +204,7 @@
               <button id="topic-source-submit" class="button primary" type="submit" data-busy-lock>确认资料并生成脚本</button>
             </form>
           </section>
-          <p id="manual-intake-intro" class="panel-note intake-intro">用一段自然语言说明你想做的内容。系统原样冻结请求，由研究阶段识别人物、引语、观点与目标，再形成 EvidencePack 和唯一 H3 CreativeBrief。</p>
+          <p id="manual-intake-intro" class="panel-note intake-intro">用一段自然语言说明你想做的内容。系统原样冻结请求，先形成 EvidencePack，再由唯一 Script Skill 规划角度并完成脚本。</p>
           <form id="source-card-form" class="form-stack">
             <label class="primary-field">
               <span class="question-line"><span class="question-number">1</span>你想做什么内容？</span>
@@ -224,7 +230,7 @@
                   <span id="reference-file-name"></span>
                 </div>
               </div>
-              <p class="field-hint">上传后，它会成为全部视觉章节的最高优先级视觉基准，但不作为观点依据。JPG、PNG 或 WebP，最大 10 MB。</p>
+              <p class="field-hint">上传后，Director Skill 会在每个 ShotContextIR 中声明它是身份、场景还是风格参考；不会自动同时接管全部属性，也不作为观点或事实依据。JPG、PNG 或 WebP，最大 10 MB。</p>
             </section>
             <div class="actions source-form-actions">
               <button id="source-submit-button" class="button primary" type="submit" data-busy-lock>研究并生成脚本</button>
@@ -257,52 +263,55 @@
           </form>
           <details id="generation-orchestration" class="generation-orchestration">
             <summary>
-              <span><strong>H3 如何从输入统领整条生成链路</strong><small>固定编排层 · 可选查看</small></span>
-              <span>查看方法</span>
+              <span><strong>v2 单一负责人生成链路</strong><small>每个阶段只有一个创作负责人 · 可选查看</small></span>
+              <span>查看架构</span>
             </summary>
             <div class="generation-orchestration-body">
               <div class="orchestration-heading">
                 <div>
                   <p class="step">生成架构</p>
-                  <h3>证据只负责事实，H3 CreativeBrief 一次决定全片怎么讲与怎么看</h3>
+                  <h3>证据、脚本、导演和模型适配各守一个边界</h3>
                 </div>
-                <span class="orchestration-lock">编排层固定</span>
+                <span class="orchestration-lock">Pipeline v2</span>
               </div>
-              <section class="orchestration-core prompt-profile-setting" aria-labelledby="prompt-profile-label">
+              <section class="orchestration-core prompt-profile-setting" aria-labelledby="provider-adapter-label">
                 <div class="orchestration-core-heading">
                   <div>
-                    <span id="prompt-profile-label">唯一编排层</span>
-                    <strong id="prompt-profile-name">正在读取 H3</strong>
+                    <span id="provider-adapter-label">最后一公里模型适配</span>
+                    <strong id="provider-adapter-name">正在读取 Provider Adapter</strong>
                   </div>
-                  <small id="prompt-profile-version">自动启用</small>
+                  <small id="provider-adapter-version">自动匹配</small>
                 </div>
-                <p id="prompt-profile-description">H3 将原始输入与 EvidencePack 收敛为唯一 CreativeBrief，脚本和视觉导演复用同一总纲。</p>
+                <p id="provider-adapter-description">只把已经确定的镜头翻译成 Seedream/Seedance 可执行提示词，不参与选题、脚本或导演决策。</p>
                 <p class="orchestration-selection" aria-live="polite">
-                  <span id="orchestration-content-name">正在读取内容 Skill</span>
-                  <b>+</b>
-                  <span id="orchestration-style-name">正在读取视觉风格</span>
+                  <span id="orchestration-content-name">正在读取证据政策</span>
                   <b>→</b>
-                  <strong id="orchestration-profile-summary">H3 统一编排</strong>
+                  <span id="orchestration-script-name">正在读取 Script Skill</span>
+                  <b>→</b>
+                  <span id="orchestration-director-name">正在读取 Director Skill</span>
+                  <b>→</b>
+                  <strong id="orchestration-adapter-summary">Provider Adapter</strong>
                 </p>
-                <ol class="orchestration-priority" aria-label="提示词冲突优先级">
-                  <li>事实与安全</li>
-                  <li>CreativeBrief</li>
+                <ol class="orchestration-priority" aria-label="生成职责边界">
+                  <li>EvidencePack 只管事实</li>
+                  <li>Script Skill 只管内容</li>
+                  <li>Director Skill 只管画面</li>
                   <li id="reference-priority-state">参考图属性（未上传）</li>
-                  <li>视觉风格补全</li>
-                  <li>Provider 语法</li>
+                  <li>Adapter 只管模型语法</li>
                 </ol>
               </section>
               <div class="orchestration-output">
-                <span class="orchestration-output-label">单一总纲链路</span>
+                <span class="orchestration-output-label">版本化产物链路</span>
                 <div class="orchestration-output-grid">
                   <article><span>01</span><strong>EvidencePack</strong><small>只保留证据、出处与不确定性</small></article>
-                  <article><span>02</span><strong>CreativeBrief</strong><small>唯一中心命题、论证路径和视觉母题</small></article>
-                  <article><span>03</span><strong>完整脚本</strong><small>不再夹带逐镜头画面指令</small></article>
-                  <article><span>04</span><strong>自适应分镜</strong><small>按语义变化决定章节与媒介</small></article>
-                  <article><span>05</span><strong>媒体提示词</strong><small>首帧与 I2V 共用同一视觉总纲</small></article>
+                  <article><span>02</span><strong>EditorialPlan</strong><small>比较候选角度，只决定怎么讲</small></article>
+                  <article><span>03</span><strong>确认的 ScriptDraft</strong><small>全片唯一内容真相，不夹带画面</small></article>
+                  <article><span>04</span><strong>VisualBible</strong><small>由一个导演建立视觉世界与连续性</small></article>
+                  <article><span>05</span><strong>ShotContextIR</strong><small>中立镜头语义、隐喻与起止状态</small></article>
+                  <article><span>06</span><strong>Provider Prompt</strong><small>最后才编译 Seedream / Seedance 语法</small></article>
                 </div>
               </div>
-              <p class="orchestration-boundary">参考图只接管已经定义的视觉属性，不提供事实，也不覆盖镜头语义。Seedream、Seedance 等模型只执行最终提示词，不参与职责分配。</p>
+              <p class="orchestration-boundary">任何新 Script Skill 或 Director Skill 都是替换本阶段负责人，不是再叠加一层。旧 H3 Prompt Writing 当前只用于历史任务兼容；未来真正调用 H3 模型时，才单独实现对应 Provider Adapter。</p>
             </div>
           </details>
         </section>
@@ -374,7 +383,7 @@
           <div id="job-error" class="error-box" hidden></div>
           <section id="script-review" class="review-section" hidden>
             <div class="section-title"><h3>脚本确认</h3><span id="script-review-spec">确认后开始配音与画面生成</span></div>
-            <section id="person-research-brief" class="person-research-brief" aria-label="EvidencePack 与 H3 CreativeBrief" hidden></section>
+            <section id="person-research-brief" class="person-research-brief" aria-label="EvidencePack 与 EditorialPlan" hidden></section>
             <section class="tts-review-settings" aria-label="本任务配音设置">
               <div class="tts-review-heading">
                 <div><strong>配音试听</strong><span>试听当前开场，确认后用于整条视频</span></div>
@@ -411,7 +420,7 @@
                 <span id="script-length-status" class="field-hint" aria-live="polite">只统计会被念出的旁白</span>
               </div>
               <div id="script-beat-editor" class="script-beat-editor"></div>
-              <p class="field-hint script-document-hint">这里只编辑完整旁白和可选屏幕文字。画面不会在脚本阶段逐段预设，而是在确认后由 H3 根据 CreativeBrief 与完整旁白统一规划。</p>
+              <p class="field-hint script-document-hint">这里只编辑完整旁白和可选屏幕文字。确认后的 ScriptDraft 是内容唯一真相；随后只由所选 Director Skill 建立 VisualBible 与分镜。</p>
             </section>
             <section id="script-cost-estimate" class="script-cost-estimate" aria-live="polite">
               <div>
@@ -435,7 +444,7 @@
           </section>
           <section id="shot-storyboard" class="review-section storyboard-section" hidden>
             <div class="section-title storyboard-heading">
-              <div><h3>混合制作故事板</h3><span id="storyboard-summary">H3 会按语义变化规划图片与必要的视频镜头</span></div>
+              <div><h3>混合制作故事板</h3><span id="storyboard-summary">Director Skill 会按语义变化规划图片与必要的视频镜头</span></div>
               <span class="storyboard-hint">选中镜头，可上传自己的图片或视频，也可恢复 AI 素材；屏幕文字由 Remotion 后期排版，不会让 AI 直接画字</span>
             </div>
             <p id="frame-selection-warning" class="frame-selection-warning" hidden></p>
@@ -546,6 +555,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.24.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.25.0"></script>
 </body>
 </html>

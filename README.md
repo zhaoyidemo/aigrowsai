@@ -1,6 +1,6 @@
 # 齐家 AI 家庭教育内容工作台
 
-面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的研究与短视频生产服务。家庭教育仍是默认业务场景；Content Skill 只负责输入路由、研究模式、事实政策和质量规则，Visual Style 只负责艺术语言。H3 Prompt Writing 把不可变原始输入与 EvidencePack 一次收敛为唯一 CreativeBrief，脚本和视觉导演共同复用这份总纲；Seedream、Seedance、TTS、Remotion、FFmpeg、存储、成本与任务状态机继续共用。
+面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的研究与短视频生产服务。新任务使用 `Pipeline v2`：EvidencePipeline 管事实，Script Skill 管内容，Director Skill 管视觉，Provider Adapter 管模型语法；每个阶段只有一个负责人。Seedream、Seedance、TTS、Remotion、FFmpeg、存储、成本与任务状态机继续共用。
 
 环境变量中的管理员账号可以创建、启停同事账号，授予或收回工作台使用权限，并重置密码。同事可以查看团队创建的全部内容、成本和抖音效果，只能修改和继续执行自己创建的内容；管理员可以管理全部内容。
 
@@ -8,8 +8,8 @@
 
 当前内置两套 Skill：
 
-- `explain-expert-view@2.1.0`：用一个 `creative_request` 接收人物、引语、观点、问题或主题；原始请求不在入口拆分或改写，由研究阶段识别主体并核验出处与语境。无法形成可靠证据时保留原始请求并明确降级，绝不把用户表述冒充已核验事实或人物原话。
-- `brief-recent-news@2.0.0`：科技、商业或通用最新新闻研究工作流。用户输入仅是检索请求；至少需要一条与检索注释匹配的可追溯事实。时间缺失、单站点或来源类型不完整时会醒目标注并进入人工审核，只有没有可追溯证据时才停止。联网研究默认使用 `x-ai/grok-4.5`，通过 OpenRouter 托管的 Exa 工具完成检索，不需要额外的搜索 API Key，并与脚本模型独立配置。
+- `explain-expert-view@2.2.0`：用一个 `creative_request` 接收人物、引语、观点、问题或主题；原始请求不在入口拆分或改写，由研究阶段识别主体并核验出处与语境。无法形成可靠证据时保留原始请求并明确降级，绝不把用户表述冒充已核验事实或人物原话。
+- `brief-recent-news@2.1.0`：科技、商业或通用最新新闻研究工作流。用户输入仅是检索请求；至少需要一条与检索注释匹配的可追溯事实。时间缺失、单站点或来源类型不完整时会醒目标注并进入人工审核，只有没有可追溯证据时才停止。联网研究通过 OpenRouter 的托管搜索工具完成，不需要新增搜索 API Key，并与脚本模型独立配置。
 
 每个 Skill 位于 `qijia_video/content_skills/<skill-id>/`，只由 `SKILL.md` 与 `manifest.json` 定义工作流预设，不再拥有研究提示词、脚本提示词或视觉策略文件。`skill_registry.py` 按内容格式推荐默认 Skill；创建任务时冻结 `skill_id`、版本、manifest 哈希、研究模式、政策 ID 与质量规则。后续修改 Skill 文件不会改变已创建任务；旧快照中的提示词字段仍可读取，但新任务始终为空且不会进入运行时提示词。
 
@@ -19,41 +19,41 @@
 - `POST /api/qijia-video/source-cards/news-topic`：把新闻主题转换为“待研究”的来源卡；
 - `POST /api/qijia-video/jobs`：在 `generation_settings` 中可传 `skill_id` 与 `skill_version`；省略时按来源卡 `content_format` 路由并冻结。
 
-## 视觉风格与多模态提示词
+## 单一职责生成链与多模态提示词
 
-工作台把“写什么”“长什么样”“怎样把意图写成生成提示词”拆成三个独立维度：
+工作台把研究、写作、导演和模型提示词拆成四个不可重叠的职责：
 
 - Content Skill：只决定输入方式、是否研究、事实/安全政策和质量规则，不生成内容角度、脚本结构或逐段画面；
-- Visual Style：只提供艺术语言与材质运动语法，目前提供“现代编辑插画”“编辑纸张拼贴”“纸艺定格讲解”；
-- Prompt Writing Profile：所有新任务固定使用 `h3-prompt-writing@2.0.0`。它先把原始输入与 EvidencePack 收敛为唯一 CreativeBrief，再让脚本、分镜、首帧与 I2V 动作提示词复用同一中心命题、论证路径和视觉母题；旧 `structured-multimodal@1.0.0` 仅用于读取历史任务。
+- Script Skill：唯一负责比较创作角度、论证结构和完整口播，交付 `EditorialPlan + ScriptDraft`，不得设计画面；
+- Director Skill：人工确认脚本后，唯一负责 `VisualBible + ShotContextIR`、媒介选择和连续性，不得改写脚本；
+- Provider Adapter：只把冻结的镜头语义编译为 Seedream/Seedance 可执行提示词，不得新增内容或导演决策。
 
-H3 编排和两种纸艺视觉风格是对 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 中提示词组织、纸张拼贴和纸艺定格方法的内部适配，没有复制其长流程门禁，也不引入 MiniMax 模型、API Key 或供应商调用。实际模型仍由现有 Provider 配置决定；今后替换图片或视频模型，只需调整 Provider 编译边界，不需要改写 Content Skill 或视觉风格资源。
+两种纸艺 Director Skill 借鉴了 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 的纸张拼贴与纸艺定格表达。旧 `h3-prompt-writing` 资源只用于读取 Pipeline v1 历史快照，不再进入 v2 主链路；未来只有真正接入 H3 模型时，才应把相关语法单独实现为 H3 专用 Provider Adapter。当前 Seedream/Seedance 生产链不引入 MiniMax API Key。替换媒体模型只需替换 Provider Adapter，不需要改写 Script Skill 或 Director Skill。
 
-视觉风格位于 `qijia_video/visual_styles/`，内部提示词方法位于 `qijia_video/prompt_writing_profiles/`。创建任务时分别冻结 `visual_style_snapshot`、`prompt_writing_profile_snapshot` 及对应版本；旧任务没有这些快照时继续使用原提示词。冲突优先级固定为：事实/安全与领域边界 > 本章可见语义 > 参考素材已经定义的视觉属性 > 视觉风格对未定义属性的补全 > Provider 语法。参考图不是事实来源。只读目录接口为 `GET /api/qijia-video/visual-styles`。
+Script Skill 位于 `qijia_video/script_skills/`，Director Skill 沿用 `qijia_video/visual_styles/` 的版本化资源，Provider Adapter 位于 `qijia_video/provider_adapters/`。新任务冻结 `script_skill_snapshot`、`director_skill_snapshot` 与 `provider_adapter_snapshot`；`visual_style_snapshot`、`prompt_writing_profile_snapshot` 和 `creative_brief` 只用于 v1 历史任务。接口包括 `GET /script-skills`、`GET /director-skills` 与 `GET /provider-adapter`。
 
-工作台创建区优先展示任务类型、带画面预览的 Visual Style 与一行生产规格；H3 架构和详细规格按需展开。Prompt Writing Profile 只读且自动启用，前端不再提供自定义脚本提示词、固定图片数量或固定镜头数量入口。任务详情会把 EvidencePack 与 H3 CreativeBrief 分区展示，并保留当前动作、下一步和五个业务阶段；旧任务明确标记为兼容模式。
+工作台创建区直接展示证据政策、Script Skill、Director Skill 和自动匹配的 Provider Adapter。任务详情可审计 `EvidencePack`、`EditorialPlan`、确认后的脚本、`VisualBible`、每个镜头的 `ShotContextIR` 与只读 Provider Prompt；旧任务明确标记为 v1 兼容模式。
 
-成片阶段的单镜头重生成只接受编辑者填写的 `revision_intent`。服务端会把它与冻结的分镜语义、首帧、视觉风格、参考图边界和 H3 Profile 重新编译为 Provider 提示词；前端只读展示编译结果，不允许直接编辑或提交 Provider 提示词，旧请求未包含 `revision_intent` 时仍保持原指纹。这样局部修改不会绕过 H3，也不会重做旁白、图片章节或其他视频镜头。
+成片阶段的单镜头重生成只接受编辑者填写的 `revision_intent`。服务端会把它与冻结的 `VisualBible`、`ShotContextIR`、首帧和参考图角色通过 Provider Adapter 重新编译；前端只读展示最终提示词，不允许直接编辑或提交。局部修改不会反向改写脚本或导演世界，也不会重做旁白、图片章节或其他视频镜头。
 
-新任务 API 不再接受前端可编辑的 `script_prompt`、`seedance_prompt`、`image_count` 或 `shot_count`，脚本确认页也不再暴露逐段画面导演轨。调用方只提交任务类型、Visual Style、画质与配音设置；成本预估按实际语义章节、首帧与必要的 AI 视频动态计算，自有素材模式会明确说明未生成画面从实际费用扣除。工作台仍保留旧字段和旧 Profile 的读取能力，以便已经冻结的历史任务继续恢复和重试。
+新任务 API 不再接受前端可编辑的 `script_prompt`、`seedance_prompt`、`image_count` 或 `shot_count`。调用方只选择内容政策、Script Skill、Director Skill、画质与配音；Provider Adapter 自动匹配当前生产模型。工作台仍保留旧字段和旧 Profile 的读取能力，以便已经冻结的历史任务继续恢复和重试。
 
 ## 当前真实链路
 
 ```text
 入口 A：TikHub 抖音家庭教育数据 → 5 个候选与成本记录 → 人工采用并补充可靠来源
-入口 B：人物 + 观点
+入口 B：统一自然语言创作请求
 入口 C：最新新闻主题 + 关注角度
 三种入口汇入统一生产链路
-  → 选择任务类型与 Visual Style，并冻结固定的 H3 Prompt Writing Profile
-  → 按工作流预设执行可选或强制研究，只生成 EvidencePack
-  → OpenRouter 单次生成唯一 H3 CreativeBrief 与 ScriptDraft v3
-  → 人工确认脚本
+  → 冻结 EvidencePipeline、唯一 Script Skill、唯一 Director Skill 与 Provider Adapter
+  → 按证据政策执行可选或强制研究，只生成 EvidencePack
+  → 唯一 Script Skill 比较 2–3 个真实角度并生成 EditorialPlan 与 ScriptDraft
+  → 人工修改并确认脚本；确认后的 ScriptDraft 成为内容唯一真相
   → 豆包 TTS 2.0 完整旁白
-  → H3 Visual Director 读取完整旁白与同一 CreativeBrief，按语义变化规划视觉章节
+  → 唯一 Director Skill 只读取确认脚本，生成 VisualBible 与逐章 ShotContextIR
   → 图片为默认媒介；仅在连续动作不可替代时使用视频，全片最多 3 段但不要求凑满
   → 可选：先按文字分镜连续上传自有图片 / 视频，并一次确认素材安排
-  → Seedream 只为未上传素材的视觉章节生成首帧
-  → Seedance 1.0 Pro Fast 只生成未被自有素材覆盖的视频镜头（复杂镜头可单独升级 2.0）
+  → Seedream/Seedance Provider Adapter 只为未上传素材的章节编译并执行提示词
   → Remotion 合成 480P / 720P / 1080P 竖屏成片（新任务默认 1080P）
   → 人工混合制作：逐镜头保留 AI，或连续上传自有图片 / 视频并暂存修改
   → 一次应用全部待处理镜头，只重新合成和自动质检 1 次
@@ -66,7 +66,7 @@ H3 编排和两种纸艺视觉风格是对 [MiniMax-H3](https://github.com/MiniM
 
 抖音趋势只用于解释“为什么值得研究”，不会自动成为来源卡中的已核验事实。生产链路不使用 Mock，也不会自动发布到抖音。Mock Provider 只存在于显式 CLI 演示和测试中。
 
-新任务不预设图片或视频数量。脚本先按 5–8 个自然语义变化形成连续口播，视觉导演再以语义边界规划章节，不会复制旁白、重复构图或为了达到配额拆镜。每个视觉章节生成一张 Seedream 图；图片默认直接动态呈现，只有连续动作、状态转变或镜头运动对理解不可替代时才继续生成 Seedance，最多 3 段但可以为 0。成本按实际章节与实际视频数计算。历史任务中已经冻结的固定数量仍按原规格恢复，不会因升级新增费用。
+新任务不预设图片或视频数量。Script Skill 先写完整论证，Director Skill 再按确认脚本的真实语义边界规划章节，不复制旁白、重复构图或为了配额拆镜。每个视觉章节生成一张 Seedream 图；只有连续动作、状态转变或镜头运动对理解不可替代时才继续生成 Seedance，最多 3 段但可以为 0。成本按实际章节与实际视频数计算。历史任务中已经冻结的固定数量仍按原规格恢复。
 
 混合制作有两个入口。脚本确认时可以勾选“先安排自有素材”：系统只生成正式旁白和文字分镜，暂停在付费图片、视频生成之前；编辑可连续上传多个镜头素材，上传和选择只做校验、转码与保存，不触发 AI 生成或 Remotion 渲染。一次确认素材安排后，Seedream 和 Seedance 只处理没有自有素材的镜头，再由 Remotion 合成和质检首版成片一次。未勾选时仍保持原有全自动首版流程。
 
@@ -133,9 +133,10 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 
 - `qijia_video/`：领域契约、工作流、Provider、API、鉴权和 Web 页面。
 - `qijia_video/content_skills/`、`qijia_video/skill_registry.py`：版本化内容工作流、兼容格式路由与内容快照冻结。
-- `qijia_video/visual_styles/`、`qijia_video/prompt_writing_profiles/`、`qijia_video/visual_style_registry.py`：模型无关的视觉风格、结构化多模态提示词方法与独立任务快照。
-- `qijia_video/prompt_orchestration.py`：把冻结的原始输入与研究结果编译成唯一 EvidencePack，并附加 H3 CreativeBrief 方法；Content Skill 不注入写作提示词。
-- `qijia_video/visual_prompting.py`：按固定优先级把 CreativeBrief、参考素材、Visual Style 和 H3 方法编译为分镜规格，并把首帧/I2V 提示词精简后交给媒体 Provider，不负责选择或调用模型。
+- `qijia_video/script_skills/`、`qijia_video/script_skill_registry.py`：唯一脚本负责人的版本化方法与冻结快照。
+- `qijia_video/visual_styles/`、`qijia_video/visual_style_registry.py`、`qijia_video/director_prompting.py`：Director Skill、VisualBible 与 ShotContextIR 编排；历史视觉/Profile 读取逻辑仍在原 registry 中隔离保留。
+- `qijia_video/provider_adapters/`、`qijia_video/provider_adapter_registry.py`、`qijia_video/provider_prompting.py`：Seedream/Seedance 末端提示词编译，不参与脚本或导演决策。
+- `qijia_video/prompt_orchestration.py`：编译 EvidencePipeline 的研究任务，以及 Script Skill 的不可变输入、EvidencePack 和硬政策边界。
 - `qijia_video/infrastructure/postgres_repository.py`：来源卡与视频任务聚合仓储。
 - `qijia_video/accounts.py`、`qijia_video/account_api.py`：同事账号、密码哈希、会话失效与管理员 API。
 - `qijia_video/run_service.py`：后台任务进度、互斥和重启恢复。
@@ -224,7 +225,7 @@ node --test tests/qijia_video_frontend.test.js
 npm.cmd run typecheck --prefix video_renderer
 ```
 
-真实部署验收至少包括：登录、分别用统一创作请求与最新新闻工作流检查 EvidencePack 与 CreativeBrief、生成并确认 ScriptDraft v3、完整旁白、按语义生成全部视觉章节与必要视频、Remotion 成片、发布包下载、手填一条真实抖音作品链接并刷新作品数据、核对播放与四项互动指标、单视频与团队看板的 10 倍 ROI、排行和 CSV、与供应商账单抽样核对，以及服务重启后的任务快照与旧任务兼容性。
+真实部署验收至少包括：登录、分别用统一创作请求与最新新闻工作流检查 EvidencePack 与 EditorialPlan、人工修改并确认 ScriptDraft、核对 VisualBible 与逐镜头 ShotContextIR、完整旁白、实际媒体提示词、Remotion 成片、发布包下载、抖音效果与成本数据，以及服务重启后的 v2 快照稳定性和 v1 旧任务兼容性。
 
 ## 数据边界
 

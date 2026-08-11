@@ -41,7 +41,7 @@ test('content Skills select versioned expert or recent-news workflows', () => {
   assert.match(page, /主题只是检索请求，不会被当作事实/);
   assert.match(page, /至少一条证据必须能与检索注释匹配/);
   assert.match(page, /只有单一站点时会醒目标注/);
-  assert.match(app, /qijia-video-generation-settings-v2/);
+  assert.match(app, /qijia-video-generation-settings-v3/);
   assert.match(app, /DEFAULT_CONTENT_SKILL_ID = 'explain-expert-view'/);
   assert.match(app, /NEWS_CONTENT_SKILL_ID = 'brief-recent-news'/);
   assert.match(app, /skill_id: requestedSkill\.skill_id/);
@@ -62,15 +62,15 @@ test('content Skills select versioned expert or recent-news workflows', () => {
   assert.match(app, /job\.skill_snapshot\?\.display_name/);
 });
 
-test('visual styles are selected and frozen independently from content Skills and models', () => {
+test('Director Skills are selected and frozen independently from content policy and providers', () => {
   assert.match(page, /id="visual-style"/);
-  assert.match(page, /选择观众实际会看到的画面语言/);
-  assert.match(page, /只补全外观，不改写内容语义/);
+  assert.match(page, /唯一负责视觉世界、隐喻、连续性与分镜/);
+  assert.match(page, /读取已确认脚本，不改写事实和口播/);
   assert.match(app, /DEFAULT_VISUAL_STYLE_ID = 'content-skill-default'/);
   assert.doesNotMatch(app, /function visualStyleGenerationDefaults/);
-  assert.match(app, /visual_style_id: requestedStyle\.style_id/);
-  assert.match(app, /visual_style_version: requestedStyle\.version/);
-  assert.match(app, /job\.visual_style_snapshot\?\.display_name/);
+  assert.match(app, /director_skill_id: requestedDirector\.style_id/);
+  assert.match(app, /director_skill_version: requestedDirector\.version/);
+  assert.match(app, /job\.director_skill_snapshot\?\.display_name/);
   assert.match(page, /id="visual-style-previews"/);
   assert.match(app, /function renderVisualStylePreviews/);
   assert.match(app, /data-visual-style-id/);
@@ -78,28 +78,31 @@ test('visual styles are selected and frozen independently from content Skills an
   assert.match(styles, /\.visual-style-preview/);
 });
 
-test('H3 is shown as the compiler from original input through research and media prompts', () => {
+test('v2 visibly separates evidence, script, directing, and provider compilation', () => {
   assert.match(page, /<details id="generation-orchestration"/);
-  assert.match(page, /证据只负责事实，H3 CreativeBrief 一次决定全片怎么讲与怎么看/);
-  assert.match(page, /原始输入与 EvidencePack 收敛为唯一 CreativeBrief/);
-  assert.match(page, /选择观众实际会看到的画面语言/);
-  assert.match(page, /不提供事实，也不覆盖镜头语义/);
-  assert.match(page, /id="prompt-profile-name"/);
-  assert.match(page, /id="prompt-profile-version">自动启用/);
-  assert.match(page, /唯一编排层/);
-  assert.match(page, /事实与安全[\s\S]*CreativeBrief[\s\S]*参考图属性[\s\S]*视觉风格补全[\s\S]*Provider 语法/);
-  assert.match(page, /EvidencePack[\s\S]*CreativeBrief[\s\S]*完整脚本[\s\S]*自适应分镜[\s\S]*媒体提示词/);
-  assert.match(page, /模型只执行最终提示词，不参与职责分配/);
+  assert.match(page, /证据、脚本、导演和模型适配各守一个边界/);
+  assert.match(page, /id="script-skill"/);
+  assert.match(page, /id="provider-adapter-name"/);
+  assert.match(page, /EvidencePack 只管事实[\s\S]*Script Skill 只管内容[\s\S]*Director Skill 只管画面[\s\S]*Adapter 只管模型语法/);
+  assert.match(page, /EvidencePack[\s\S]*EditorialPlan[\s\S]*确认的 ScriptDraft[\s\S]*VisualBible[\s\S]*ShotContextIR[\s\S]*Provider Prompt/);
+  assert.match(page, /任何新 Script Skill 或 Director Skill 都是替换本阶段负责人/);
+  assert.match(page, /旧 H3 Prompt Writing 当前只用于历史任务兼容/);
+  assert.match(page, /未来真正调用 H3 模型时，才单独实现对应 Provider Adapter/);
   assert.match(page, /<details id="job-generation-methods"/);
-  assert.match(app, /function promptWritingProfile/);
+  assert.match(app, /function providerAdapter/);
+  assert.match(app, /function scriptSkills/);
   assert.match(app, /function renderOrchestrationSelection/);
-  assert.match(app, /参考图属性（已接管）/);
+  assert.match(app, /参考图已上传（角色待导演声明）/);
   assert.match(app, /参考图属性（当前 Skill 不使用）/);
   assert.match(app, /selectedContentSkill\(\)\?\.input_mode !== 'recent_news_topic'/);
-  assert.match(app, /state\.capabilities\?\.prompt_writing_profile/);
-  assert.match(app, /job\.prompt_writing_profile_snapshot/);
+  assert.doesNotMatch(app, /state\.capabilities\?\.prompt_writing_profile/);
+  assert.match(app, /job\.script_skill_snapshot/);
+  assert.match(app, /job\.director_skill_snapshot/);
+  assert.match(app, /job\.provider_adapter_snapshot/);
   assert.match(app, /已随任务冻结/);
-  assert.match(app, /任务冻结的唯一编排层/);
+  assert.match(app, /后阶段不得反向改写前阶段/);
+  assert.match(app, /VisualBible 全片视觉宪法/);
+  assert.match(app, /色彩与材质/);
   assert.match(app, /job-orchestration-core/);
   assert.equal((page.match(/id="reference-image-input"/g) || []).length, 1);
   assert.doesNotMatch(page, /id="orchestration-reference-action"/);
@@ -213,7 +216,7 @@ test('creation intake freezes one unified natural-language creative request', ()
   assert.equal((manualForm.match(/name="creative_request"/g) || []).length, 1);
   assert.doesNotMatch(manualForm, /name="person_name"|name="viewpoint"/);
   assert.match(page, /请求会原样冻结/);
-  assert.match(page, /研究阶段识别人物、引语、观点与目标/);
+  assert.match(page, /系统先判断它是引语、转述还是观点命题/);
   assert.doesNotMatch(manualForm, /阿尔弗雷德·阿德勒|真正影响孩子/);
   assert.doesNotMatch(manualForm, /name="source_material"|name="rights_confirmed"|补充出处|专业模式/);
   assert.doesNotMatch(page, /name="parent_question"|name="core_idea"|name="fact_text"|name="subject_name"/);
@@ -228,9 +231,11 @@ test('creative request research is visible, cited, and non-blocking', () => {
   assert.match(page, /没有可靠来源时会明确降级/);
   assert.match(page, /id="person-research-brief"/);
   assert.match(app, /function renderResearchBrief\(job\)/);
-  assert.match(page, /EvidencePack 与 H3 CreativeBrief/);
+  assert.match(page, /EvidencePack 与 EditorialPlan/);
   assert.match(app, /创作请求 EvidencePack/);
-  assert.match(app, /H3 CreativeBrief/);
+  assert.match(app, /Script Skill EditorialPlan/);
+  assert.match(app, /比较过的脚本角度/);
+  assert.match(app, /不包含任何视觉决策/);
   assert.match(app, /研究只提供证据、出处与不确定性/);
   assert.match(app, /出处核验/);
   assert.match(app, /可靠原文/);
@@ -294,8 +299,8 @@ test('creation intake offers one optional global reference image without extra f
   assert.match(page, /id="reference-image-input"/);
   assert.match(page, /accept="image\/jpeg,image\/png,image\/webp"/);
   assert.match(page, /上传 1 张参考图（可选）/);
-  assert.match(page, /最高优先级视觉基准，但不作为观点依据/);
-  assert.match(page, /优先统一全部视觉章节的画风、色彩与人物造型/);
+  assert.match(page, /在每个 ShotContextIR 中声明它是身份、场景还是风格参考/);
+  assert.match(page, /不会自动同时接管全部属性，也不作为观点或事实依据/);
   assert.doesNotMatch(page, /id="reference-image-input"[^>]*multiple/);
   assert.match(app, /referenceImageFile/);
   assert.match(app, /\/source-cards\/creative-request-with-reference/);
@@ -317,7 +322,7 @@ test('workflow exposes five understandable stages with detailed action context',
   assert.match(app, /remotion_normalize: 2/);
   assert.match(styles, /grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/);
   assert.match(page, /id="next-action"/);
-  assert.match(page, /H3 按脚本中的真实语义变化决定章节数量/);
+  assert.match(page, /Director Skill 按已确认脚本的真实语义变化决定章节数量/);
   assert.match(page, /最多三段但不要求凑满/);
 });
 
@@ -374,7 +379,7 @@ test('AI shots are visible storyboard cards with isolated version controls', () 
   assert.match(page, /id="shot-storyboard"/);
   assert.match(page, /id="shot-grid"/);
   assert.match(page, /id="shot-inspector"/);
-  assert.match(page, /H3 会按语义变化规划图片与必要的视频镜头/);
+  assert.match(page, /Director Skill 会按语义变化规划图片与必要的视频镜头/);
   assert.doesNotMatch(page, /id="image-count"|默认 10 段|13 张 Seedream/);
   assert.doesNotMatch(app, /image_count:|shot_count:|updateImageCountCost/);
   assert.match(app, /renderShotStoryboard\(job\)/);
@@ -492,11 +497,11 @@ test('unified creative request starts a real job and polling resumes after refre
   assert.match(app, /fetchTask\(job\.last_run_task_id\)/);
 });
 
-test('H3 owns script prompting and creation payload exposes no competing controls', () => {
+test('Script Skill owns writing and creation payload exposes no competing controls', () => {
   assert.doesNotMatch(page, /id="script-generation-prompt"|id="enable-custom-script-prompt"/);
   assert.doesNotMatch(page, /id="seedance-generation-prompt"/);
   assert.doesNotMatch(page, /id="job-seedance-prompt"/);
-  assert.match(page, /证据只负责事实，H3 CreativeBrief 一次决定全片怎么讲与怎么看/);
+  assert.match(page, /唯一负责选角度、搭论证和写口播/);
   assert.match(app, /generation_settings: generationSettings/);
   assert.match(app, /video_resolution: videoResolution/);
   const settingsSource = app.slice(
@@ -504,6 +509,9 @@ test('H3 owns script prompting and creation payload exposes no competing control
     app.indexOf('async function api'),
   );
   assert.doesNotMatch(settingsSource, /script_prompt|seedance_prompt|image_count|shot_count/);
+  assert.match(settingsSource, /script_skill_id: requestedScriptSkill\.skill_id/);
+  assert.match(settingsSource, /director_skill_id: requestedDirector\.style_id/);
+  assert.match(settingsSource, /provider_adapter_id: adapter\.adapter_id/);
   assert.match(app, /localStorage\.removeItem\(LEGACY_PROMPT_STORAGE_KEY\)/);
   assert.doesNotMatch(app, /function customScriptPromptEnabled|restore-prompt-defaults|job-seedance-prompt/);
 });
@@ -553,7 +561,8 @@ test('script review edits narration and screen text without a competing visual t
   assert.match(page, /id="script-video-title"/);
   assert.match(page, /id="script-length-status"/);
   assert.match(page, /这里只编辑完整旁白和可选屏幕文字/);
-  assert.match(page, /画面不会在脚本阶段逐段预设/);
+  assert.match(page, /确认后的 ScriptDraft 是内容唯一真相/);
+  assert.match(page, /只由所选 Director Skill 建立 VisualBible 与分镜/);
   assert.doesNotMatch(app, /data-script-field="visual_direction"/);
   assert.match(app, /data-script-field="narration"/);
   assert.match(app, /data-script-field="on_screen_text"/);

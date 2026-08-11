@@ -30,6 +30,8 @@ BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_VISUAL_STYLE_ID = "content-skill-default"
 H3_PROMPT_WRITING_PROFILE_ID = "h3-prompt-writing"
 DEFAULT_PROMPT_WRITING_PROFILE_ID = H3_PROMPT_WRITING_PROFILE_ID
+DEFAULT_SCRIPT_SKILL_ID = 'evidence-led-explainer'
+DEFAULT_PROVIDER_ADAPTER_ID = 'seedream-seedance'
 SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-0-pro-fast-251015"
 SEEDANCE_RETIRED_MODEL = "doubao-seedance-1-5-pro-251215"
 SEEDANCE_FLAGSHIP_MODEL = "doubao-seedance-2-0-260128"
@@ -78,6 +80,11 @@ class SkillResearchMode(StrEnum):
     NONE = "none"
     PERSON_VIEWPOINT_OPTIONAL = "person_viewpoint_optional"
     RECENT_NEWS_REQUIRED = "recent_news_required"
+
+
+class PipelineVersion(StrEnum):
+    LEGACY = 'v1'
+    SINGLE_OWNER = 'v2'
 
 
 class RiskLevel(StrEnum):
@@ -242,7 +249,7 @@ class SourceCardInput(ContractModel):
 
 
 class CreativeRequestInput(ContractModel):
-    """One immutable natural-language request for H3 to understand and research."""
+    """One immutable natural-language request for the evidence pipeline."""
 
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     creative_request: str = Field(min_length=10, max_length=1800)
@@ -517,8 +524,8 @@ class PersonResearchBrief(ContractModel):
     attribution_note: str = Field(default="", max_length=1600)
     source_context: str = Field(default="", max_length=2000)
     summary: str = Field(min_length=1, max_length=2000)
-    # Compatibility-only editorial fields. New research output leaves them
-    # empty; creative judgment belongs to the single H3 creative brief.
+    # Pipeline v1 compatibility fields. v2 research leaves them empty because
+    # editorial judgment belongs exclusively to the frozen Script Skill.
     core_tension: str = Field(default="", max_length=1200)
     audience_relevance: list[str] = Field(default_factory=list, max_length=6)
     content_angles: list[str] = Field(default_factory=list, max_length=5)
@@ -627,8 +634,8 @@ class ScriptBeat(ContractModel):
         "application",
         "closing",
     ]
-    # Historical ScriptDraft v2 field. H3 v3 assigns visuals only after the
-    # narration and CreativeBrief have been completed.
+    # Historical ScriptDraft v2 field. Pipeline v2 assigns visuals only after
+    # the editor has confirmed the complete narration.
     visual_direction: str = Field(default="", max_length=1200)
     on_screen_text: str = Field(default="", max_length=80)
     source_refs: list[str] = Field(default_factory=list)
@@ -785,6 +792,82 @@ class ContentSkillSnapshot(ContractModel):
     frozen_at: str = Field(min_length=1, max_length=64)
 
 
+class ScriptSkillSnapshot(ContractModel):
+    '''The one script strategy allowed to own editorial decisions.'''
+
+    schema_version: Literal['1.0'] = SCHEMA_VERSION
+    skill_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r'^[a-z0-9]+(?:-[a-z0-9]+)*$',
+    )
+    version: str = Field(
+        min_length=1,
+        max_length=32,
+        pattern=r'^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$',
+    )
+    display_name: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=1000)
+    compatible_formats: list[ContentFormat] = Field(min_length=1)
+    planning_instructions: str = Field(min_length=1, max_length=6000)
+    writing_instructions: str = Field(min_length=1, max_length=8000)
+    critic_rules: list[str] = Field(min_length=1, max_length=30)
+    manifest_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
+    frozen_at: str = Field(min_length=1, max_length=64)
+
+
+class DirectorSkillSnapshot(ContractModel):
+    '''The one visual workflow allowed to turn a confirmed script into shots.'''
+
+    schema_version: Literal['1.0'] = SCHEMA_VERSION
+    skill_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r'^[a-z0-9]+(?:-[a-z0-9]+)*$',
+    )
+    version: str = Field(
+        min_length=1,
+        max_length=32,
+        pattern=r'^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$',
+    )
+    display_name: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=1000)
+    directing_instructions: str = Field(min_length=1, max_length=4000)
+    storyboard_rules: str = Field(min_length=1, max_length=4000)
+    image_art_direction: str = Field(min_length=1, max_length=4000)
+    motion_art_direction: str = Field(min_length=1, max_length=4000)
+    negative_rules: list[str] = Field(default_factory=list, max_length=30)
+    manifest_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
+    frozen_at: str = Field(min_length=1, max_length=64)
+
+
+class ProviderAdapterSnapshot(ContractModel):
+    '''Last-mile compiler that cannot make editorial or directing choices.'''
+
+    schema_version: Literal['1.0'] = SCHEMA_VERSION
+    adapter_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r'^[a-z0-9]+(?:-[a-z0-9]+)*$',
+    )
+    version: str = Field(
+        min_length=1,
+        max_length=32,
+        pattern=r'^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$',
+    )
+    display_name: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=1000)
+    image_provider_family: str = Field(min_length=1, max_length=64)
+    video_provider_family: str = Field(min_length=1, max_length=64)
+    image_framework: str = Field(min_length=1, max_length=4000)
+    video_framework: str = Field(min_length=1, max_length=4000)
+    reference_policy: str = Field(min_length=1, max_length=3000)
+    audio_policy: str = Field(min_length=1, max_length=1000)
+    negative_rules: list[str] = Field(default_factory=list, max_length=30)
+    manifest_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
+    frozen_at: str = Field(min_length=1, max_length=64)
+
+
 class VisualStyleSnapshot(ContractModel):
     """Provider-neutral visual language frozen independently of content logic."""
 
@@ -811,7 +894,7 @@ class VisualStyleSnapshot(ContractModel):
 
 
 class PromptWritingProfileSnapshot(ContractModel):
-    """Internal prompt-writing method; it never selects or invokes a model."""
+    """Pipeline v1 compatibility snapshot; never used by new v2 jobs."""
 
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     profile_id: str = Field(
@@ -826,8 +909,7 @@ class PromptWritingProfileSnapshot(ContractModel):
     )
     display_name: str = Field(min_length=1, max_length=120)
     description: str = Field(min_length=1, max_length=1000)
-    # research_framework/script_framework preserve frozen pre-v2 snapshots;
-    # H3 v2 owns writing through one creative_brief_framework instead.
+    # All framework fields exist only to resume frozen Pipeline v1 jobs.
     research_framework: str = Field(default="", max_length=6000)
     script_framework: str = Field(default="", max_length=6000)
     creative_brief_framework: str = Field(default="", max_length=6000)
@@ -855,7 +937,7 @@ class ResearchPromptSnapshot(ContractModel):
 
 
 class CreativeBrief(ContractModel):
-    """The single H3-owned creative decision record for one video."""
+    """Pipeline v1 H3 decision record retained for historical job recovery."""
 
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     central_question: str = Field(min_length=1, max_length=500)
@@ -874,6 +956,51 @@ class CreativeBrief(ContractModel):
     generated_at: str = Field(default="", max_length=64)
 
 
+class EditorialAngle(ContractModel):
+    angle_id: str = Field(
+        min_length=1,
+        max_length=32,
+        pattern=r'^[a-z0-9]+(?:_[a-z0-9]+)*$',
+    )
+    premise: str = Field(min_length=1, max_length=800)
+    audience_value: str = Field(min_length=1, max_length=600)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=30)
+    risk: str = Field(default='', max_length=600)
+
+
+class EditorialPlan(ContractModel):
+    '''Provider-neutral script plan with no visual decisions.'''
+
+    schema_version: Literal['1.0'] = SCHEMA_VERSION
+    objective: str = Field(min_length=1, max_length=600)
+    central_question: str = Field(min_length=1, max_length=500)
+    candidate_angles: list[EditorialAngle] = Field(min_length=2, max_length=3)
+    selected_angle_id: str = Field(min_length=1, max_length=32)
+    selection_reason: str = Field(min_length=1, max_length=800)
+    core_thesis: str = Field(min_length=1, max_length=1200)
+    audience_promise: str = Field(min_length=1, max_length=800)
+    narrative_arc: list[str] = Field(min_length=3, max_length=8)
+    tone: str = Field(min_length=1, max_length=500)
+    must_include: list[str] = Field(default_factory=list, max_length=12)
+    must_avoid: list[str] = Field(default_factory=list, max_length=12)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=50)
+    critic_summary: str = Field(min_length=1, max_length=1200)
+    model_id: str = Field(default='', max_length=256)
+    prompt_version: str = Field(default='', max_length=128)
+    input_hash: str = Field(default='', pattern=r'^$|^[a-f0-9]{64}$')
+    draft_script_hash: str = Field(default='', pattern=r'^$|^[a-f0-9]{64}$')
+    generated_at: str = Field(default='', max_length=64)
+
+    @model_validator(mode='after')
+    def validate_selected_angle(self):
+        angle_ids = [item.angle_id for item in self.candidate_angles]
+        if len(angle_ids) != len(set(angle_ids)):
+            raise ValueError('候选脚本角度 ID 必须唯一')
+        if self.selected_angle_id not in angle_ids:
+            raise ValueError('selected_angle_id 必须引用候选脚本角度')
+        return self
+
+
 class GenerationSettings(ContractModel):
     """创建任务时冻结的生成参数；视觉编排方法由系统固定。"""
 
@@ -887,6 +1014,16 @@ class GenerationSettings(ContractModel):
         max_length=32,
         pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
     )
+    script_skill_id: str = Field(
+        default=DEFAULT_SCRIPT_SKILL_ID,
+        max_length=64,
+        pattern=r'^[a-z0-9]+(?:-[a-z0-9]+)*$',
+    )
+    script_skill_version: str = Field(
+        default='',
+        max_length=32,
+        pattern=r'^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$',
+    )
     visual_style_id: str = Field(
         default=DEFAULT_VISUAL_STYLE_ID,
         max_length=64,
@@ -897,10 +1034,32 @@ class GenerationSettings(ContractModel):
         max_length=32,
         pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
     )
-    prompt_writing_profile_id: str = Field(
-        default=DEFAULT_PROMPT_WRITING_PROFILE_ID,
+    director_skill_id: str = Field(
+        # Empty remains valid only for persisted/internal v1 callers. The v2
+        # public request contract always supplies an explicit Director Skill.
+        default='',
         max_length=64,
-        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+        pattern=r'^$|^[a-z0-9]+(?:-[a-z0-9]+)*$',
+    )
+    director_skill_version: str = Field(
+        default='',
+        max_length=32,
+        pattern=r'^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$',
+    )
+    provider_adapter_id: str = Field(
+        default=DEFAULT_PROVIDER_ADAPTER_ID,
+        max_length=64,
+        pattern=r'^[a-z0-9]+(?:-[a-z0-9]+)*$',
+    )
+    provider_adapter_version: str = Field(
+        default='',
+        max_length=32,
+        pattern=r'^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$',
+    )
+    prompt_writing_profile_id: str = Field(
+        default='',
+        max_length=64,
+        pattern=r'^$|^[a-z0-9]+(?:-[a-z0-9]+)*$',
     )
     prompt_writing_profile_version: str = Field(
         default="",
@@ -909,21 +1068,19 @@ class GenerationSettings(ContractModel):
     )
     script_prompt: str = Field(
         default=DEFAULT_SCRIPT_PROMPT,
-        min_length=1,
         max_length=8000,
     )
     # Persisted for historical task recovery and as the selected style's
     # internal director resource. New API callers may not override it.
     seedance_prompt: str = Field(
         default=DEFAULT_SEEDANCE_PROMPT,
-        min_length=1,
         max_length=3200,
     )
     video_resolution: Literal["480p", "720p", "1080p"] = "1080p"
     tts_voice_id: TtsVoiceId = DEFAULT_TTS_VOICE_ID
     tts_speed_ratio: TtsSpeedRatio = DEFAULT_TTS_SPEED_RATIO
-    # 1.0 Pro Fast remains the efficient default when H3 decides motion is
-    # semantically necessary. 2.0 remains an explicit per-shot upgrade.
+    # 1.0 Pro Fast remains the efficient default when the Director Skill marks
+    # motion as semantically necessary. 2.0 remains a per-shot upgrade.
     seedance_model: SeedanceModelId = SEEDANCE_EFFICIENT_MODEL
     image_count: int = Field(
         default=0,
@@ -969,6 +1126,43 @@ class GenerationSettings(ContractModel):
         return self
 
 
+class ShotContextIR(ContractModel):
+    '''Observable, provider-neutral direction for one semantic chapter.'''
+
+    semantic_goal: str = Field(min_length=1, max_length=600)
+    visual_metaphor: str = Field(min_length=1, max_length=800)
+    subject: str = Field(min_length=1, max_length=600)
+    action: str = Field(min_length=1, max_length=600)
+    environment: str = Field(min_length=1, max_length=600)
+    composition: str = Field(min_length=1, max_length=600)
+    continuity_handoff: str = Field(min_length=1, max_length=600)
+    start_state: str = Field(min_length=1, max_length=600)
+    end_state: str = Field(min_length=1, max_length=600)
+    camera_intent: str = Field(min_length=1, max_length=600)
+    media_rationale: str = Field(min_length=1, max_length=600)
+    reference_roles: list[str] = Field(default_factory=list, max_length=8)
+
+
+class VisualBible(ContractModel):
+    '''Canonical visual contract; downstream adapters need no Director internals.'''
+
+    schema_version: Literal['1.0'] = SCHEMA_VERSION
+    core_visual_idea: str = Field(min_length=1, max_length=1000)
+    visual_world: str = Field(min_length=1, max_length=1200)
+    recurring_subjects: list[str] = Field(min_length=1, max_length=12)
+    scene_anchors: list[str] = Field(min_length=1, max_length=12)
+    continuity_rules: list[str] = Field(min_length=2, max_length=16)
+    color_material_system: str = Field(min_length=1, max_length=800)
+    composition_system: str = Field(min_length=1, max_length=800)
+    reference_strategy: str = Field(min_length=1, max_length=800)
+    forbidden_elements: list[str] = Field(default_factory=list, max_length=20)
+    director_skill_id: str = Field(min_length=1, max_length=64)
+    director_skill_version: str = Field(min_length=1, max_length=32)
+    model_id: str = Field(default='', max_length=256)
+    input_hash: str = Field(default='', pattern=r'^$|^[a-f0-9]{64}$')
+    created_at: str = Field(default='', max_length=64)
+
+
 class StoryboardShot(ContractModel):
     """A semantic shot plan shared by image and video generation providers."""
 
@@ -983,9 +1177,10 @@ class StoryboardShot(ContractModel):
     # Defaults to video so storyboard plans persisted before the hybrid workflow
     # keep their original all-video behavior when they are resumed.
     visual_type: Literal["video", "image"] = "video"
-    visual_intent: str = Field(min_length=1, max_length=600)
-    first_frame_prompt: str = Field(min_length=1, max_length=1800)
-    motion_prompt: str = Field(min_length=1, max_length=1800)
+    visual_intent: str = Field(default='', max_length=600)
+    first_frame_prompt: str = Field(default='', max_length=1800)
+    motion_prompt: str = Field(default='', max_length=1800)
+    context: ShotContextIR | None = None
     selected_candidate_id: str = Field(default="", max_length=96)
     # An editor-uploaded image or video can override the AI visual without
     # deleting the generated candidate/version history.
@@ -999,11 +1194,19 @@ class StoryboardShot(ContractModel):
             raise ValueError("segment_id 必须等于 beat_ids 的第一个叙事段")
         if len(self.beat_ids) != len(set(self.beat_ids)):
             raise ValueError("同一镜头不能重复引用叙事段")
+        if self.context is None and not all((
+            self.visual_intent,
+            self.first_frame_prompt,
+            self.motion_prompt,
+        )):
+            raise ValueError('旧版分镜必须包含 visual_intent 和媒体提示词')
+        if self.context is not None and not self.visual_intent:
+            self.visual_intent = self.context.semantic_goal
         return self
 
 
 class StoryboardPlan(ContractModel):
-    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    schema_version: Literal['1.0', '2.0'] = SCHEMA_VERSION
     shots: list[StoryboardShot] = Field(min_length=3, max_length=13)
     model_id: str = Field(default="", max_length=256)
     prompt_version: str = Field(default="", max_length=128)
@@ -1015,6 +1218,10 @@ class StoryboardPlan(ContractModel):
         shot_ids = [item.shot_id for item in self.shots]
         if len(shot_ids) != len(set(shot_ids)):
             raise ValueError("分镜 ID 必须唯一")
+        if self.schema_version == '2.0' and any(
+            item.context is None for item in self.shots
+        ):
+            raise ValueError('StoryboardPlan v2 的每个镜头都必须包含 ShotContextIR')
         return self
 
 
@@ -1420,6 +1627,7 @@ class Artifact(ContractModel):
 
 class VideoJob(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
+    pipeline_version: PipelineVersion = PipelineVersion.LEGACY
     id: str
     revision: int = Field(default=1, ge=1)
     state: JobState
@@ -1429,6 +1637,9 @@ class VideoJob(ContractModel):
     # New jobs freeze the full content workflow. None means the persisted task
     # predates Skill routing and must continue under legacy semantics.
     skill_snapshot: ContentSkillSnapshot | None = None
+    script_skill_snapshot: ScriptSkillSnapshot | None = None
+    director_skill_snapshot: DirectorSkillSnapshot | None = None
+    provider_adapter_snapshot: ProviderAdapterSnapshot | None = None
     # New tasks also freeze visual treatment and the internal prompt-writing
     # method. They remain separate from Content Skill and provider selection.
     visual_style_snapshot: VisualStyleSnapshot | None = None
@@ -1448,6 +1659,7 @@ class VideoJob(ContractModel):
     # ScriptDraft v3 creates this once; the visual director reuses it instead
     # of reinterpreting a second per-beat visual instruction track.
     creative_brief: CreativeBrief | None = None
+    editorial_plan: EditorialPlan | None = None
     research_warning: str = Field(default="", max_length=2000)
     research_diagnostics: ResearchDiagnostics | None = None
     # One initial research attempt is implicit. Every additional paid attempt
@@ -1465,6 +1677,7 @@ class VideoJob(ContractModel):
     approvals: list[ApprovalRecord] = Field(default_factory=list)
     narration_manifest: NarrationManifest | None = None
     storyboard_plan: StoryboardPlan | None = None
+    visual_bible: VisualBible | None = None
     first_frame_candidates: list[FirstFrameCandidate] = Field(default_factory=list)
     # 旧任务读兼容字段。新任务每镜头只有一张首帧，不写入选择记录。
     frame_selections: list[FrameSelection] = Field(default_factory=list)

@@ -7,6 +7,8 @@ from pathlib import Path
 
 from qijia_video.contracts import (
     ContentFormat,
+    EditorialAngle,
+    EditorialPlan,
     NarrationAudioSegment,
     NarrationManifest,
     ScriptBeat,
@@ -15,6 +17,8 @@ from qijia_video.contracts import (
     SourceCard,
     StoryboardPlan,
     StoryboardShot,
+    ShotContextIR,
+    VisualBible,
     content_hash,
     timestamp,
 )
@@ -97,6 +101,57 @@ class TemplateScriptProvider:
         )
         return script
 
+    async def generate_with_plan(
+        self,
+        card: SourceCard,
+        prompt: str,
+        *,
+        on_usage=None,
+    ) -> tuple[EditorialPlan, ScriptDraft]:
+        del on_usage
+        script = await self.generate(card, prompt)
+        evidence_refs = [
+            item.id for item in (*card.verified_facts, *card.verified_quotes)
+        ]
+        plan = EditorialPlan(
+            objective=f'准确回答：{card.parent_question}',
+            central_question=card.parent_question,
+            candidate_angles=[
+                EditorialAngle(
+                    angle_id='evidence_context',
+                    premise='从出处、语境与证据边界解释用户提出的命题。',
+                    audience_value='帮助观众区分原话、转述、解释与未知部分。',
+                    evidence_refs=evidence_refs,
+                    risk='证据较少时必须明确降级。',
+                ),
+                EditorialAngle(
+                    angle_id='meaning_limits',
+                    premise='从命题成立的条件与边界解释其现实含义。',
+                    audience_value='避免把有力量的表达简化成口号。',
+                    evidence_refs=evidence_refs,
+                    risk='不能脱离原始语境强行应用。',
+                ),
+            ],
+            selected_angle_id='evidence_context',
+            selection_reason='该角度最忠实于来源卡并能提供可核验的解释增量。',
+            core_thesis=card.core_idea,
+            audience_promise=f'帮助{card.target_audience}理解命题的依据、含义与边界。',
+            narrative_arc=[item.narration for item in script.beats[:5]],
+            tone='准确、克制、具体、有思考感',
+            must_include=[item.text for item in card.interpretation_boundary[:6]],
+            must_avoid=['把用户输入冒充已经核验的人物逐字原话'],
+            evidence_refs=evidence_refs,
+            critic_summary='已核对输入忠实度、证据引用、段落推进和职责边界。',
+            model_id=self.name,
+            prompt_version='template_editorial_plan_v1',
+            input_hash=content_hash({
+                'card': card.model_dump(mode='json'),
+                'prompt': prompt,
+            }),
+            generated_at=timestamp(),
+        )
+        return plan, script
+
     async def review(self, card: SourceCard, script: ScriptDraft) -> ScriptReview:
         known_fact_ids = {item.id for item in card.verified_facts}
         known_quote_ids = {item.id for item in card.verified_quotes}
@@ -150,6 +205,108 @@ class TemplateStoryboardProvider:
     """Deterministic visual metaphors for tests and the local demo."""
 
     name = "template-storyboard-mock"
+
+    async def generate_with_direction(
+        self,
+        script: ScriptDraft,
+        director_instruction: str,
+        beat_groups: list[list[str]],
+        visual_types: list[str],
+        *,
+        director_skill_id: str,
+        director_skill_version: str,
+        on_usage=None,
+    ) -> tuple[VisualBible, StoryboardPlan]:
+        del on_usage
+        has_reference_image = '存在一张全局参考图' in director_instruction
+        legacy = await self.generate(
+            script,
+            director_instruction,
+            beat_groups,
+            visual_types,
+        )
+        shots: list[StoryboardShot] = []
+        previous_end = '开场直接进入核心关系与变化'
+        for index, shot in enumerate(legacy.shots, 1):
+            context = ShotContextIR(
+                semantic_goal=shot.visual_intent,
+                visual_metaphor=f'第 {index} 章独有的主体关系与状态变化',
+                subject='延续 VisualBible 中的核心主体与关键物件',
+                action=f'落实本章旁白中的一个可观察动作：{shot.visual_intent}',
+                environment='延续统一的编辑插画空间与时间光线',
+                composition=shot.first_frame_prompt,
+                continuity_handoff=previous_end,
+                start_state=f'承接第 {max(1, index - 1)} 章结束状态',
+                end_state=f'第 {index} 章的信息关系已经清楚可见',
+                camera_intent=shot.motion_prompt,
+                media_rationale=(
+                    '连续动作对理解不可替代'
+                    if shot.visual_type == 'video'
+                    else '静态关系足以表达本章语义'
+                ),
+                reference_roles=(['identity'] if has_reference_image else []),
+            )
+            previous_end = context.end_state
+            shots.append(shot.model_copy(update={
+                'context': context,
+                'visual_intent': context.semantic_goal,
+                'first_frame_prompt': '',
+                'motion_prompt': '',
+            }))
+        if '高级编辑纸张拼贴' in director_instruction:
+            visual_world = (
+                '高级编辑纸张拼贴世界：利落裁切、局部撕边、纸纤维、半色调颗粒、'
+                '轻微套色误差与真实叠层接触阴影。'
+            )
+            color_material_system = (
+                '成熟克制的限定配色；所有纸层厚度、纤维、印刷网点与投影方向一致。'
+            )
+            composition_system = (
+                '每章使用 3—6 个有信息作用的裁纸元素，以杂志编辑留白突出一个关系变化。'
+            )
+        elif '精致手工纸艺定格' in director_instruction:
+            visual_world = (
+                '真实摄影棚中的精致纸艺微缩舞台：厚纸板、折纸与层叠卡纸具有明确'
+                '切边、折痕、连接点和物理距离。'
+            )
+            color_material_system = (
+                '暖色摄影棚光与克制限定色；纸材厚度、接缝、支撑和接触阴影始终一致。'
+            )
+            composition_system = (
+                '前中后景保持清楚物理层次，每章只用纸偶可完成的一个动作表达语义变化。'
+            )
+        else:
+            visual_world = (
+                '统一、克制、可读的竖屏现代编辑插画世界，主体与空间关系真实明确。'
+            )
+            color_material_system = (
+                '低饱和限定色与细腻材质，全片保持一致光线、尺度和接触阴影。'
+            )
+            composition_system = '每章只突出一个主体关系或状态变化，并保留字幕安全区。'
+        bible = VisualBible(
+            core_visual_idea='用同一主体和关键物件的连续状态变化推进完整论证。',
+            visual_world=visual_world,
+            recurring_subjects=['核心主体', '一个贯穿全片的关键物件'],
+            scene_anchors=['统一空间关系', '稳定时间光线'],
+            continuity_rules=['主体身份不变', '后一章承接前一章结束状态'],
+            color_material_system=color_material_system,
+            composition_system=composition_system,
+            reference_strategy='无声明角色时不假定参考素材拥有控制权。',
+            forbidden_elements=['可读文字', '重复构图', '无关装饰'],
+            director_skill_id=director_skill_id,
+            director_skill_version=director_skill_version,
+            model_id=self.name,
+            input_hash=legacy.input_hash,
+            created_at=timestamp(),
+        )
+        return bible, StoryboardPlan(
+            schema_version='2.0',
+            shots=shots,
+            model_id=self.name,
+            prompt_version='template_director_context_v1',
+            input_hash=legacy.input_hash,
+            created_at=timestamp(),
+        )
 
     async def generate(
         self,

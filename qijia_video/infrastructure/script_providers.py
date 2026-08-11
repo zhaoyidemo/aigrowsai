@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from qijia_video.contracts import (
     CreativeBrief,
+    EditorialPlan,
     NewsResearchBrief,
     PersonResearchBrief,
     ProviderUsageRecord,
@@ -23,13 +24,16 @@ from qijia_video.contracts import (
     SourceCard,
     StoryboardPlan,
     StoryboardShot,
+    ShotContextIR,
+    VisualBible,
     content_hash,
     timestamp,
 )
 from qijia_video.errors import ProviderUnavailable, ResearchEvidenceUnavailable
-from qijia_video.prompt_orchestration import compile_script_prompt
+from qijia_video.prompt_orchestration import compile_legacy_h3_script_prompt
 from qijia_video.prompts import (
     SCRIPT_OUTPUT_CONTRACT,
+    SCRIPT_SKILL_OUTPUT_CONTRACT,
     narration_char_count,
 )
 from qijia_video.tts_options import (
@@ -39,7 +43,9 @@ from qijia_video.tts_options import (
 
 
 SCRIPT_PROMPT_VERSION = "qijia_script_v14_single_creative_brief"
+SCRIPT_SKILL_PROMPT_VERSION = 'qijia_script_v15_editorial_plan'
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v12_semantic_adaptive"
+DIRECTOR_PROMPT_VERSION = 'qijia_director_v13_shot_context_ir'
 PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_evidence_v4_unified_request"
 NEWS_RESEARCH_PROMPT_VERSION = "recent_news_evidence_v6"
 OPENROUTER_REASONING_EFFORT = "high"
@@ -162,6 +168,77 @@ _SCRIPT_RESPONSE_SCHEMA = {
     ],
     "additionalProperties": False,
 }
+
+_EDITORIAL_PLAN_RESPONSE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'objective': {'type': 'string'},
+        'central_question': {'type': 'string'},
+        'candidate_angles': {
+            'type': 'array',
+            'minItems': 2,
+            'maxItems': 3,
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'angle_id': {'type': 'string'},
+                    'premise': {'type': 'string'},
+                    'audience_value': {'type': 'string'},
+                    'evidence_refs': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                    },
+                    'risk': {'type': 'string'},
+                },
+                'required': [
+                    'angle_id',
+                    'premise',
+                    'audience_value',
+                    'evidence_refs',
+                    'risk',
+                ],
+                'additionalProperties': False,
+            },
+        },
+        'selected_angle_id': {'type': 'string'},
+        'selection_reason': {'type': 'string'},
+        'core_thesis': {'type': 'string'},
+        'audience_promise': {'type': 'string'},
+        'narrative_arc': {'type': 'array', 'items': {'type': 'string'}},
+        'tone': {'type': 'string'},
+        'must_include': {'type': 'array', 'items': {'type': 'string'}},
+        'must_avoid': {'type': 'array', 'items': {'type': 'string'}},
+        'evidence_refs': {'type': 'array', 'items': {'type': 'string'}},
+        'critic_summary': {'type': 'string'},
+    },
+    'required': [
+        'objective',
+        'central_question',
+        'candidate_angles',
+        'selected_angle_id',
+        'selection_reason',
+        'core_thesis',
+        'audience_promise',
+        'narrative_arc',
+        'tone',
+        'must_include',
+        'must_avoid',
+        'evidence_refs',
+        'critic_summary',
+    ],
+    'additionalProperties': False,
+}
+
+_SCRIPT_SKILL_RESPONSE_SCHEMA = json.loads(json.dumps(_SCRIPT_RESPONSE_SCHEMA))
+_SCRIPT_SKILL_RESPONSE_SCHEMA['properties'].pop('creative_brief')
+_SCRIPT_SKILL_RESPONSE_SCHEMA['properties']['editorial_plan'] = (
+    _EDITORIAL_PLAN_RESPONSE_SCHEMA
+)
+_SCRIPT_SKILL_RESPONSE_SCHEMA['required'] = [
+    'editorial_plan' if item == 'creative_brief' else item
+    for item in _SCRIPT_SKILL_RESPONSE_SCHEMA['required']
+]
+
 
 _PERSON_RESEARCH_RESPONSE_SCHEMA = {
     "type": "object",
@@ -369,6 +446,99 @@ _STORYBOARD_RESPONSE_SCHEMA = {
     },
     "required": ["shots"],
     "additionalProperties": False,
+}
+
+
+_SHOT_CONTEXT_RESPONSE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        key: {'type': 'string'}
+        for key in (
+            'semantic_goal',
+            'visual_metaphor',
+            'subject',
+            'action',
+            'environment',
+            'composition',
+            'continuity_handoff',
+            'start_state',
+            'end_state',
+            'camera_intent',
+            'media_rationale',
+        )
+    },
+    'required': [
+        'semantic_goal',
+        'visual_metaphor',
+        'subject',
+        'action',
+        'environment',
+        'composition',
+        'continuity_handoff',
+        'start_state',
+        'end_state',
+        'camera_intent',
+        'media_rationale',
+        'reference_roles',
+    ],
+    'additionalProperties': False,
+}
+_SHOT_CONTEXT_RESPONSE_SCHEMA['properties']['reference_roles'] = {
+    'type': 'array',
+    'items': {'type': 'string'},
+}
+
+_VISUAL_BIBLE_RESPONSE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'core_visual_idea': {'type': 'string'},
+        'visual_world': {'type': 'string'},
+        'recurring_subjects': {'type': 'array', 'items': {'type': 'string'}},
+        'scene_anchors': {'type': 'array', 'items': {'type': 'string'}},
+        'continuity_rules': {'type': 'array', 'items': {'type': 'string'}},
+        'color_material_system': {'type': 'string'},
+        'composition_system': {'type': 'string'},
+        'reference_strategy': {'type': 'string'},
+        'forbidden_elements': {'type': 'array', 'items': {'type': 'string'}},
+    },
+    'required': [
+        'core_visual_idea',
+        'visual_world',
+        'recurring_subjects',
+        'scene_anchors',
+        'continuity_rules',
+        'color_material_system',
+        'composition_system',
+        'reference_strategy',
+        'forbidden_elements',
+    ],
+    'additionalProperties': False,
+}
+
+_DIRECTOR_RESPONSE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'visual_bible': _VISUAL_BIBLE_RESPONSE_SCHEMA,
+        'shots': {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'segment_id': {'type': 'string'},
+                    'beat_ids': {'type': 'array', 'items': {'type': 'string'}},
+                    'visual_type': {
+                        'type': 'string',
+                        'enum': ['image', 'video'],
+                    },
+                    'context': _SHOT_CONTEXT_RESPONSE_SCHEMA,
+                },
+                'required': ['segment_id', 'beat_ids', 'visual_type', 'context'],
+                'additionalProperties': False,
+            },
+        },
+    },
+    'required': ['visual_bible', 'shots'],
+    'additionalProperties': False,
 }
 
 
@@ -1623,12 +1793,18 @@ class OpenRouterScriptProvider:
                 diagnostics,
             ) from exc
 
-    def _prompt(self, card: SourceCard, prompt: str | None = None) -> str:
+    def _prompt(
+        self,
+        card: SourceCard,
+        prompt: str | None = None,
+        *,
+        output_contract: str = SCRIPT_OUTPUT_CONTRACT,
+    ) -> str:
         if prompt is None:
             minimum, maximum = TTS_SCRIPT_CHARACTER_TARGETS[
                 DEFAULT_TTS_SPEED_RATIO
             ]
-            creative_prompt = compile_script_prompt(
+            creative_prompt = compile_legacy_h3_script_prompt(
                 card,
                 profile=None,
                 research_brief=None,
@@ -1637,9 +1813,9 @@ class OpenRouterScriptProvider:
             )
         else:
             creative_prompt = str(prompt).strip()
-        # compile_script_prompt already contains the immutable input and the
+        # The Pipeline v1 compiler already contains the immutable input and the
         # only EvidencePack. Appending the source card again diluted attention.
-        return f"{creative_prompt}\n\n{SCRIPT_OUTPUT_CONTRACT}"
+        return f'{creative_prompt}\n\n{output_contract}'
 
     @staticmethod
     def _normalize_generated_source_refs(
@@ -1703,6 +1879,7 @@ class OpenRouterScriptProvider:
         try:
             generated = dict(generated)
             generated.pop("creative_brief", None)
+            generated.pop('editorial_plan', None)
             self._normalize_generated_source_refs(card, generated)
             char_count = narration_char_count(
                 self._generated_narration_text(generated)
@@ -1771,6 +1948,43 @@ class OpenRouterScriptProvider:
             )
         return brief
 
+    def _editorial_plan_from_generated(
+        self,
+        card: SourceCard,
+        generated: dict,
+        *,
+        model_id: str,
+        prompt: str,
+    ) -> EditorialPlan:
+        raw = generated.get('editorial_plan')
+        if not isinstance(raw, dict):
+            raise ProviderUnavailable('脚本模型没有返回 EditorialPlan')
+        payload = dict(raw)
+        payload.update({
+            'schema_version': '1.0',
+            'model_id': model_id,
+            'prompt_version': SCRIPT_SKILL_PROMPT_VERSION,
+            'input_hash': content_hash({
+                'card': card.model_dump(mode='json'),
+                'prompt': prompt,
+            }),
+            'generated_at': timestamp(),
+        })
+        try:
+            plan = EditorialPlan.model_validate(payload)
+        except (TypeError, ValidationError) as exc:
+            raise ProviderUnavailable('脚本模型返回的 EditorialPlan 不符合契约') from exc
+        allowed_refs = {
+            item.id for item in (*card.verified_facts, *card.verified_quotes)
+        }
+        used_refs = set(plan.evidence_refs)
+        for angle in plan.candidate_angles:
+            used_refs.update(angle.evidence_refs)
+        unknown = sorted(used_refs - allowed_refs)
+        if unknown:
+            raise ProviderUnavailable(f'EditorialPlan 引用了未知证据：{unknown}')
+        return plan
+
     async def generate(
         self, card: SourceCard, prompt: str | None = None
     ) -> ScriptDraft:
@@ -1807,6 +2021,54 @@ class OpenRouterScriptProvider:
         )
         return script
 
+    async def generate_with_plan(
+        self,
+        card: SourceCard,
+        prompt: str,
+        *,
+        on_usage: UsageRecorder | None = None,
+    ) -> tuple[EditorialPlan, ScriptDraft]:
+        if not self.configured:
+            raise ProviderUnavailable(
+                '真实脚本生成未配置：请设置 OPENROUTER_API_KEY'
+            )
+        user_prompt = self._prompt(
+            card,
+            prompt,
+            output_contract=SCRIPT_SKILL_OUTPUT_CONTRACT,
+        )
+        response = await _openrouter_json_request(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            messages=[
+                {
+                    'role': 'system',
+                    'content': (
+                        '你是任务冻结的唯一 Script Skill。只决定内容角度、论证结构和口播，'
+                        '禁止设计视觉、镜头或媒体提示词。先比较候选角度并内部审稿，最终只'
+                        '返回符合约定的 JSON。'
+                    ),
+                },
+                {'role': 'user', 'content': user_prompt},
+            ],
+            label='脚本生成',
+            schema_name='qijia_editorial_script_v1',
+            response_schema=_SCRIPT_SKILL_RESPONSE_SCHEMA,
+            max_completion_tokens=SCRIPT_MAX_COMPLETION_TOKENS,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+            operation='script_generation',
+            on_usage=on_usage,
+        )
+        plan = self._editorial_plan_from_generated(
+            card,
+            response.data,
+            model_id=response.model_id,
+            prompt=user_prompt,
+        )
+        return plan, self._script_from_generated(card, response.data)
+
     async def generate_with_brief(
         self,
         card: SourceCard,
@@ -1815,6 +2077,8 @@ class OpenRouterScriptProvider:
         system_prompt: str | None = None,
         on_usage: UsageRecorder | None = None,
     ) -> tuple[CreativeBrief, ScriptDraft]:
+        """Resume Pipeline v1 H3 jobs; new jobs call generate_with_plan."""
+
         if not self.configured:
             raise ProviderUnavailable(
                 "真实脚本生成未配置：请设置 OPENROUTER_API_KEY"
@@ -1912,6 +2176,204 @@ class OpenRouterStoryboardProvider:
 
     name = "openrouter-storyboard"
 
+    async def generate_with_direction(
+        self,
+        script: ScriptDraft,
+        director_instruction: str,
+        beat_groups: list[list[str]],
+        visual_types: list[str],
+        *,
+        director_skill_id: str,
+        director_skill_version: str,
+        on_usage: UsageRecorder | None = None,
+    ) -> tuple[VisualBible, StoryboardPlan]:
+        '''Generate neutral direction; media prompts are compiled later.'''
+
+        if not self.configured:
+            raise ProviderUnavailable('真实分镜生成未配置：请设置 OPENROUTER_API_KEY')
+        expected_beat_ids = [item.id for item in script.beats]
+        shot_count = len(beat_groups)
+        adaptive_media = not visual_types
+        if (
+            not 3 <= shot_count <= 12
+            or any(not group for group in beat_groups)
+            or not _beat_groups_cover_script(beat_groups, expected_beat_ids)
+            or (
+                not adaptive_media
+                and (
+                    len(visual_types) != shot_count
+                    or any(item not in {'image', 'video'} for item in visual_types)
+                )
+            )
+        ):
+            raise ProviderUnavailable('导演章节必须按顺序完整覆盖全部叙事段')
+        beats_by_id = {item.id: item for item in script.beats}
+        grouped_beats = [
+            [beats_by_id[beat_id] for beat_id in group]
+            for group in beat_groups
+        ]
+        input_payload = {
+            'script_hash': content_hash(script),
+            'base_style': director_instruction,
+            'beat_groups': beat_groups,
+        }
+        if visual_types:
+            input_payload['visual_types'] = visual_types
+        context_keys = (
+            'semantic_goal',
+            'visual_metaphor',
+            'subject',
+            'action',
+            'environment',
+            'composition',
+            'continuity_handoff',
+            'start_state',
+            'end_state',
+            'camera_intent',
+            'media_rationale',
+        )
+        empty_context = {key: '' for key in context_keys}
+        empty_context['reference_roles'] = []
+        skeleton = {
+            'visual_bible': {
+                'core_visual_idea': '',
+                'visual_world': '',
+                'recurring_subjects': [],
+                'scene_anchors': [],
+                'continuity_rules': [],
+                'color_material_system': '',
+                'composition_system': '',
+                'reference_strategy': '',
+                'forbidden_elements': [],
+            },
+            'shots': [
+                {
+                    'segment_id': group[0].id,
+                    'beat_ids': [item.id for item in group],
+                    'visual_type': visual_types[index] if visual_types else 'image',
+                    'context': dict(empty_context),
+                }
+                for index, group in enumerate(grouped_beats)
+            ],
+        }
+        media_instruction = (
+            '媒介已冻结，不得更改：'
+            + '；'.join(
+                f'第 {index} 章为 {kind}'
+                for index, kind in enumerate(visual_types, 1)
+            )
+            if visual_types
+            else (
+                '媒介由你选择：image 是默认项；只有连续动作、状态转变或镜头运动对理解'
+                '不可替代时才用 video，全片最多三段 video，不要求凑满'
+            )
+        )
+        prompt = (
+            f'{director_instruction}\n\n'
+            f'把已确认脚本规划成 {shot_count} 个连续视觉章节。先输出一份 VisualBible，'
+            '再为每章输出 ShotContextIR。脚本是内容唯一真相，不改写旁白、事实或论点。'
+            '相邻章节必须写清上一章 end_state 如何成为本章 continuity_handoff，禁止重复'
+            '同一视觉隐喻或只替换景别。\n\n'
+            f'{media_instruction}。media_rationale 必须解释本章为何需要该媒介。'
+            'ShotContextIR 使用可观察描述，不得写 Seedream、Seedance、H3、prompt、参数、'
+            '负向提示词或任何可直接提交模型的最终提示词。\n\n'
+            '严格复制以下 JSON 骨架，不增删、合并或重排 shots，也不得修改 segment_id 和'
+            ' beat_ids；最终只返回 JSON：\n'
+            + json.dumps(skeleton, ensure_ascii=False)
+            + '\n\n【完整脚本章节】\n'
+            + '\n'.join(
+                f'章节 {index}（{",".join(item.id for item in group)}）\n'
+                + '\n'.join(f'- {item.narration}' for item in group)
+                for index, group in enumerate(grouped_beats, 1)
+            )
+        )
+        response = await _openrouter_json_request(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            messages=[
+                {
+                    'role': 'system',
+                    'content': (
+                        '你是任务冻结的唯一 Director Skill。只交付 VisualBible 与中立的 '
+                        'ShotContextIR，不写媒体模型提示词，不改写脚本。'
+                    ),
+                },
+                {'role': 'user', 'content': prompt},
+            ],
+            label='分镜生成',
+            schema_name='qijia_director_context_v1',
+            response_schema=_DIRECTOR_RESPONSE_SCHEMA,
+            max_completion_tokens=STORYBOARD_MAX_COMPLETION_TOKENS,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+            operation='storyboard_generation',
+            on_usage=on_usage,
+        )
+        raw_shots = response.data.get('shots')
+        if not isinstance(raw_shots, list) or len(raw_shots) != shot_count:
+            raise ProviderUnavailable('Director Skill 返回了错误的章节数量')
+        selected_types = list(visual_types) if visual_types else [
+            str(item.get('visual_type') or '') for item in raw_shots
+        ]
+        if not visual_types:
+            kept_videos = 0
+            for index, kind in enumerate(selected_types):
+                if kind == 'video' and kept_videos < 3:
+                    kept_videos += 1
+                else:
+                    selected_types[index] = 'image'
+        shots: list[StoryboardShot] = []
+        try:
+            for index, (raw, group) in enumerate(zip(raw_shots, grouped_beats), 1):
+                expected_ids = [item.id for item in group]
+                if (
+                    not isinstance(raw, dict)
+                    or str(raw.get('segment_id') or '') != expected_ids[0]
+                    or list(raw.get('beat_ids') or []) != expected_ids
+                ):
+                    raise ValueError('shot mapping')
+                context = ShotContextIR.model_validate(raw.get('context'))
+                shots.append(StoryboardShot(
+                    shot_id=f'shot_{index:02d}',
+                    segment_id=expected_ids[0],
+                    beat_ids=expected_ids,
+                    narration_excerpt='\n'.join(item.narration for item in group),
+                    visual_type=selected_types[index - 1],
+                    visual_intent=context.semantic_goal,
+                    context=context,
+                ))
+            metaphors = {
+                re.sub(r'\s+', '', item.context.visual_metaphor).lower()
+                for item in shots
+                if item.context
+            }
+            if len(metaphors) != len(shots):
+                raise ValueError('duplicate visual metaphor')
+            bible_payload = dict(response.data.get('visual_bible') or {})
+            bible_payload.update({
+                'schema_version': '1.0',
+                'director_skill_id': director_skill_id,
+                'director_skill_version': director_skill_version,
+                'model_id': response.model_id,
+                'input_hash': content_hash(input_payload),
+                'created_at': timestamp(),
+            })
+            bible = VisualBible.model_validate(bible_payload)
+            plan = StoryboardPlan(
+                schema_version='2.0',
+                shots=shots,
+                model_id=response.model_id,
+                prompt_version=DIRECTOR_PROMPT_VERSION,
+                input_hash=content_hash(input_payload),
+                created_at=timestamp(),
+            )
+            return bible, plan
+        except (TypeError, ValueError, ValidationError) as exc:
+            raise ProviderUnavailable(
+                'Director Skill 返回内容不符合 VisualBible/ShotContextIR 契约，请重试'
+            ) from exc
+
     def __init__(
         self,
         *,
@@ -1958,6 +2420,8 @@ class OpenRouterStoryboardProvider:
         *,
         on_usage: UsageRecorder | None = None,
     ) -> StoryboardPlan:
+        """Resume Pipeline v1 storyboards; v2 calls generate_with_direction."""
+
         if not self.configured:
             raise ProviderUnavailable(
                 "真实分镜生成未配置：请设置 OPENROUTER_API_KEY"

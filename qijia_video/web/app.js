@@ -1,8 +1,9 @@
 const API = '/api/qijia-video';
-const PROMPT_STORAGE_KEY = 'qijia-video-generation-settings-v2';
+const PROMPT_STORAGE_KEY = 'qijia-video-generation-settings-v3';
 const LEGACY_PROMPT_STORAGE_KEY = 'qijia-video-generation-settings-v1';
 const DEFAULT_CONTENT_SKILL_ID = 'explain-expert-view';
 const NEWS_CONTENT_SKILL_ID = 'brief-recent-news';
+const DEFAULT_SCRIPT_SKILL_ID = 'evidence-led-explainer';
 const DEFAULT_VISUAL_STYLE_ID = 'content-skill-default';
 const SCRIPT_TARGET_MIN_CHARS = 220;
 const SCRIPT_TARGET_MAX_CHARS = 300;
@@ -198,6 +199,7 @@ function generationDefaults() {
   return state.capabilities?.generation_defaults || {
     video_resolution: '1080p',
     seedance_model: 'doubao-seedance-1-0-pro-fast-251015',
+    script_skill_id: DEFAULT_SCRIPT_SKILL_ID,
     visual_style_id: DEFAULT_VISUAL_STYLE_ID,
     tts_voice_id: 'zh_female_vv_uranus_bigtts', tts_speed_ratio: 1.2,
   };
@@ -236,6 +238,39 @@ function contentSkill(skillId = '') {
 
 function selectedContentSkill() {
   return contentSkill($('#content-skill')?.value || '');
+}
+
+function scriptSkills() {
+  return Array.isArray(state.capabilities?.script_skills)
+    ? state.capabilities.script_skills
+    : [];
+}
+
+function scriptSkill(skillId = '') {
+  const skills = scriptSkills();
+  const requested = String(skillId || '').trim();
+  return skills.find((item) => item.skill_id === requested)
+    || skills.find((item) => item.skill_id === DEFAULT_SCRIPT_SKILL_ID)
+    || skills.find((item) => item.default)
+    || skills[0]
+    || null;
+}
+
+function selectedScriptSkill() {
+  return scriptSkill($('#script-skill')?.value || '');
+}
+
+function renderScriptSkillSelector(preferredSkillId = '') {
+  const selector = $('#script-skill');
+  const skills = scriptSkills();
+  selector.innerHTML = skills.map((item) => (
+    `<option value="${escapeHtml(item.skill_id)}">${escapeHtml(item.display_name)} · v${escapeHtml(item.version)}</option>`
+  )).join('');
+  const selected = scriptSkill(preferredSkillId);
+  if (selected) selector.value = selected.skill_id;
+  $('#script-skill-description').textContent = selected
+    ? `${selected.description} · v${selected.version}`
+    : '唯一负责内容角度、论证结构与完整口播。';
 }
 
 function skillIdForCard(card) {
@@ -280,8 +315,10 @@ function selectContentSkill(skillId, {resetPrompts = false} = {}) {
 }
 
 function visualStyles() {
-  return Array.isArray(state.capabilities?.visual_styles)
-    ? state.capabilities.visual_styles
+  return Array.isArray(state.capabilities?.director_skills)
+    ? state.capabilities.director_skills
+    : Array.isArray(state.capabilities?.visual_styles)
+      ? state.capabilities.visual_styles
     : [];
 }
 
@@ -324,7 +361,7 @@ function updateVisualStyleDescription() {
   const style = selectedVisualStyle();
   $('#visual-style-description').textContent = style
     ? `${style.description} · v${style.version}`
-    : '视觉风格与内容 Skill、生成模型相互独立。';
+    : '唯一负责 VisualBible、镜头语义、媒介选择与跨镜头连续性。';
   renderVisualStylePreviews();
   renderOrchestrationSelection();
 }
@@ -340,38 +377,40 @@ function renderVisualStyleSelector(preferredStyleId = '') {
   updateVisualStyleDescription();
 }
 
-function promptWritingProfile() {
-  const profile = state.capabilities?.prompt_writing_profile;
-  return profile && typeof profile === 'object' ? profile : null;
+function providerAdapter() {
+  const adapter = state.capabilities?.provider_adapter;
+  return adapter && typeof adapter === 'object' ? adapter : null;
 }
 
 function renderOrchestrationSelection() {
   const contentNode = $('#orchestration-content-name');
-  const styleNode = $('#orchestration-style-name');
-  const profileNode = $('#orchestration-profile-summary');
+  const scriptNode = $('#orchestration-script-name');
+  const directorNode = $('#orchestration-director-name');
+  const adapterNode = $('#orchestration-adapter-summary');
   const referenceNode = $('#reference-priority-state');
-  if (!contentNode || !styleNode || !profileNode || !referenceNode) return;
-  contentNode.textContent = selectedContentSkill()?.display_name || '内容 Skill';
-  styleNode.textContent = selectedVisualStyle()?.display_name || '视觉风格';
-  profileNode.textContent = promptWritingProfile()?.display_name || 'H3 统一编排';
+  if (!contentNode || !scriptNode || !directorNode || !adapterNode || !referenceNode) return;
+  contentNode.textContent = selectedContentSkill()?.display_name || '证据政策';
+  scriptNode.textContent = selectedScriptSkill()?.display_name || 'Script Skill';
+  directorNode.textContent = selectedVisualStyle()?.display_name || 'Director Skill';
+  adapterNode.textContent = providerAdapter()?.display_name || 'Provider Adapter';
   const supportsReference = selectedContentSkill()?.input_mode !== 'recent_news_topic';
   const hasReference = supportsReference && !!state.referenceImageFile;
   referenceNode.textContent = !supportsReference
     ? '参考图属性（当前 Skill 不使用）'
     : hasReference
-      ? '参考图属性（已接管）'
+      ? '参考图已上传（角色待导演声明）'
       : '参考图属性（未上传）';
   referenceNode.classList.toggle('active', hasReference);
 }
 
-function renderPromptWritingProfile() {
-  const profile = promptWritingProfile();
-  $('#prompt-profile-name').textContent = profile?.display_name || 'H3 提示词编排';
-  $('#prompt-profile-version').textContent = profile?.version
-    ? '自动启用 · v' + profile.version
-    : '自动启用';
-  $('#prompt-profile-description').textContent = profile?.description
-    || 'H3 把原始输入与 EvidencePack 收敛成唯一 CreativeBrief，脚本和视觉导演复用同一总纲。';
+function renderProviderAdapter() {
+  const adapter = providerAdapter();
+  $('#provider-adapter-name').textContent = adapter?.display_name || 'Provider Adapter';
+  $('#provider-adapter-version').textContent = adapter?.version
+    ? '自动匹配 · v' + adapter.version
+    : '自动匹配';
+  $('#provider-adapter-description').textContent = adapter?.description
+    || '只把 ShotContextIR 编译为当前图片与视频模型可执行的提示词。';
   renderOrchestrationSelection();
 }
 
@@ -643,25 +682,38 @@ function initializePromptFields() {
   const selectedSkillId = contentSkills().some((item) => item.skill_id === saved?.skill_id)
     ? saved.skill_id
     : DEFAULT_CONTENT_SKILL_ID;
-  const selectedStyleId = visualStyles().some(
-    (item) => item.style_id === saved?.visual_style_id,
+  const selectedScriptSkillId = scriptSkills().some(
+    (item) => item.skill_id === saved?.script_skill_id,
   )
-    ? saved.visual_style_id
-    : DEFAULT_VISUAL_STYLE_ID;
+    ? saved.script_skill_id
+    : generationDefaults().script_skill_id || DEFAULT_SCRIPT_SKILL_ID;
+  const savedDirectorSkillId = saved?.director_skill_id || saved?.visual_style_id;
+  const selectedStyleId = visualStyles().some(
+    (item) => item.style_id === savedDirectorSkillId,
+  )
+    ? savedDirectorSkillId
+    : generationDefaults().director_skill_id
+      || generationDefaults().visual_style_id
+      || DEFAULT_VISUAL_STYLE_ID;
   const migratedVisualStyle = !!saved
-    && saved.visual_style_id !== selectedStyleId;
+    && savedDirectorSkillId !== selectedStyleId;
   renderContentSkillSelector(selectedSkillId);
+  renderScriptSkillSelector(selectedScriptSkillId);
   renderVisualStyleSelector(selectedStyleId);
-  renderPromptWritingProfile();
+  renderProviderAdapter();
   setResolutionField(saved);
   setTtsSettingsFields(saved);
-  if (saved?.script_prompt || migratedVisualStyle) persistPromptFields();
+  if (saved?.script_prompt || !saved?.script_skill_id || migratedVisualStyle) {
+    persistPromptFields();
+  }
 }
 
 function generationSettingsPayload(skillOverride = '') {
   const selected = selectedContentSkill();
   const requestedSkill = contentSkill(skillOverride || selected?.skill_id || '');
-  const requestedStyle = selectedVisualStyle();
+  const requestedScriptSkill = selectedScriptSkill();
+  const requestedDirector = selectedVisualStyle();
+  const adapter = providerAdapter();
   const videoResolution = $('#video-resolution').value;
   const ttsVoiceId = normalizedTtsVoiceId($('#tts-voice-id').value);
   const ttsSpeedRatio = normalizedTtsSpeedRatio($('#tts-speed-ratio').value);
@@ -673,9 +725,17 @@ function generationSettingsPayload(skillOverride = '') {
       skill_id: requestedSkill.skill_id,
       skill_version: requestedSkill.version,
     } : {}),
-    ...(requestedStyle ? {
-      visual_style_id: requestedStyle.style_id,
-      visual_style_version: requestedStyle.version,
+    ...(requestedScriptSkill ? {
+      script_skill_id: requestedScriptSkill.skill_id,
+      script_skill_version: requestedScriptSkill.version,
+    } : {}),
+    ...(requestedDirector ? {
+      director_skill_id: requestedDirector.style_id,
+      director_skill_version: requestedDirector.version,
+    } : {}),
+    ...(adapter ? {
+      provider_adapter_id: adapter.adapter_id,
+      provider_adapter_version: adapter.version,
     } : {}),
     video_resolution: videoResolution,
     seedance_model: defaultSeedanceModel(),
@@ -1287,7 +1347,7 @@ function renderCapabilities() {
       ? '家庭教育选题研究已就绪'
       : `选题研究待配置：${(data.topic_research?.missing_configuration || []).join('、') || '配置不完整'}`,
     videoReady
-      ? `视频生产已就绪 · ${data.storage} 存储 · ${contentSkills().length} 个内容 Skill`
+      ? `视频生产已就绪 · ${data.storage} 存储 · ${scriptSkills().length} 个 Script Skill · ${visualStyles().length} 个 Director Skill`
       : `视频生产待配置：${(data.missing_configuration || []).join('、') || data.renderer?.detail || '配置不完整'}`,
   ];
   node.querySelector('span:last-child').textContent = parts.join(' ｜ ');
@@ -1921,7 +1981,9 @@ function renderShotInspector(job) {
       ? `<span class="source-active-badge">${preGeneration ? '本次将使用自有素材' : '当前使用自有素材'}</span>`
       : '';
   const semanticShot = storyboardShotFor(job, request.request_id);
-  const semanticIntent = semanticShot?.visual_intent
+  const shotContext = semanticShot?.context || null;
+  const semanticIntent = shotContext?.semantic_goal
+    || semanticShot?.visual_intent
     || shotDescription(job, request)
     || '沿用已确认脚本与当前首帧。';
   const currentRevisionIntent = String(previewRequest.revision_intent || '').trim();
@@ -1931,8 +1993,37 @@ function renderShotInspector(job) {
   const compiledVideoPrompt = isImage
     ? ''
     : String(previewRequest.prompt || semanticShot?.motion_prompt || '');
-  const promptMethodName = job.prompt_writing_profile_snapshot?.display_name
+  const promptMethodName = job.provider_adapter_snapshot?.display_name
+    || job.prompt_writing_profile_snapshot?.display_name
     || '历史兼容编译器';
+  const visualBible = job.visual_bible || null;
+  const visualBiblePanel = visualBible ? [
+    '<details class="shot-context-details visual-bible-details">',
+    '<summary>查看 VisualBible 全片视觉宪法</summary>',
+    '<div class="shot-context-grid">',
+    '<article><span>核心视觉概念</span><p>' + escapeHtml(visualBible.core_visual_idea) + '</p></article>',
+    '<article><span>统一视觉世界</span><p>' + escapeHtml(visualBible.visual_world) + '</p></article>',
+    '<article><span>贯穿主体</span><p>' + escapeHtml((visualBible.recurring_subjects || []).join(' · ')) + '</p></article>',
+    '<article><span>场景锚点</span><p>' + escapeHtml((visualBible.scene_anchors || []).join(' · ')) + '</p></article>',
+    '<article><span>色彩与材质</span><p>' + escapeHtml(visualBible.color_material_system) + '</p></article>',
+    '<article><span>构图系统</span><p>' + escapeHtml(visualBible.composition_system) + '</p></article>',
+    '<article><span>连续性规则</span><p>' + escapeHtml((visualBible.continuity_rules || []).join(' · ')) + '</p></article>',
+    '<article><span>参考素材策略</span><p>' + escapeHtml(visualBible.reference_strategy) + '</p></article>',
+    '</div>',
+    '</details>',
+  ].join('') : '';
+  const shotContextPanel = shotContext ? `
+      <details class="shot-context-details">
+        <summary>查看 Director Skill 交付的 ShotContextIR</summary>
+        <div class="shot-context-grid">
+          <article><span>视觉隐喻</span><p>${escapeHtml(shotContext.visual_metaphor)}</p></article>
+          <article><span>主体与动作</span><p>${escapeHtml(shotContext.subject)} · ${escapeHtml(shotContext.action)}</p></article>
+          <article><span>环境与构图</span><p>${escapeHtml(shotContext.environment)} · ${escapeHtml(shotContext.composition)}</p></article>
+          <article><span>状态变化</span><p>${escapeHtml(shotContext.start_state)} → ${escapeHtml(shotContext.end_state)}</p></article>
+          <article><span>连续性承接</span><p>${escapeHtml(shotContext.continuity_handoff)}</p></article>
+          <article><span>媒介理由</span><p>${escapeHtml(shotContext.media_rationale)}</p></article>
+        </div>
+      </details>` : '';
   const semanticPanel = `
     <section class="shot-intent-panel" aria-label="镜头语义与编译提示词">
       <div class="shot-intent-heading">
@@ -1940,6 +2031,8 @@ function renderShotInspector(job) {
         <span>这是内容层要表达的画面含义，不是 Provider 最终提示词</span>
       </div>
       <p>${escapeHtml(semanticIntent)}</p>
+      ${visualBiblePanel}
+      ${shotContextPanel}
       ${currentRevisionIntent ? `<p class="shot-current-revision"><strong>当前版本修改意图：</strong>${escapeHtml(currentRevisionIntent)}</p>` : ''}
       <details class="compiled-prompts">
         <summary>查看 ${escapeHtml(promptMethodName)} 编译后的只读提示词</summary>
@@ -1989,7 +2082,7 @@ function renderShotInspector(job) {
         : '图片支持 JPG、PNG、WebP，最大 20 MB；视频支持 MP4、MOV、WebM，最大 200 MB。每次上传只做安全校验、转码和暂存；完成全部替换后再一次应用并重新生成成片。原 AI 素材会完整保留。'}</p>
     </section>
     ${frameButtons ? `<section class="frame-candidate-section"><div class="frame-candidate-heading"><strong>${isImage ? '图片候选' : '首帧候选'}</strong><span>${isImage ? '系统已推荐当前成片使用的图片，可点击查看另一构图' : '系统已自动推荐，可人工改选后重生成本镜头'}</span></div><div class="frame-candidate-grid">${frameButtons}</div></section>` : ''}
-    ${preGeneration ? `<section class="ai-shot-panel"><div class="shot-source-heading"><div><strong>AI 生成方案</strong><span>${activeUpload ? '当前已跳过这个镜头的 AI 生成；改回 AI 后才会产生费用' : '当前镜头未上传素材，确认后才会开始 AI 生成'}</span></div></div></section>` : isImage ? '' : `<section class="ai-shot-panel"><div class="shot-source-heading"><div><strong>AI 生成方案</strong><span>只填写想改变的动作或镜头效果；H3 会保留事实、风格、参考图和首帧边界</span></div></div>
+    ${preGeneration ? `<section class="ai-shot-panel"><div class="shot-source-heading"><div><strong>AI 生成方案</strong><span>${activeUpload ? '当前已跳过这个镜头的 AI 生成；改回 AI 后才会产生费用' : '当前镜头未上传素材，确认后才会开始 AI 生成'}</span></div></div></section>` : isImage ? '' : `<section class="ai-shot-panel"><div class="shot-source-heading"><div><strong>AI 生成方案</strong><span>只填写想改变的动作或镜头效果；Provider Adapter 会保留脚本事实、VisualBible、参考图角色和首帧边界</span></div></div>
       <label class="shot-revision-field">这次想调整什么
         <textarea id="shot-revision-intent" rows="4" maxlength="600" placeholder="例如：孩子先犹豫半秒，再把积木轻轻放稳；镜头只做一次缓慢推进。" ${canEditAi ? '' : 'readonly'}>${escapeHtml(currentRevisionIntent)}</textarea>
         <span class="field-hint">这里是语义修改意图，不会直接发送给 Seedance。需要新构图时，先选择另一张首帧候选。</span>
@@ -2459,14 +2552,15 @@ function renderResearchBrief(job) {
   const node = $('#person-research-brief');
   const hasResearch = !!job?.research_brief;
   const brief = job?.research_brief || {};
-  const creative = job?.creative_brief || null;
+  const editorial = job?.editorial_plan || null;
+  const creative = editorial ? null : job?.creative_brief || null;
   const warning = String(job?.research_warning || '').trim();
-  node.hidden = !hasResearch && !creative && !warning;
+  node.hidden = !hasResearch && !editorial && !creative && !warning;
   if (node.hidden) {
     node.innerHTML = '';
     return;
   }
-  if (!hasResearch && !creative) {
+  if (!hasResearch && !editorial && !creative) {
     node.innerHTML = [
       '<div class="research-brief-heading"><div><strong>自动研究已降级</strong>',
       '<span>不阻断本次创作</span></div></div>',
@@ -2527,10 +2621,44 @@ function renderResearchBrief(job) {
       ? '<article><span>原始语境</span><p>' + escapeHtml(brief.source_context) + '</p></article>'
       : '',
   ].join('');
+  const candidateAngleRows = editorial
+    ? (editorial.candidate_angles || []).map((angle) => [
+      '<li>',
+      '<strong>' + escapeHtml(angle.premise || '') + '</strong>',
+      angle.angle_id === editorial.selected_angle_id ? '<em>已采用</em>' : '',
+      '<span>' + escapeHtml(angle.audience_value || '') + '</span>',
+      angle.risk ? '<small>风险：' + escapeHtml(angle.risk) + '</small>' : '',
+      '</li>',
+    ].join('')).join('')
+    : '';
+  const editorialIsCurrent = !editorial?.draft_script_hash
+    || editorial.draft_script_hash === job?.script_hash;
+  const editorialRows = editorial ? [
+    '<section class="creative-brief-block editorial-plan-block">',
+    '<div class="research-brief-heading"><div><strong>Script Skill EditorialPlan</strong>',
+    '<span>' + escapeHtml(editorialIsCurrent
+      ? '先比较真实角度，再由唯一脚本负责人完成口播；不包含任何视觉决策'
+      : '当前脚本已经人工修改；这里仅保留首次生成时的规划记录，确认脚本优先')
+      + '</span></div>',
+    '<small>' + escapeHtml(editorial.model_id || '') + '</small></div>',
+    '<div class="research-brief-grid">',
+    '<article><span>创作目标</span><p>' + escapeHtml(editorial.objective || '') + '</p></article>',
+    '<article><span>中心问题</span><p>' + escapeHtml(editorial.central_question || '') + '</p></article>',
+    '<article><span>核心判断</span><p>' + escapeHtml(editorial.core_thesis || '') + '</p></article>',
+    '<article><span>观看价值</span><p>' + escapeHtml(editorial.audience_promise || '') + '</p></article>',
+    '<article><span>论证路径</span>' + list(editorial.narrative_arc) + '</article>',
+    '<article><span>内部质检</span><p>' + escapeHtml(editorial.critic_summary || '') + '</p></article>',
+    '</div>',
+    '<div class="editorial-angle-list"><span>比较过的脚本角度</span><ol>'
+      + candidateAngleRows + '</ol></div>',
+    '<p class="research-summary"><strong>采用理由：</strong>'
+      + escapeHtml(editorial.selection_reason || '') + '</p>',
+    '</section>',
+  ].join('') : '';
   const creativeRows = creative ? [
     '<section class="creative-brief-block">',
-    '<div class="research-brief-heading"><div><strong>H3 CreativeBrief</strong>',
-    '<span>脚本与视觉导演共用的唯一创作总纲</span></div>',
+    '<div class="research-brief-heading"><div><strong>历史 H3 CreativeBrief</strong>',
+    '<span>仅用于继续打开和运行 v1 历史任务</span></div>',
     '<small>' + escapeHtml(creative.model_id || '') + '</small></div>',
     '<div class="research-brief-grid">',
     '<article><span>中心问题</span><p>' + escapeHtml(creative.central_question || '') + '</p></article>',
@@ -2553,6 +2681,7 @@ function renderResearchBrief(job) {
     hasResearch ? '<details class="research-evidence"><summary>查看 ' + evidence.length + ' 条研究证据与边界</summary>'
       + '<ol>' + evidenceRows + '</ol>' + uncertainties + '</details>' : '',
     warning ? '<p class="research-warning">' + escapeHtml(warning) + '</p>' : '',
+    editorialRows,
     creativeRows,
   ].join('');
 }
@@ -2751,8 +2880,71 @@ function jobGenerationInputCard(label, responsibility, snapshot, legacyName) {
 }
 
 function renderJobGenerationMethods(job) {
-  const profile = job.prompt_writing_profile_snapshot;
   const hasReference = (job.source_card_snapshot?.reference_assets || []).length > 0;
+  const isV2 = job.pipeline_version === 'v2'
+    || !!job.script_skill_snapshot
+    || !!job.director_skill_snapshot
+    || !!job.provider_adapter_snapshot;
+  if (isV2) {
+    $('#job-generation-methods').innerHTML = [
+      '<summary>',
+      '<span><strong>本任务的单一职责生成链</strong><small>每个阶段只有一个负责人，任务版本已冻结</small></span>',
+      '<span>查看 v2 责任链</span>',
+      '</summary>',
+      '<div class="job-generation-methods-body">',
+      '<div class="job-orchestration-heading">',
+      '<div><span>Pipeline v2</span><strong>证据、脚本、导演、模型适配互不越权</strong></div>',
+      '<small>' + escapeHtml(hasReference ? '参考图角色边界已启用' : '本任务未使用参考图') + '</small>',
+      '</div>',
+      '<div class="job-orchestration-inputs">',
+      jobGenerationInputCard(
+        '阶段 01 · EvidencePipeline',
+        '只核验来源、事实、引语归属与不确定性，不决定文风或镜头',
+        job.skill_snapshot,
+        '证据政策',
+      ),
+      jobGenerationInputCard(
+        '阶段 02 · Script Skill',
+        '比较角度并产出 EditorialPlan 与完整口播，不设计画面',
+        job.script_skill_snapshot,
+        '脚本负责人缺失',
+      ),
+      jobGenerationInputCard(
+        '阶段 03 · Director Skill',
+        '读取已确认脚本，产出 VisualBible 与 ShotContextIR，不改写内容',
+        job.director_skill_snapshot,
+        '导演负责人缺失',
+      ),
+      jobGenerationInputCard(
+        '阶段 04 · Provider Adapter',
+        '只把镜头语义编译为当前图片与视频模型可执行的提示词',
+        job.provider_adapter_snapshot,
+        '模型适配器缺失',
+      ),
+      '</div>',
+      '<div class="job-orchestration-merge" aria-hidden="true"><span></span>',
+      '<strong>EvidencePack → EditorialPlan + ScriptDraft → 人工确认 → VisualBible + ShotContextIR → Provider Prompt</strong>',
+      '<span></span></div>',
+      '<article class="job-orchestration-core">',
+      '<div><span>唯一冲突裁决</span><strong>后阶段不得反向改写前阶段</strong>',
+      '<small>已确认 ScriptDraft 是内容唯一真相</small></div>',
+      '<p>Director Skill 只能解释脚本的视觉含义；Provider Adapter 只能翻译已经确定的镜头语义。新增 Skill 时替换对应负责人，不叠加第二套总纲。</p>',
+      '<ol aria-label="本任务责任边界">',
+      '<li>EvidencePack 管事实</li><li>Script Skill 管内容</li>',
+      '<li>人工确认锁定脚本</li><li>Director Skill 管视觉</li>',
+      '<li>Provider Adapter 管模型语法</li>',
+      '</ol>',
+      '</article>',
+      '<div class="job-orchestration-outputs">',
+      '<span>可审计产物</span>',
+      '<div><strong>EvidencePack</strong><strong>EditorialPlan</strong><strong>ScriptDraft</strong><strong>VisualBible</strong><strong>ShotContextIR</strong><strong>Provider Prompt</strong></div>',
+      '</div>',
+      '</div>',
+    ].join('');
+    return;
+  }
+
+  const profile = job.prompt_writing_profile_snapshot;
   const profileName = profile?.display_name || '旧版提示词逻辑';
   const profileStatus = profile
     ? 'v' + (profile.version || '未知') + ' · 已随任务冻结'
@@ -2762,11 +2954,11 @@ function renderJobGenerationMethods(job) {
   $('#job-generation-methods').innerHTML = [
     '<summary>',
     '<span><strong>本任务的生成方法</strong><small>输入与版本已冻结，重试不会漂移</small></span>',
-    '<span>查看 H3 架构</span>',
+    '<span>查看 v1 兼容链</span>',
     '</summary>',
     '<div class="job-generation-methods-body">',
     '<div class="job-orchestration-heading">',
-    '<div><span>本任务的生成架构</span><strong>输入已冻结，重试不会漂移方法</strong></div>',
+    '<div><span>历史 Pipeline v1</span><strong>输入已冻结，继续运行时不迁移其语义</strong></div>',
     '<small>' + escapeHtml(hasReference ? '参考图优先级已启用' : '未使用参考图') + '</small>',
     '</div>',
     '<div class="job-orchestration-inputs">',
@@ -2783,7 +2975,7 @@ function renderJobGenerationMethods(job) {
       '旧版视觉逻辑',
     ),
     '</div>',
-    '<div class="job-orchestration-merge" aria-hidden="true"><span></span><strong>交给编排层</strong><span></span></div>',
+    '<div class="job-orchestration-merge" aria-hidden="true"><span></span><strong>历史编排层</strong><span></span></div>',
     '<article class="job-orchestration-core' + (profile ? '' : ' legacy') + '">',
     '<div><span>' + escapeHtml(profile ? '任务冻结的唯一编排层' : '历史兼容编排') + '</span>',
     '<strong>' + escapeHtml(profileName) + '</strong>',
@@ -2912,8 +3104,13 @@ function renderDetail() {
     };
     $('#script-review-spec').textContent = [
       job.skill_snapshot?.display_name || '旧版工作流',
-      job.visual_style_snapshot?.display_name || '旧版视觉设定',
-      job.prompt_writing_profile_snapshot?.display_name || '旧版提示词方法',
+      job.script_skill_snapshot?.display_name || '旧版脚本逻辑',
+      job.director_skill_snapshot?.display_name
+        || job.visual_style_snapshot?.display_name
+        || '旧版视觉设定',
+      job.provider_adapter_snapshot?.display_name
+        || job.prompt_writing_profile_snapshot?.display_name
+        || '旧版提示词方法',
       `本任务 ${jobResolution(job).toUpperCase()}`,
       ttsVoiceLabel(ttsSettings.tts_voice_id),
       `${normalizedTtsSpeedRatio(ttsSettings.tts_speed_ratio).toFixed(1)}x`,
@@ -3956,7 +4153,7 @@ $('#shot-inspector').addEventListener('click', async (event) => {
   const model = seedanceModelInfo(seedanceModel);
   const cost = estimatedSeedanceCost(request, seedanceModel);
   const confirmed = window.confirm(
-    `H3 会把这次修改意图重新编译为只读视频提示词，并新增 1 次真实的 ${model?.label || 'Seedance'} 镜头生成费用${cost === null ? '' : `，刊例价预估约 ¥${cost.toFixed(2)}`}。首帧、旁白、图片章节和其他视频镜头不会重做，是否继续？`,
+    `Provider Adapter 会把这次修改意图与冻结的 ShotContextIR 重新编译为只读视频提示词，并新增 1 次真实的 ${model?.label || 'Seedance'} 镜头生成费用${cost === null ? '' : `，刊例价预估约 ¥${cost.toFixed(2)}`}。首帧、旁白、图片章节和其他视频镜头不会重做，是否继续？`,
   );
   if (!confirmed) return;
   setBusy(true); notify('');
@@ -4254,6 +4451,11 @@ $('#refresh-button').addEventListener('click', async () => {
 });
 $('#content-skill').addEventListener('change', () => {
   updateContentSkillIntake();
+  persistPromptFields();
+});
+$('#script-skill').addEventListener('change', () => {
+  renderScriptSkillSelector($('#script-skill').value);
+  renderOrchestrationSelection();
   persistPromptFields();
 });
 $('#visual-style').addEventListener('change', () => {

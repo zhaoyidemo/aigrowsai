@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "version": "1.2.0",
+  "display_name": "Seedream + Seedance 媒体适配器",
+  "description": "只把已确认的 ShotContextIR 编译为 Seedream 首帧和 Seedance I2V 可执行提示词，不参与选题、脚本或导演决策。",
+  "default": true,
+  "image_provider_family": "seedream",
+  "video_provider_family": "seedance",
+  "image_framework_file": "references/image.md",
+  "video_framework_file": "references/video.md",
+  "reference_policy_file": "references/reference.md",
+  "audio_policy": "工作台使用独立 TTS 与后期声音轨；Seedance 请求固定 generate_audio=false，提示词不得设计对白、音乐、音效或旁白。",
+  "negative_rules": [
+    "画面不得包含可读文字、字幕、数字、Logo、水印、界面或多格分镜板",
+    "不得把抽象概念直接画成漂浮文字",
+    "不得改变 ShotContextIR 已确定的主体身份、事实关系和起止状态"
+  ]
+}

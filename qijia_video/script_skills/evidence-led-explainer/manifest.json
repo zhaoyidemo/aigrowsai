@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "version": "1.0.0",
+  "display_name": "证据驱动解读主编",
+  "description": "从用户原始请求与 EvidencePack 中比较候选角度，选择最有解释力的一条论证路径并完成口播。",
+  "default": true,
+  "compatible_formats": [
+    "person_idea_explainer",
+    "research_explainer",
+    "concept_explainer",
+    "book_explainer",
+    "recent_news_briefing"
+  ],
+  "planning_instructions_file": "references/planning.md",
+  "writing_instructions_file": "references/writing.md",
+  "critic_rules": [
+    "中心问题必须直接回应用户原始请求，不能偷换成预设领域话题",
+    "先比较二至三个真实不同的内容角度，再选择证据最强且最有观看价值的一项",
+    "事实、直接引语、合理解释和编辑判断必须清楚区分",
+    "每一段必须推进新信息或推理，不得同义反复",
+    "开场张力来自内容本身，结尾必须回答中心问题",
+    "脚本不得包含视觉方案、模型提示词或逐镜头导演指令"
+  ]
+}

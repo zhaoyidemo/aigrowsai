@@ -13,6 +13,7 @@ from qijia_video import run_service as task_service
 from qijia_video.contracts import (
     Actor,
     AssetRef,
+    DEFAULT_VISUAL_STYLE_ID,
     GenerationSettings,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
@@ -219,11 +220,17 @@ class QijiaVideoRuntime:
             "script_prompt",
             "image_count",
             "shot_count",
+            "visual_style_id",
+            "visual_style_version",
+            "prompt_writing_profile_id",
+            "prompt_writing_profile_version",
         ):
             public_generation_defaults.pop(private_field, None)
+        public_generation_defaults["director_skill_id"] = DEFAULT_VISUAL_STYLE_ID
         return {
             "module": "qijia_video",
             "mode": "skill-video-platform",
+            "pipeline_version": "v2",
             "script_provider": self.script_provider.name,
             "script_model": self.script_provider.model,
             "research_model": self.script_provider.research_model,
@@ -242,8 +249,9 @@ class QijiaVideoRuntime:
             "missing_configuration": missing,
             "generation_defaults": public_generation_defaults,
             "content_skills": self.service.content_skills(),
-            "visual_styles": self.service.visual_styles(),
-            "prompt_writing_profile": self.service.prompt_writing_profile(),
+            "script_skills": self.service.script_skills(),
+            "director_skills": self.service.director_skills(),
+            "provider_adapter": self.service.provider_adapter(),
             "douyin_performance": {
                 "ready": self.douyin_performance_provider.configured,
                 "platform": "douyin",
@@ -343,7 +351,7 @@ class QijiaVideoRuntime:
                 "max_video_chapters": 3,
                 "model": settings.QIJIA_VIDEO_SEEDREAM_MODEL,
                 "basis": (
-                    "每个语义视觉章节生成 1 张；H3 仅在连续动作不可替代时"
+                    "每个语义视觉章节生成 1 张；Director Skill 仅在连续动作不可替代时"
                     "把其中最多 3 张作为视频首帧，其余直接动态呈现。"
                     "按成功生成张数估算，实际账单以火山方舟为准"
                 ),

@@ -10,6 +10,7 @@ from qijia_video.contracts import (
     PersonResearchBrief,
     PromptWritingProfileSnapshot,
     ResearchPromptSnapshot,
+    ScriptSkillSnapshot,
     SkillResearchMode,
     SourceCard,
     content_hash,
@@ -101,6 +102,54 @@ def _evidence_pack(
     return pack
 
 
+def compile_script_skill_prompt(
+    card: SourceCard,
+    *,
+    content_policy: ContentSkillSnapshot,
+    script_skill: ScriptSkillSnapshot,
+    research_brief: PersonResearchBrief | NewsResearchBrief | None,
+    minimum_characters: int,
+    maximum_characters: int,
+) -> str:
+    '''Compile the v2 editorial prompt owned by exactly one Script Skill.'''
+
+    original_input = {
+        'subject': (
+            card.subject.model_dump(mode='json')
+            if card.subject.type != 'topic'
+            else None
+        ),
+        'original_input': card.core_idea,
+        'focus_question': card.parent_question,
+        'target_audience': card.target_audience,
+        'content_format': card.content_format.value,
+    }
+    return _join_blocks(
+        '你是任务冻结的唯一 Script Skill。EvidencePack 只负责事实，Script Skill 只负责'
+        '内容角度、论证结构与口播；不得设计画面，也不得调用任何媒体提示词方法。',
+        '【不可变原始输入】\n'
+        + json.dumps(original_input, ensure_ascii=False),
+        '【唯一 EvidencePack】\n'
+        + json.dumps(_evidence_pack(card, research_brief), ensure_ascii=False),
+        '【冻结的事实、安全与质量政策】\n政策 ID：'
+        + '、'.join(content_policy.policy_ids)
+        + '\n- '
+        + '\n- '.join(content_policy.quality_rules)
+        + '\n这些是硬约束，不是第二套写作风格；发生冲突时优先遵守。',
+        f'【Script Skill】{script_skill.skill_id}@{script_skill.version}',
+        '【角度规划方法】\n' + script_skill.planning_instructions,
+        '【脚本写作方法】\n' + script_skill.writing_instructions,
+        '【内部审稿规则】\n- ' + '\n- '.join(script_skill.critic_rules),
+        (
+            '【口播边界】\n'
+            f'所有 narration 合计建议 {minimum_characters}-{maximum_characters} 个汉字，'
+            '目标 45—75 秒；内容完整和自然优先。事实主张才填写 source_refs，纯解释、'
+            '过渡和编辑判断可以为空。最终只交付 EditorialPlan 与 ScriptDraft，不交付任何'
+            '视觉决策。'
+        ),
+    )
+
+
 def compile_research_prompt(
     card: SourceCard,
     *,
@@ -186,7 +235,7 @@ def compile_research_prompt(
     )
 
 
-def compile_script_prompt(
+def compile_legacy_h3_script_prompt(
     card: SourceCard,
     *,
     profile: PromptWritingProfileSnapshot | None,
@@ -194,7 +243,7 @@ def compile_script_prompt(
     minimum_characters: int,
     maximum_characters: int,
 ) -> str:
-    """Compile the single input-bound H3 brief-and-script instruction."""
+    """Compile the frozen Pipeline v1 H3 brief-and-script instruction."""
 
     framework = (
         profile.creative_brief_framework.strip()

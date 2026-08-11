@@ -1,4 +1,4 @@
-"""Compile frozen, provider-neutral visual intent into provider prompt text."""
+"""Pipeline v1 H3 visual compiler retained only for historical job recovery."""
 from __future__ import annotations
 
 import json
