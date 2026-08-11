@@ -28,7 +28,9 @@
 
 Remotion 位于仓库根目录 `video_renderer/`，只读取 `render_manifest.json` 与本地化素材，不访问数据库，也不调用生成模型。
 
-新任务不再接受或展示自由 `script_prompt`、`seedance_prompt`、`image_count` 或 `shot_count`；调用方分别选择 Input Policy、Script Skill、Director Skill、Visual Style、画质与配音，Provider Adapter 自动匹配。输入直接进入唯一 Script Skill，正常请求不携带 `tools`、`tool_choice` 或 `max_tool_calls`，一次调用返回 `EditorialPlan + ScriptDraft`；人工确认并完成 TTS 后，导演自主划分 3–12 个章节，每章先设计具体事件与主体调度，再选择图片或最多 3 段必要视频。隐喻是可选辅助，不再是必填画面骨架。旧任务快照中的历史研究字段与已保存简报仍可读取，但不能再次触发联网。
+新任务不再接受或展示自由 `script_prompt`、`seedance_prompt`、`image_count` 或 `shot_count`；任务分别冻结 Input Policy、Script Skill、Director Skill、Visual Style、画质与配音，Provider Adapter 自动匹配。输入直接进入唯一 Script Skill，正常请求不携带 `tools`、`tool_choice` 或 `max_tool_calls`，一次调用返回 `EditorialPlan + ScriptDraft`；人工确认并完成 TTS 后，导演自主划分 3–12 个章节，每章先设计具体事件与主体调度，再选择图片或最多 3 段必要视频。隐喻是可选辅助，不再是必填画面骨架。旧任务快照中的历史研究字段与已保存简报仍可读取，但不能再次触发联网。
+
+创建页以自然语言主输入为第一动作，只保留视觉风格这个常用选择，并用同一场景的真实样片进行比较。单一的 Input Policy、Script Skill 和 Director Skill 不显示为无意义下拉框；它们以创作引擎摘要呈现，版本和技术产物进入折叠审计区。
 
 待确认成片支持逐镜头上传图片或视频。上传版本与 AI 版本并存，当前选择只通过 `StoryboardShot.selected_media_id` 指向，不删除历史；视频先由 FFmpeg 标准化为静音 H.264 并匹配章节时长，再沿用单镜头重渲染、自动质检和失败回滚链路。
 

@@ -36,9 +36,9 @@ test('qijia video uses an independent page and API namespace', () => {
 
 test('video creation uses model knowledge without external retrieval', () => {
   assert.match(page, /id="content-skill"/);
-  assert.match(page, /输入与知识边界/);
-  assert.match(page, /不联网，只限定模型可以怎样使用已有知识/);
-  assert.match(page, /系统不联网检索/);
+  assert.match(page, /使用模型已有知识创作 · 不联网 · 脚本确认后按真实旁白时长自动导演/);
+  assert.match(page, /精确出处、人物归属、版本、日期和最新动态会在脚本确认时标记为需要复核/);
+  assert.doesNotMatch(page, /不联网，只限定模型可以怎样使用已有知识/);
   assert.match(page, />生成脚本<\/button>/);
   assert.match(app, /qijia-video-generation-settings-v3/);
   assert.match(app, /DEFAULT_CONTENT_SKILL_ID = 'explain-expert-view'/);
@@ -55,9 +55,10 @@ test('video creation uses model knowledge without external retrieval', () => {
 test('Director Skill and Visual Style are selected and frozen independently', () => {
   assert.match(page, /id="director-skill"/);
   assert.match(page, /id="visual-style"/);
-  assert.match(page, /负责具体事件、人物调度、摄影机、章节与连续性/);
-  assert.match(page, /只负责媒介、材质、色彩、光线与造型语言/);
-  assert.match(page, /读取已确认脚本与旁白时长，不改写事实和口播/);
+  assert.match(page, /id="creation-engine-summary"/);
+  assert.match(page, /脚本负责把内容讲清楚，导演负责把每一章变成可拍、可读的具体事件/);
+  assert.match(page, /<details id="creation-method-choices"[^>]*hidden>/);
+  assert.match(app, /methodChoices\.hidden = \([\s\S]*contentSkills\(\)\.length <= 1[\s\S]*scriptSkills\(\)\.length <= 1[\s\S]*directorSkills\(\)\.length <= 1/);
   assert.match(app, /DEFAULT_DIRECTOR_SKILL_ID = 'animated-explainer'/);
   assert.match(app, /DEFAULT_VISUAL_STYLE_ID = 'content-skill-default'/);
   assert.doesNotMatch(app, /function visualStyleGenerationDefaults/);
@@ -69,9 +70,26 @@ test('Director Skill and Visual Style are selected and frozen independently', ()
   assert.match(app, /job\.visual_style_snapshot\?\.display_name/);
   assert.match(page, /id="visual-style-previews"/);
   assert.match(app, /function renderVisualStylePreviews/);
+  assert.match(app, /function visualStylePreviewAsset/);
   assert.match(app, /data-visual-style-id/);
   assert.match(styles, /\.visual-style-setting/);
   assert.match(styles, /\.visual-style-preview/);
+  for (const asset of [
+    'modern-editorial.webp',
+    'paper-collage.webp',
+    'papercraft-stop-motion.webp',
+  ]) {
+    const assetPath = path.join(
+      root,
+      'qijia_video',
+      'web',
+      'assets',
+      'style-previews',
+      asset,
+    );
+    assert.ok(fs.existsSync(assetPath));
+    assert.ok(fs.statSync(assetPath).size < 100000);
+  }
 });
 
 test('Director v3 visibly separates directing, visual language, and provider compilation', () => {
@@ -88,7 +106,7 @@ test('Director v3 visibly separates directing, visual language, and provider com
   assert.match(app, /function providerAdapter/);
   assert.match(app, /function scriptSkills/);
   assert.match(app, /function renderOrchestrationSelection/);
-  assert.match(app, /参考图已上传（角色待导演声明）/);
+  assert.match(app, /参考图已上传（用途由导演逐镜头判断）/);
   assert.doesNotMatch(app, /selectedContentSkill\(\)\?\.input_mode !== 'recent_news_topic'/);
   assert.doesNotMatch(app, /state\.capabilities\?\.prompt_writing_profile/);
   assert.match(app, /job\.script_skill_snapshot/);
@@ -210,8 +228,10 @@ test('creation intake freezes one unified natural-language creative request', ()
   assert.match(manualForm, /name="creative_request"/);
   assert.equal((manualForm.match(/name="creative_request"/g) || []).length, 1);
   assert.doesNotMatch(manualForm, /name="person_name"|name="viewpoint"/);
-  assert.match(page, /系统不会联网/);
-  assert.match(page, /模型可使用已有知识解释稳定背景/);
+  assert.match(page, /使用模型已有知识创作 · 不联网/);
+  assert.ok(page.indexOf('name="creative_request"') < page.indexOf('id="visual-style-previews"'));
+  assert.ok(page.indexOf('id="visual-style-previews"') < page.indexOf('id="manual-reference-input"'));
+  assert.ok(page.indexOf('id="manual-reference-input"') < page.indexOf('id="source-submit-button"'));
   assert.doesNotMatch(manualForm, /阿尔弗雷德·阿德勒|真正影响孩子/);
   assert.doesNotMatch(manualForm, /name="source_material"|name="rights_confirmed"|补充出处|专业模式/);
   assert.doesNotMatch(page, /name="parent_question"|name="core_idea"|name="fact_text"|name="subject_name"/);
@@ -222,8 +242,8 @@ test('creation intake freezes one unified natural-language creative request', ()
 });
 
 test('model knowledge boundary and editorial planning are visible', () => {
-  assert.match(page, /模型可使用已有知识解释稳定背景/);
-  assert.match(page, /重要细节请在脚本确认时复核/);
+  assert.match(page, /精确出处、人物归属、版本、日期和最新动态会在脚本确认时标记为需要复核/);
+  assert.match(page, /不会假装成已经核验/);
   assert.match(page, /id="content-planning-brief"/);
   assert.match(app, /function renderContentPlanning\(job\)/);
   assert.match(page, /ContextPack 与 EditorialPlan/);
@@ -233,6 +253,17 @@ test('model knowledge boundary and editorial planning are visible', () => {
   assert.match(app, /仅用于旧任务兼容，不会再次联网/);
   assert.match(app, /renderContentPlanning\(job\)/);
   assert.doesNotMatch(app, /renderResearchBrief\(job\)/);
+});
+
+test('creation intake hides internal architecture behind creator-facing choices', () => {
+  assert.match(page, /同一场景的真实样片，只比较视觉语言/);
+  assert.match(page, /有需要保持一致的人物、场景或画面风格吗/);
+  assert.match(page, /人物、服装、物件、场景还是风格/);
+  const referenceStart = page.indexOf('id="manual-reference-input"');
+  const referenceEnd = page.indexOf('id="creation-engine-summary"');
+  assert.doesNotMatch(page.slice(referenceStart, referenceEnd), /ShotContextIR|Director Skill/);
+  assert.match(page, /创作链路与技术信息/);
+  assert.ok(page.indexOf('name="creative_request"') < page.indexOf('id="generation-orchestration"'));
 });
 
 test('topic research is Douyin-only, cost-bounded, and human-gated', () => {
@@ -288,8 +319,8 @@ test('creation intake offers one optional global reference image without extra f
   assert.match(page, /id="reference-image-input"/);
   assert.match(page, /accept="image\/jpeg,image\/png,image\/webp"/);
   assert.match(page, /上传 1 张参考图（可选）/);
-  assert.match(page, /在每个 ShotContextIR 中声明它是身份、场景还是风格参考/);
-  assert.match(page, /不会自动同时接管全部属性，也不作为观点或事实依据/);
+  assert.match(page, /系统会逐个镜头判断参考图用于人物、服装、物件、场景还是风格/);
+  assert.match(page, /不会自动照搬全部属性，也不会把图片内容当作事实依据/);
   assert.doesNotMatch(page, /id="reference-image-input"[^>]*multiple/);
   assert.match(app, /referenceImageFile/);
   assert.match(app, /\/source-cards\/creative-request-with-reference/);
@@ -311,7 +342,7 @@ test('workflow exposes five understandable stages with detailed action context',
   assert.match(app, /remotion_normalize: 2/);
   assert.match(styles, /grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/);
   assert.match(page, /id="next-action"/);
-  assert.match(page, /Director Skill 按已确认脚本的真实语义变化决定章节数量/);
+  assert.match(page, /系统按确认脚本的真实语义变化决定章节数量/);
   assert.match(page, /最多三段但不要求凑满/);
 });
 
@@ -320,8 +351,8 @@ test('video quality is selectable and frozen into each new task', () => {
   assert.match(page, /value="480p"[^>]*>480P · 480×854/);
   assert.match(page, /value="720p"[^>]*>720P · 720×1280/);
   assert.match(page, /value="1080p"[^>]*selected[^>]*>1080P · 1080×1920（默认）/);
-  assert.match(page, /画质越高，Token、耗时和文件体积通常越大/);
-  assert.match(page, /默认使用 Seedance 1\.0 Pro Fast 无声模式/);
+  assert.match(page, /画质越高，生成成本、耗时和文件体积通常越大/);
+  assert.doesNotMatch(page, /默认使用 Seedance 1\.0 Pro Fast 无声模式/);
   assert.match(app, /video_resolution: '1080p'/);
   assert.match(app, /video_resolution: videoResolution/);
   assert.match(app, /job\?\.generation_settings\?\.video_resolution/);
@@ -490,7 +521,7 @@ test('Script Skill owns writing and creation payload exposes no competing contro
   assert.doesNotMatch(page, /id="script-generation-prompt"|id="enable-custom-script-prompt"/);
   assert.doesNotMatch(page, /id="seedance-generation-prompt"/);
   assert.doesNotMatch(page, /id="job-seedance-prompt"/);
-  assert.match(page, /唯一负责选角度、搭论证和写口播/);
+  assert.match(page, /脚本负责把内容讲清楚/);
   assert.match(app, /generation_settings: generationSettings/);
   assert.match(app, /video_resolution: videoResolution/);
   const settingsSource = app.slice(

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.27.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.28.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -112,80 +112,6 @@
           <div class="panel-heading">
             <div><p class="step">01</p><h2>开始一条视频</h2></div>
           </div>
-          <section class="creation-direction" aria-label="内容与视觉方向">
-            <label class="creation-setting skill-setting" for="content-skill">
-              <span>输入与知识边界</span>
-              <strong>不联网，只限定模型可以怎样使用已有知识</strong>
-              <select id="content-skill" aria-label="内容 Skill"></select>
-              <small id="content-skill-description">原始输入直接交给脚本模型，不增加搜索步骤。</small>
-            </label>
-            <label class="creation-setting script-skill-setting" for="script-skill">
-              <span>脚本主编</span>
-              <strong>唯一负责选角度、搭论证和写口播</strong>
-              <select id="script-skill" aria-label="Script Skill"></select>
-              <small id="script-skill-description">不会设计镜头或媒体模型提示词。</small>
-            </label>
-            <label class="creation-setting director-skill-setting" for="director-skill">
-              <span>导演方法</span>
-              <strong>负责具体事件、人物调度、摄影机、章节与连续性</strong>
-              <select id="director-skill" aria-label="Director Skill"></select>
-              <small id="director-skill-description">读取已确认脚本与旁白时长，不改写事实和口播。</small>
-            </label>
-            <section class="creation-setting visual-style-setting" aria-labelledby="visual-style-label">
-              <span id="visual-style-label">视觉风格</span>
-              <strong>只负责媒介、材质、色彩、光线与造型语言</strong>
-              <select id="visual-style" aria-label="Visual Style"></select>
-              <small id="visual-style-description">为导演方案提供统一美术语言，不决定故事和镜头。</small>
-              <div id="visual-style-previews" class="visual-style-previews" aria-label="视觉风格预览"></div>
-            </section>
-          </section>
-          <details class="production-specs" aria-labelledby="production-specs-title">
-            <summary class="production-specs-heading">
-              <span><strong id="production-specs-title">生产规格</strong><small>画质、自适应分镜与旁白</small></span>
-              <span id="production-spec-summary">1080P · 语义自适应分镜 · 1.2x</span>
-            </summary>
-            <div class="production-specs-body">
-          <label class="video-quality-setting" for="video-resolution">
-            <span class="video-quality-copy">
-              <strong>视频画质</strong>
-              <small>同时用于 Director Skill 选择的 AI 视频镜头和最终竖屏成片；默认使用 Seedance 1.0 Pro Fast 无声模式，复杂镜头可在成片检查时单独升级 2.0。画质越高，Token、耗时和文件体积通常越大。</small>
-            </span>
-            <select id="video-resolution" aria-label="视频画质">
-              <option value="480p">480P · 480×854</option>
-              <option value="720p">720P · 720×1280</option>
-              <option value="1080p" selected>1080P · 1080×1920（默认）</option>
-            </select>
-          </label>
-          <section class="video-quality-setting">
-            <span class="video-quality-copy">
-              <strong>镜头规划</strong>
-              <small>Director Skill 按已确认脚本的真实语义变化决定章节数量。图片是默认媒介；只有连续动作或状态变化不可替代时才使用视频，最多三段但不要求凑满。</small>
-            </span>
-          </section>
-          <section class="video-quality-setting tts-creation-setting" aria-label="旁白设置">
-            <span class="video-quality-copy">
-              <strong>旁白设置</strong>
-              <small>只提供 3 个已核验的 Seed-TTS 2.0 音色和 3 档语速；脚本确认时可先试听开场。正式配音后，字幕与镜头会按真实音频时长重新安排。</small>
-            </span>
-            <div class="tts-creation-controls">
-              <label>音色
-                <select id="tts-voice-id" aria-label="旁白音色">
-                  <option value="zh_female_vv_uranus_bigtts" selected>Vivi 2.0 · 亲和自然</option>
-                  <option value="zh_female_santongyongns_saturn_bigtts">流畅女声 · 清晰利落</option>
-                  <option value="zh_male_ruyayichen_saturn_bigtts">儒雅逸辰 · 沉稳克制</option>
-                </select>
-              </label>
-              <label>语速
-                <select id="tts-speed-ratio" aria-label="旁白语速">
-                  <option value="1">1.0x</option>
-                  <option value="1.1">1.1x</option>
-                  <option value="1.2" selected>1.2x（默认）</option>
-                </select>
-              </label>
-            </div>
-          </section>
-            </div>
-          </details>
           <section id="topic-handoff" class="topic-handoff" hidden>
             <div class="topic-handoff-heading">
               <div><span>已采用选题</span><strong id="topic-handoff-title"></strong></div>
@@ -210,42 +136,132 @@
               <button id="topic-source-submit" class="button primary" type="submit" data-busy-lock>确认资料并生成脚本</button>
             </form>
           </section>
-          <p id="manual-intake-intro" class="panel-note intake-intro">用一段自然语言说明你想做的内容。系统不联网检索，唯一 Script Skill 会直接理解原始输入，并结合模型已有知识规划角度和完成脚本。</p>
+          <p id="manual-intake-intro" class="panel-note intake-intro">使用模型已有知识创作 · 不联网 · 脚本确认后按真实旁白时长自动导演</p>
           <form id="source-card-form" class="form-stack">
             <label class="primary-field">
               <span class="question-line"><span class="question-number">1</span>你想做什么内容？</span>
               <textarea name="creative_request" required minlength="10" maxlength="1800" rows="9" placeholder="例如：黄宗羲，以及“大丈夫行事，论是非不论利害……”这段话。我想解释它的出处、真正含义和今天的价值。"></textarea>
-              <span class="field-hint">可以直接写人物、原话、观点、问题、资料或表达方向。系统不会联网；模型可使用已有知识解释稳定背景，但不会把人物归属、精确出处、版本、日期或最新动态假装成已经核验。重要细节请在脚本确认时复核。</span>
+              <span class="field-hint">可以直接写人物、原话、观点、问题、资料或表达方向。精确出处、人物归属、版本、日期和最新动态会在脚本确认时标记为需要复核，不会假装成已经核验。</span>
             </label>
-            <section class="reference-input" aria-labelledby="reference-input-title">
-              <div class="reference-input-heading">
-                <div>
-                  <strong id="reference-input-title">有喜欢的画面风格？</strong>
-                  <span>上传 1 张参考图（可选）</span>
-                </div>
-                <button id="remove-reference-image" class="reference-remove" type="button" hidden>移除</button>
-              </div>
-              <div id="reference-dropzone" class="reference-dropzone" role="button" tabindex="0" aria-label="选择全局参考图">
-                <input id="reference-image-input" name="reference_image" type="file" accept="image/jpeg,image/png,image/webp" hidden>
-                <div id="reference-empty" class="reference-empty">
-                  <span class="reference-add">+</span>
-                  <span>拖入图片，或点击选择</span>
-                </div>
-                <div id="reference-preview" class="reference-preview" hidden>
-                  <img id="reference-preview-image" alt="已选择的全局参考图">
-                  <span id="reference-file-name"></span>
-                </div>
-              </div>
-              <p class="field-hint">上传后，Director Skill 会在每个 ShotContextIR 中声明它是身份、场景还是风格参考；不会自动同时接管全部属性，也不作为观点或事实依据。JPG、PNG 或 WebP，最大 10 MB。</p>
-            </section>
-            <div class="actions source-form-actions">
-              <button id="source-submit-button" class="button primary" type="submit" data-busy-lock>生成脚本</button>
-            </div>
           </form>
+
+          <section class="visual-style-setting creation-choice" aria-labelledby="visual-style-label">
+            <div class="creation-choice-heading">
+              <span id="visual-style-label" class="question-line"><span class="question-number">2</span>选择画面风格</span>
+              <small>同一场景的真实样片，只比较视觉语言</small>
+            </div>
+            <select id="visual-style" aria-label="视觉风格" hidden></select>
+            <div id="visual-style-previews" class="visual-style-previews" aria-label="视觉风格样片"></div>
+            <p id="visual-style-description" class="field-hint">为导演方案提供统一美术语言，不决定故事和镜头。</p>
+          </section>
+
+          <section id="manual-reference-input" class="reference-input" aria-labelledby="reference-input-title">
+            <div class="reference-input-heading">
+              <div>
+                <strong id="reference-input-title" class="question-line"><span class="question-number">3</span>有需要保持一致的人物、场景或画面风格吗？</strong>
+                <span>上传 1 张参考图（可选）</span>
+              </div>
+              <button id="remove-reference-image" class="reference-remove" type="button" hidden>移除</button>
+            </div>
+            <div id="reference-dropzone" class="reference-dropzone" role="button" tabindex="0" aria-label="选择人物、场景或风格参考图">
+              <input id="reference-image-input" name="reference_image" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+              <div id="reference-empty" class="reference-empty">
+                <span class="reference-add">+</span>
+                <span>拖入图片，或点击选择</span>
+              </div>
+              <div id="reference-preview" class="reference-preview" hidden>
+                <img id="reference-preview-image" alt="已选择的参考图">
+                <span id="reference-file-name"></span>
+              </div>
+            </div>
+            <p class="field-hint">系统会逐个镜头判断参考图用于人物、服装、物件、场景还是风格，不会自动照搬全部属性，也不会把图片内容当作事实依据。JPG、PNG 或 WebP，最大 10 MB。</p>
+          </section>
+
+          <section class="creation-engine-summary" aria-live="polite">
+            <div>
+              <span>当前创作引擎</span>
+              <strong id="creation-engine-summary">模型知识解读主编 + 动画解说导演</strong>
+            </div>
+            <small>脚本负责把内容讲清楚，导演负责把每一章变成可拍、可读的具体事件。</small>
+          </section>
+
+          <details id="creation-method-choices" class="creation-method-choices" hidden>
+            <summary><strong>切换创作方法</strong><small>仅在存在多种方法时显示</small></summary>
+            <section class="creation-direction" aria-label="创作方法">
+              <label class="creation-setting skill-setting" for="content-skill">
+                <span>知识边界</span>
+                <select id="content-skill" aria-label="知识边界"></select>
+                <small id="content-skill-description">不调用外部检索。</small>
+              </label>
+              <label class="creation-setting script-skill-setting" for="script-skill">
+                <span>脚本主编</span>
+                <select id="script-skill" aria-label="脚本主编"></select>
+                <small id="script-skill-description">负责角度、论证和口播。</small>
+              </label>
+              <label class="creation-setting director-skill-setting" for="director-skill">
+                <span>导演方法</span>
+                <select id="director-skill" aria-label="导演方法"></select>
+                <small id="director-skill-description">负责事件、调度、镜头和连续性。</small>
+              </label>
+            </section>
+          </details>
+
+          <div id="manual-intake-actions" class="actions source-form-actions">
+            <button id="source-submit-button" class="button primary" type="submit" form="source-card-form" data-busy-lock>生成脚本</button>
+          </div>
+
+          <details class="production-specs" aria-labelledby="production-specs-title">
+            <summary class="production-specs-heading">
+              <span><strong id="production-specs-title">生产规格</strong><small>画质、自适应分镜与旁白</small></span>
+              <span id="production-spec-summary">1080P · 语义自适应分镜 · 1.2x</span>
+            </summary>
+            <div class="production-specs-body">
+              <label class="video-quality-setting" for="video-resolution">
+                <span class="video-quality-copy">
+                  <strong>视频画质</strong>
+                  <small>同时用于 AI 视频镜头和最终竖屏成片。画质越高，生成成本、耗时和文件体积通常越大。</small>
+                </span>
+                <select id="video-resolution" aria-label="视频画质">
+                  <option value="480p">480P · 480×854</option>
+                  <option value="720p">720P · 720×1280</option>
+                  <option value="1080p" selected>1080P · 1080×1920（默认）</option>
+                </select>
+              </label>
+              <section class="video-quality-setting">
+                <span class="video-quality-copy">
+                  <strong>镜头规划</strong>
+                  <small>系统按确认脚本的真实语义变化决定章节数量。图片是默认媒介；只有连续动作或状态变化不可替代时才使用视频，最多三段但不要求凑满。</small>
+                </span>
+              </section>
+              <section class="video-quality-setting tts-creation-setting" aria-label="旁白设置">
+                <span class="video-quality-copy">
+                  <strong>旁白设置</strong>
+                  <small>脚本确认时可先试听开场。正式配音后，字幕与镜头会按真实音频时长重新安排。</small>
+                </span>
+                <div class="tts-creation-controls">
+                  <label>音色
+                    <select id="tts-voice-id" aria-label="旁白音色">
+                      <option value="zh_female_vv_uranus_bigtts" selected>Vivi 2.0 · 亲和自然</option>
+                      <option value="zh_female_santongyongns_saturn_bigtts">流畅女声 · 清晰利落</option>
+                      <option value="zh_male_ruyayichen_saturn_bigtts">儒雅逸辰 · 沉稳克制</option>
+                    </select>
+                  </label>
+                  <label>语速
+                    <select id="tts-speed-ratio" aria-label="旁白语速">
+                      <option value="1">1.0x</option>
+                      <option value="1.1">1.1x</option>
+                      <option value="1.2" selected>1.2x（默认）</option>
+                    </select>
+                  </label>
+                </div>
+              </section>
+            </div>
+          </details>
+
           <details id="generation-orchestration" class="generation-orchestration">
             <summary>
-              <span><strong>单一负责人生成链路 · Director v3</strong><small>创作职责独立，导演与画风不再混为一层 · 可选查看</small></span>
-              <span>查看架构</span>
+              <span><strong>创作链路与技术信息</strong><small>版本、职责边界和模型适配 · 可选查看</small></span>
+              <span>查看详情</span>
             </summary>
             <div class="generation-orchestration-body">
               <div class="orchestration-heading">
@@ -536,6 +552,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.27.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.28.0"></script>
 </body>
 </html>

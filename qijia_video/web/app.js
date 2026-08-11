@@ -258,12 +258,12 @@ function renderScriptSkillSelector(preferredSkillId = '') {
   const selector = $('#script-skill');
   const skills = scriptSkills();
   selector.innerHTML = skills.map((item) => (
-    `<option value="${escapeHtml(item.skill_id)}">${escapeHtml(item.display_name)} · v${escapeHtml(item.version)}</option>`
+    `<option value="${escapeHtml(item.skill_id)}">${escapeHtml(item.display_name)}</option>`
   )).join('');
   const selected = scriptSkill(preferredSkillId);
   if (selected) selector.value = selected.skill_id;
   $('#script-skill-description').textContent = selected
-    ? `${selected.description} · v${selected.version}`
+    ? selected.description
     : '唯一负责内容角度、论证结构与完整口播。';
 }
 
@@ -277,11 +277,13 @@ function updateContentSkillIntake() {
   const skill = selectedContentSkill();
   const handoffOpen = !$('#topic-handoff').hidden;
   $('#content-skill-description').textContent = skill
-    ? `${skill.description} · 不联网 · v${skill.version}`
+    ? `${skill.description} · 不联网`
     : '不调用外部检索，只限定模型知识与用户材料的使用边界。';
   $('#manual-intake-intro').hidden = handoffOpen;
-  $('#manual-intake-intro').textContent = '用一段自然语言说明你想做的内容。系统不会联网，脚本模型会直接理解完整输入并结合已有知识完成创作。';
+  $('#manual-intake-intro').textContent = '使用模型已有知识创作 · 不联网 · 脚本确认后按真实旁白时长自动导演';
   $('#source-card-form').hidden = handoffOpen;
+  $('#manual-reference-input').hidden = handoffOpen;
+  $('#manual-intake-actions').hidden = handoffOpen;
   renderOrchestrationSelection();
 }
 
@@ -289,7 +291,7 @@ function renderContentSkillSelector(preferredSkillId = '') {
   const selector = $('#content-skill');
   const skills = contentSkills();
   selector.innerHTML = skills.map((item) => (
-    `<option value="${escapeHtml(item.skill_id)}">${escapeHtml(item.display_name)} · v${escapeHtml(item.version)}</option>`
+    `<option value="${escapeHtml(item.skill_id)}">${escapeHtml(item.display_name)}</option>`
   )).join('');
   const selected = contentSkill(preferredSkillId);
   if (selected) selector.value = selected.skill_id;
@@ -327,7 +329,7 @@ function selectedDirectorSkill() {
 function updateDirectorSkillDescription() {
   const skill = selectedDirectorSkill();
   $('#director-skill-description').textContent = skill
-    ? skill.description + ' · v' + skill.version
+    ? skill.description
     : '负责具体事件、人物调度、镜头组织、媒介选择与跨镜头连续性。';
   renderOrchestrationSelection();
 }
@@ -337,7 +339,7 @@ function renderDirectorSkillSelector(preferredSkillId = '') {
   const skills = directorSkills();
   selector.innerHTML = skills.map((item) => (
     '<option value="' + escapeHtml(item.skill_id) + '">'
-      + escapeHtml(item.display_name) + ' · v' + escapeHtml(item.version)
+      + escapeHtml(item.display_name)
       + '</option>'
   )).join('');
   const selected = directorSkill(preferredSkillId);
@@ -373,6 +375,15 @@ function visualStylePreviewKey(styleId) {
   ].includes(styleId) ? styleId : DEFAULT_VISUAL_STYLE_ID;
 }
 
+function visualStylePreviewAsset(styleId) {
+  const assets = {
+    [DEFAULT_VISUAL_STYLE_ID]: '/qijia-video/assets/style-previews/modern-editorial.webp?v=1.28.0',
+    'paper-collage-explainer': '/qijia-video/assets/style-previews/paper-collage.webp?v=1.28.0',
+    'papercraft-stop-motion': '/qijia-video/assets/style-previews/papercraft-stop-motion.webp?v=1.28.0',
+  };
+  return assets[styleId] || assets[DEFAULT_VISUAL_STYLE_ID];
+}
+
 function renderVisualStylePreviews() {
   const node = $('#visual-style-previews');
   if (!node) return;
@@ -380,8 +391,11 @@ function renderVisualStylePreviews() {
   node.innerHTML = visualStyles().map((style) => {
     const selected = style.style_id === selectedId;
     return `<button class="visual-style-preview ${selected ? 'selected' : ''}" type="button" data-style-preview="${escapeHtml(visualStylePreviewKey(style.style_id))}" data-visual-style-id="${escapeHtml(style.style_id)}" aria-pressed="${String(selected)}">
-      <span class="style-preview-art" aria-hidden="true"><i></i><i></i><i></i></span>
-      <strong>${escapeHtml(style.display_name)}</strong>
+      <img src="${escapeHtml(visualStylePreviewAsset(style.style_id))}" alt="${escapeHtml(style.display_name)}样片" width="600" height="400">
+      <span class="visual-style-preview-copy">
+        <strong>${escapeHtml(style.display_name)}</strong>
+        <small>${escapeHtml(style.description)}</small>
+      </span>
     </button>`;
   }).join('');
 }
@@ -389,7 +403,7 @@ function renderVisualStylePreviews() {
 function updateVisualStyleDescription() {
   const style = selectedVisualStyle();
   $('#visual-style-description').textContent = style
-    ? `${style.description} · v${style.version}`
+    ? style.description
     : '只定义媒介、材质、造型、色彩、光线和构图语言。';
   renderVisualStylePreviews();
   renderOrchestrationSelection();
@@ -399,7 +413,7 @@ function renderVisualStyleSelector(preferredStyleId = '') {
   const selector = $('#visual-style');
   const styles = visualStyles();
   selector.innerHTML = styles.map((item) => (
-    `<option value="${escapeHtml(item.style_id)}">${escapeHtml(item.display_name)} · v${escapeHtml(item.version)}</option>`
+    `<option value="${escapeHtml(item.style_id)}">${escapeHtml(item.display_name)}</option>`
   )).join('');
   const selected = visualStyle(preferredStyleId);
   if (selected) selector.value = selected.style_id;
@@ -412,6 +426,18 @@ function providerAdapter() {
 }
 
 function renderOrchestrationSelection() {
+  const scriptName = selectedScriptSkill()?.display_name || '模型知识解读主编';
+  const directorName = selectedDirectorSkill()?.display_name || '动画解说导演';
+  const engineNode = $('#creation-engine-summary');
+  if (engineNode) engineNode.textContent = scriptName + ' + ' + directorName;
+  const methodChoices = $('#creation-method-choices');
+  if (methodChoices) {
+    methodChoices.hidden = (
+      contentSkills().length <= 1
+      && scriptSkills().length <= 1
+      && directorSkills().length <= 1
+    );
+  }
   const contentNode = $('#orchestration-content-name');
   const scriptNode = $('#orchestration-script-name');
   const directorNode = $('#orchestration-director-name');
@@ -419,14 +445,13 @@ function renderOrchestrationSelection() {
   const referenceNode = $('#reference-priority-state');
   if (!contentNode || !scriptNode || !directorNode || !adapterNode || !referenceNode) return;
   contentNode.textContent = selectedContentSkill()?.display_name || '知识边界';
-  scriptNode.textContent = selectedScriptSkill()?.display_name || 'Script Skill';
-  const directorName = selectedDirectorSkill()?.display_name || 'Director Skill';
+  scriptNode.textContent = scriptName;
   const styleName = selectedVisualStyle()?.display_name || 'Visual Style';
   directorNode.textContent = directorName + ' · ' + styleName;
   adapterNode.textContent = providerAdapter()?.display_name || 'Provider Adapter';
   const hasReference = !!state.referenceImageFile;
   referenceNode.textContent = hasReference
-    ? '参考图已上传（角色待导演声明）'
+    ? '参考图已上传（用途由导演逐镜头判断）'
     : '参考图属性（未上传）';
   referenceNode.classList.toggle('active', hasReference);
 }

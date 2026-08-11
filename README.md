@@ -33,7 +33,7 @@
 
 Script Skill 位于 `qijia_video/script_skills/`，Director Skill 位于 `qijia_video/director_skills/`，Visual Style 位于 `qijia_video/visual_styles/`，Provider Adapter 位于 `qijia_video/provider_adapters/`。新任务分别冻结 `script_skill_snapshot`、`director_skill_snapshot`、`visual_style_snapshot` 与 `provider_adapter_snapshot`；`prompt_writing_profile_snapshot` 和 `creative_brief` 只用于 v1 历史任务。接口包括 `GET /script-skills`、`GET /director-skills`、`GET /visual-styles` 与 `GET /provider-adapter`。
 
-工作台创建区直接展示知识边界、Script Skill、Director Skill、Visual Style 和自动匹配的 Provider Adapter。任务详情可审计 `ContextPack`、`EditorialPlan`、确认后的脚本、TTS Timing、`StoryboardPlan v3`、`VisualBible`、每个镜头的具体事件/调度/摄影机 `ShotContextIR` 与只读 Provider Prompt；已经保存过研究简报的旧任务只读展示历史证据，不会再次联网。
+工作台创建区优先展示自然语言主输入、三种同场景视觉样片与可选参考图。当前 Script Skill 和 Director Skill 以一行创作引擎摘要呈现；只有未来存在多个可选方法时才显示切换控件。版本号、内部产物与 Provider 信息收纳在可折叠技术详情及任务审计中。任务详情仍可审计 `ContextPack`、`EditorialPlan`、确认后的脚本、TTS Timing、`StoryboardPlan v3`、`VisualBible`、每个镜头的具体事件/调度/摄影机 `ShotContextIR` 与只读 Provider Prompt；已经保存过研究简报的旧任务只读展示历史证据，不会再次联网。
 
 成片阶段的单镜头重生成只接受编辑者填写的 `revision_intent`。服务端会把它与冻结的 `VisualBible`、`ShotContextIR`、首帧和参考图角色通过 Provider Adapter 重新编译；前端只读展示最终提示词，不允许直接编辑或提交。局部修改不会反向改写脚本或导演世界，也不会重做旁白、图片章节或其他视频镜头。
 
