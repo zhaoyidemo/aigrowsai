@@ -188,7 +188,7 @@ class FinalApprovalRequest(RevisionRequest):
 
 
 class ShotRegenerationRequest(RevisionRequest):
-    prompt: str = Field(min_length=1, max_length=4000)
+    revision_intent: str = Field(min_length=1, max_length=600)
     first_frame_candidate_id: str = Field(default="", max_length=96)
     seedance_model: SeedanceModelId | Literal[""] = ""
 
@@ -936,7 +936,7 @@ async def regenerate_shot(
         actor,
         {
             "shot_id": shot_id,
-            "prompt": body.prompt,
+            "revision_intent": body.revision_intent,
             "first_frame_candidate_id": body.first_frame_candidate_id,
             "seedance_model": body.seedance_model,
             "expected_selected_fingerprint": selected_fingerprint,

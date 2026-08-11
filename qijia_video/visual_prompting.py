@@ -193,7 +193,15 @@ def compile_video_prompt(
     *,
     has_reference_image: bool,
     opening_direction: str = "",
+    revision_intent: str = "",
 ) -> str:
+    editor_revision = revision_intent.strip()[:600]
+    editor_direction = (
+        "在不改变输入首帧的主体身份、事实关系、安全边界和整体视觉连续性的"
+        f"前提下，本次重点调整：{editor_revision}"
+        if editor_revision
+        else ""
+    )
     if _uses_h3(profile):
         return _join_blocks(
             (
@@ -201,6 +209,7 @@ def compile_video_prompt(
                 "造型、材质、空间、构图、色彩与光影不变。"
             ),
             shot.motion_prompt.strip()[:1800],
+            editor_direction,
             (
                 "只生成无声画面；不新增任何可读文字、字幕、数字、Logo、"
                 "水印或界面。"
@@ -251,6 +260,7 @@ def compile_video_prompt(
             "空间、构图、配色和画风稳定。"
         ),
         f"【动作与运镜】{shot.motion_prompt[:1000]}",
+        editor_direction,
         (
             "本镜头只安排一个清楚可信的动作和一种克制运镜，结尾保持自然。"
             "只生成自然动画画面，不生成旁白或模型音频。不得新增任何文字、"

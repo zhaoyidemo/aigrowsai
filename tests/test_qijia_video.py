@@ -302,6 +302,19 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertLessEqual(len(maximum_prompt), 4000)
         self.assertNotIn("视频提示词结构", maximum_prompt)
         self.assertNotIn("风格动作语法", maximum_prompt)
+        revision_intent = "动作更克制，只做一次缓慢推进。"
+        revised_prompt = compile_video_prompt(
+            "风格基线",
+            collage.snapshot(),
+            profile.snapshot(),
+            maximum_shot,
+            has_reference_image=False,
+            revision_intent=revision_intent,
+        )
+        self.assertIn(maximum_shot.motion_prompt, revised_prompt)
+        self.assertIn(f"本次重点调整：{revision_intent}", revised_prompt)
+        self.assertIn("唯一视觉基准", revised_prompt)
+        self.assertIn("只生成无声画面", revised_prompt)
         maximum_frame_prompt = compile_first_frame_prompt(
             "风" * 3200,
             collage.snapshot(),
@@ -310,10 +323,36 @@ class QijiaVideoContractTests(unittest.TestCase):
             has_reference_image=True,
         )
         self.assertLessEqual(len(maximum_frame_prompt), 2000)
-        VisualGenerationRequest(
+        legacy_request = VisualGenerationRequest(
             request_id="shot_01",
             prompt=maximum_prompt,
         )
+        legacy_payload = legacy_request.model_dump(mode="json")
+        legacy_payload.pop("model_id")
+        legacy_payload.pop("revision_intent")
+        self.assertEqual(
+            legacy_request.fingerprint(),
+            content_hash(legacy_payload),
+        )
+        revised_request = legacy_request.model_copy(update={
+            "revision_intent": revision_intent,
+        })
+        self.assertNotEqual(
+            legacy_request.fingerprint(),
+            revised_request.fingerprint(),
+        )
+
+        api_request = qijia_api.ShotRegenerationRequest(
+            expected_revision=2,
+            revision_intent=revision_intent,
+        )
+        self.assertEqual(api_request.revision_intent, revision_intent)
+        with self.assertRaises(ValidationError):
+            qijia_api.ShotRegenerationRequest(
+                expected_revision=2,
+                revision_intent=revision_intent,
+                prompt="不得再接受前端直接传 Provider 提示词",
+            )
 
     def test_h3_keeps_content_style_and_reference_responsibilities_separate(self):
         style = default_visual_style_registry.resolve(
@@ -4394,11 +4433,15 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(len(frame_candidates), 1)
         frame_candidate = frame_candidates[0]
+        storyboard_shot = next(
+            item for item in job.storyboard_plan.shots if item.shot_id == shot_id
+        )
+        revision_intent = "一扇门缓慢打开，暖色光线进入房间。"
         events = []
         job = await self.service.regenerate_shot(
             job.id,
             shot_id,
-            "2.5D 编辑插画动画，一扇门缓慢打开，暖色光线进入房间。",
+            revision_intent,
             original.fingerprint(),
             self.actor,
             progress=events.append,
@@ -4414,9 +4457,13 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(versions[0].version_id, original_version.version_id)
         self.assertIsNotNone(versions[0].asset)
         self.assertIsNotNone(versions[1].asset)
-        self.assertEqual(versions[1].request.prompt, (
-            "2.5D 编辑插画动画，一扇门缓慢打开，暖色光线进入房间。"
-        ))
+        self.assertEqual(versions[0].request.revision_intent, "")
+        self.assertEqual(versions[1].request.revision_intent, revision_intent)
+        self.assertNotEqual(versions[1].request.prompt, revision_intent)
+        self.assertIn(storyboard_shot.motion_prompt, versions[1].request.prompt)
+        self.assertIn(revision_intent, versions[1].request.prompt)
+        self.assertIn("唯一视觉基准", versions[1].request.prompt)
+        self.assertIn("只生成无声画面", versions[1].request.prompt)
         self.assertIsNotNone(versions[1].request.seed)
         self.assertEqual(versions[0].request.model_id, SEEDANCE_EFFICIENT_MODEL)
         self.assertEqual(versions[1].request.model_id, SEEDANCE_FLAGSHIP_MODEL)
@@ -4426,9 +4473,6 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(selected.fingerprint(), versions[1].request.fingerprint())
         self.assertEqual(
             selected.first_frame_asset_id, frame_candidate.asset.asset_id
-        )
-        storyboard_shot = next(
-            item for item in job.storyboard_plan.shots if item.shot_id == shot_id
         )
         self.assertEqual(
             storyboard_shot.selected_candidate_id,
@@ -4465,6 +4509,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             item for item in job.visual_requests if item.request_id == shot_id
         )
         self.assertEqual(restored.fingerprint(), original.fingerprint())
+        self.assertEqual(restored.revision_intent, "")
         restored_storyboard_shot = next(
             item for item in job.storyboard_plan.shots if item.shot_id == shot_id
         )
@@ -4481,6 +4526,25 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             item for item in job.visual_versions if item.shot_id == shot_id
         ]), 2)
         self.assertEqual(len(self.service._all_video_tasks(job)), 4)
+
+        legacy_prompt = "历史后台任务已经冻结的完整镜头提示词。"
+        job = await self.service.regenerate_shot(
+            job.id,
+            shot_id,
+            "",
+            restored.fingerprint(),
+            self.actor,
+            _legacy_compiled_prompt=legacy_prompt,
+        )
+        legacy_selected = next(
+            item for item in job.visual_requests if item.request_id == shot_id
+        )
+        self.assertEqual(legacy_selected.prompt, legacy_prompt)
+        self.assertEqual(legacy_selected.revision_intent, "")
+        self.assertEqual(len([
+            item for item in job.visual_versions if item.shot_id == shot_id
+        ]), 3)
+        self.assertEqual(len(self.service._all_video_tasks(job)), 5)
 
     async def test_editor_media_can_mix_images_and_videos_and_restore_ai(self):
         card = await self.service.create_source_card(valid_card(), self.actor)

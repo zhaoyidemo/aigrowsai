@@ -31,9 +31,11 @@ H3 编排和两种纸艺视觉风格是对 [MiniMax-H3](https://github.com/MiniM
 
 视觉风格位于 `qijia_video/visual_styles/`，内部提示词方法位于 `qijia_video/prompt_writing_profiles/`。创建任务时分别冻结 `visual_style_snapshot`、`prompt_writing_profile_snapshot` 及对应版本；旧任务没有这些快照时继续使用原提示词。冲突优先级固定为：事实/安全与领域边界 > 本章可见语义 > 参考素材已经定义的视觉属性 > 视觉风格对未定义属性的补全 > Provider 语法。参考图不是事实来源。只读目录接口为 `GET /api/qijia-video/visual-styles`。
 
-工作台会在创建区以只读状态显示当前自动启用的 Prompt Writing Profile，并在任务详情持续展示本任务冻结的 Content Skill、Visual Style 与 Prompt Writing Profile；旧任务则明确标记为兼容模式。
+工作台创建区优先展示 Content Skill、带画面预览的 Visual Style 与一行生产规格；H3 架构和详细规格按需展开。Prompt Writing Profile 只读且自动启用，自定义脚本提示词必须为下一条任务显式开启，不写入浏览器，也不会改变 H3 或视觉风格。任务详情先展示当前动作、下一步与五个业务阶段，再按需展开本任务冻结的 Content Skill、Visual Style 与 Prompt Writing Profile；旧任务明确标记为兼容模式。
 
-新任务 API 不再接受可编辑的 `seedance_prompt`，脚本确认页也不再暴露“全片画面导演设定”。调用方只提交 Visual Style；工作台仍保留旧字段和旧 Profile 的读取能力，以便已经冻结的历史任务继续恢复和重试。
+成片阶段的单镜头重生成只接受编辑者填写的 `revision_intent`。服务端会把它与冻结的分镜语义、首帧、视觉风格、参考图边界和 H3 Profile 重新编译为 Provider 提示词；前端只读展示编译结果，不允许直接编辑或提交 Provider 提示词，旧请求未包含 `revision_intent` 时仍保持原指纹。这样局部修改不会绕过 H3，也不会重做旁白、图片章节或其他视频镜头。
+
+新任务 API 不再接受可编辑的 `seedance_prompt`，脚本确认页也不再暴露“全片画面导演设定”。调用方只提交 Visual Style；脚本确认前会按已发生调用、旁白字数、Seedream 张数和 3 段 Seedance 的 8–10 秒区间展示整单人民币刊例价预估，自有素材模式会明确说明未生成画面从实际费用扣除。工作台仍保留旧字段和旧 Profile 的读取能力，以便已经冻结的历史任务继续恢复和重试。
 
 ## 当前真实链路
 

@@ -2130,6 +2130,68 @@ class QijiaVideoService:
         )
 
     @staticmethod
+    def _opening_direction_for_shot(job: VideoJob, shot_id: str) -> str:
+        first_shot_id = (
+            job.storyboard_plan.shots[0].shot_id
+            if job.storyboard_plan and job.storyboard_plan.shots
+            else (
+                job.visual_requests[0].request_id
+                if job.visual_requests
+                else ""
+            )
+        )
+        if shot_id != first_shot_id:
+            return ""
+        return (
+            "【抖音开场执行】这是全片第一个镜头。首帧已经处在冲突、反差或关键选择中；"
+            "人物动作从第一帧立即发生，不要空镜、缓慢入场或先建立环境。前 2 秒让关系"
+            "与矛盾清楚，前 5 秒通过自然反应或构图变化提供第二层信息。\n"
+        )
+
+    @classmethod
+    def _compile_shot_revision_prompt(
+        cls,
+        job: VideoJob,
+        shot_id: str,
+        revision_intent: str,
+    ) -> str:
+        storyboard_shot = (
+            next(
+                (
+                    item
+                    for item in job.storyboard_plan.shots
+                    if item.shot_id == shot_id
+                ),
+                None,
+            )
+            if job.storyboard_plan
+            else None
+        )
+        if storyboard_shot is None:
+            # Historical jobs may not have a structured storyboard. They still
+            # go through the compiler and safety boundaries instead of treating
+            # editor text as a provider-ready prompt.
+            storyboard_shot = StoryboardShot(
+                shot_id=shot_id,
+                segment_id=shot_id,
+                narration_excerpt="沿用已确认脚本与当前首帧。",
+                visual_type="video",
+                visual_intent=revision_intent,
+                first_frame_prompt="沿用当前已选择的首帧。",
+                motion_prompt="从当前首帧自然延展。",
+            )
+        settings = cls._generation_settings(job)
+        return compile_video_prompt(
+            settings.seedance_prompt,
+            job.visual_style_snapshot,
+            job.prompt_writing_profile_snapshot,
+            storyboard_shot,
+            has_reference_image=cls._has_reference_image(job),
+            opening_direction=cls._opening_direction_for_shot(job, shot_id),
+            revision_intent=revision_intent,
+        )
+
+    @staticmethod
     def _image_format(path: Path) -> tuple[str, str]:
         with path.open("rb") as handle:
             header = handle.read(16)
@@ -2419,7 +2481,7 @@ class QijiaVideoService:
                 )
             }
             requests: list[VisualGenerationRequest] = []
-            for shot_index, shot in enumerate(job.storyboard_plan.shots):
+            for shot in job.storyboard_plan.shots:
                 if shot.visual_type != "video" or shot.selected_media_id:
                     continue
                 candidate = candidates_by_id.get(shot.selected_candidate_id)
@@ -2427,12 +2489,8 @@ class QijiaVideoService:
                     raise QualityGateFailed(
                         f"分镜 {shot.shot_id} 缺少已选中的首帧资产"
                     )
-                opening_direction = (
-                    "【抖音开场执行】这是全片第一个镜头。首帧已经处在冲突、反差或关键选择中；"
-                    "人物动作从第一帧立即发生，不要空镜、缓慢入场或先建立环境。前 2 秒让关系"
-                    "与矛盾清楚，前 5 秒通过自然反应或构图变化提供第二层信息。\n"
-                    if shot_index == 0
-                    else ""
+                opening_direction = cls._opening_direction_for_shot(
+                    job, shot.shot_id
                 )
                 prompt = compile_video_prompt(
                     settings.seedance_prompt,
@@ -4485,12 +4543,13 @@ class QijiaVideoService:
         self,
         job_id: str,
         shot_id: str,
-        prompt: str,
+        revision_intent: str,
         expected_selected_fingerprint: str,
         actor: Actor,
         progress: ProgressReporter | None = None,
         first_frame_candidate_id: str = "",
         seedance_model: str = "",
+        _legacy_compiled_prompt: str = "",
     ) -> VideoJob:
         job = await self.get_job(job_id, actor)
         resuming = job.state == JobState.PRODUCING and bool(job.review_bundle_hash)
@@ -4504,9 +4563,21 @@ class QijiaVideoService:
             raise InvalidTransition("指定的 AI 镜头不存在")
         if current.fingerprint() != expected_selected_fingerprint:
             raise RevisionConflict("该镜头已切换版本，请刷新后重试")
-        cleaned_prompt = str(prompt or "").strip()
-        if not cleaned_prompt:
-            raise QualityGateFailed("镜头提示词不能为空")
+        legacy_prompt = str(_legacy_compiled_prompt or "").strip()
+        if legacy_prompt:
+            if len(legacy_prompt) > 4000:
+                raise QualityGateFailed("历史镜头提示词不能超过 4000 个字符")
+            cleaned_intent = ""
+            compiled_prompt = legacy_prompt
+        else:
+            cleaned_intent = str(revision_intent or "").strip()
+            if not cleaned_intent:
+                raise QualityGateFailed("镜头修改意图不能为空")
+            if len(cleaned_intent) > 600:
+                raise QualityGateFailed("镜头修改意图不能超过 600 个字符")
+            compiled_prompt = self._compile_shot_revision_prompt(
+                job, shot_id, cleaned_intent
+            )
         requested_model = str(seedance_model or "").strip()
         if not requested_model:
             requested_model = self._seedance_model_for_request(job, current)
@@ -4549,7 +4620,8 @@ class QijiaVideoService:
                         item
                         for item in job.visual_versions
                         if item.shot_id == shot_id
-                        and item.request.prompt == cleaned_prompt
+                        and item.request.prompt == compiled_prompt
+                        and item.request.revision_intent == cleaned_intent
                         and item.request.first_frame_asset_id
                         == requested_frame_asset_id
                         and self._seedance_model_for_request(job, item.request)
@@ -4586,7 +4658,8 @@ class QijiaVideoService:
                 }
                 while True:
                     request = current.model_copy(update={
-                        "prompt": cleaned_prompt,
+                        "prompt": compiled_prompt,
+                        "revision_intent": cleaned_intent,
                         "model_id": requested_model,
                         "seed": secrets.randbits(32),
                         "first_frame_asset_id": requested_frame_asset_id,
@@ -4595,7 +4668,10 @@ class QijiaVideoService:
                         break
                 self._report(
                     progress,
-                    message=f"正在提交 AI 镜头 {shot_number}/5 的新版本…",
+                    message=(
+                        f"正在提交 AI 镜头 {shot_number}/"
+                        f"{len(job.visual_requests)} 的新版本…"
+                    ),
                     stage=stage,
                     percent=48,
                     workflow="shot_edit",
@@ -4676,7 +4752,10 @@ class QijiaVideoService:
                     )
                 self._report(
                     progress,
-                    message=f"AI 镜头 {shot_number}/5 的新版本生成中…",
+                    message=(
+                        f"AI 镜头 {shot_number}/{len(job.visual_requests)} "
+                        "的新版本生成中…"
+                    ),
                     stage=stage,
                     percent=58,
                     workflow="shot_edit",

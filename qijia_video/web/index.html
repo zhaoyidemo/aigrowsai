@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.21.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.22.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -65,7 +65,7 @@
               <strong>本轮成本保护</strong>
               <span>最多 13 次 TikHub 请求 + 1 次编辑模型调用</span>
             </div>
-            <button id="topic-start-button" class="button primary topic-start-button" type="button">开始研究今日选题</button>
+            <button id="topic-start-button" class="button primary topic-start-button" type="button" data-busy-lock>开始研究今日选题</button>
             <p id="topic-start-hint" class="field-hint">点击即确认本轮可能产生 API 费用；不会自动发布或自动生成视频。</p>
             <section id="topic-progress" class="topic-progress" aria-live="polite" hidden>
               <div class="topic-progress-copy"><strong>研究进行中</strong><span id="topic-progress-text">正在准备…</span></div>
@@ -102,87 +102,37 @@
     </section>
 
     <section id="production-workspace" class="workspace-view" role="tabpanel" aria-labelledby="production-tab" hidden>
+    <div class="production-view-tabs" role="tablist" aria-label="视频生产页面">
+      <button class="production-view-tab active" type="button" role="tab" aria-selected="true" data-production-pane="create">新建视频</button>
+      <button class="production-view-tab" type="button" role="tab" aria-selected="false" data-production-pane="jobs">视频任务 <span id="production-task-count">0</span></button>
+    </div>
     <div class="workspace-grid">
-      <aside class="left-column">
+      <aside class="left-column" data-production-column="create">
         <section class="panel">
           <div class="panel-heading">
             <div><p class="step">01</p><h2>开始一条视频</h2></div>
-            <button id="new-card-button" class="button secondary" type="button">新建</button>
           </div>
-          <section id="generation-orchestration" class="generation-orchestration" aria-labelledby="generation-orchestration-title">
-            <div class="orchestration-heading">
-              <div>
-                <p class="step">生成架构</p>
-                <h3 id="generation-orchestration-title">内容、视觉与可选参考，由 H3 编译为三类镜头指令</h3>
-              </div>
-              <span class="orchestration-lock">编排层固定</span>
-            </div>
-            <div class="orchestration-inputs">
-              <label class="orchestration-input skill-setting" for="content-skill">
-                <span class="orchestration-node-label">输入 01 · 内容约束</span>
-                <strong>讲什么，以及什么不能乱讲</strong>
-                <select id="content-skill" aria-label="内容 Skill"></select>
-                <small id="content-skill-description">决定事实依据、叙事目标与视觉禁区。</small>
-                <span class="orchestration-responsibility">只负责内容，不提供画风和运镜</span>
-              </label>
-              <label class="orchestration-input visual-style-setting" for="visual-style">
-                <span class="orchestration-node-label">输入 02 · 视觉语言</span>
-                <strong>这条内容应该长什么样</strong>
-                <select id="visual-style" aria-label="视觉表现"></select>
-                <small id="visual-style-description">决定艺术语言、材质、色彩与造型倾向。</small>
-                <span class="orchestration-responsibility">只补全外观，不改写内容语义</span>
-              </label>
-            </div>
-            <div class="orchestration-reference-input">
-              <span>可选输入 · 参考图</span>
-              <div>
-                <strong id="orchestration-reference-name" aria-live="polite">未上传参考图</strong>
-                <small>只接管图片已经定义的人物、色彩和画面属性，不提供事实，也不覆盖镜头语义。</small>
-              </div>
-              <button id="orchestration-reference-action" type="button">上传参考图</button>
-            </div>
-            <div class="orchestration-merge" aria-hidden="true">
-              <span></span><strong>合并，但不互相覆盖</strong><span></span>
-            </div>
-            <section class="orchestration-core prompt-profile-setting" aria-labelledby="prompt-profile-label">
-              <div class="orchestration-core-heading">
-                <div>
-                  <span id="prompt-profile-label">唯一编排层</span>
-                  <strong id="prompt-profile-name">正在读取 H3</strong>
-                </div>
-                <small id="prompt-profile-version">自动启用</small>
-              </div>
-              <p id="prompt-profile-description">H3 统一判断每个镜头该呈现什么，再生成首帧和首帧驱动视频提示词。</p>
-              <p class="orchestration-selection" aria-live="polite">
-                <span id="orchestration-content-name">正在读取内容 Skill</span>
-                <b>+</b>
-                <span id="orchestration-style-name">正在读取视觉风格</span>
-                <b>→</b>
-                <strong id="orchestration-profile-summary">H3 统一编排</strong>
-              </p>
-              <ol class="orchestration-priority" aria-label="提示词冲突优先级">
-                <li>事实与安全</li>
-                <li>镜头语义</li>
-                <li id="reference-priority-state">参考图属性（未上传）</li>
-                <li>视觉风格补全</li>
-                <li>Provider 语法</li>
-              </ol>
+          <section class="creation-direction" aria-label="内容与视觉方向">
+            <label class="creation-setting skill-setting" for="content-skill">
+              <span>内容类型</span>
+              <strong>先确定讲什么、依据什么</strong>
+              <select id="content-skill" aria-label="内容 Skill"></select>
+              <small id="content-skill-description">决定事实依据、叙事目标与视觉禁区。</small>
+            </label>
+            <section class="creation-setting visual-style-setting" aria-labelledby="visual-style-label">
+              <span id="visual-style-label">视觉表现</span>
+              <strong>选择观众实际会看到的画面语言</strong>
+              <select id="visual-style" aria-label="视觉表现"></select>
+              <small id="visual-style-description">只补全外观，不改写内容语义。</small>
+              <div id="visual-style-previews" class="visual-style-previews" aria-label="视觉风格预览"></div>
             </section>
-            <div class="orchestration-output">
-              <span class="orchestration-output-label">编译输出</span>
-              <div class="orchestration-output-grid">
-                <article><span>01</span><strong>分镜语义</strong><small>每个镜头表达什么</small></article>
-                <article><span>02</span><strong>首帧提示词</strong><small>直接交给 Seedream</small></article>
-                <article><span>03</span><strong>I2V 动作提示词</strong><small>锚定首帧驱动 Seedance</small></article>
-              </div>
-            </div>
-            <p class="orchestration-boundary">Seedream、Seedance 等模型只执行最终提示词，不参与内容 Skill 与提示词方法的职责分配。</p>
           </section>
-          <section class="production-specs" aria-labelledby="production-specs-title">
-            <div class="production-specs-heading">
-              <strong id="production-specs-title">生产规格</strong>
-              <small>影响成本、时长与成片规格，不参与提示词职责分配</small>
-            </div>
+          <details class="production-specs" aria-labelledby="production-specs-title">
+            <summary class="production-specs-heading">
+              <span><strong id="production-specs-title">生产规格</strong><small>画质、镜头数量与旁白</small></span>
+              <span id="production-spec-summary">1080P · 3 段视频 + 10 段动态图片 · 1.2x</span>
+            </summary>
+            <div class="production-specs-body">
           <label class="video-quality-setting" for="video-resolution">
             <span class="video-quality-copy">
               <strong>视频画质</strong>
@@ -224,7 +174,8 @@
               </label>
             </div>
           </section>
-          </section>
+            </div>
+          </details>
           <section id="topic-handoff" class="topic-handoff" hidden>
             <div class="topic-handoff-heading">
               <div><span>已采用选题</span><strong id="topic-handoff-title"></strong></div>
@@ -246,7 +197,7 @@
                 <input name="rights_confirmed" type="checkbox" required>
                 <span>我已核对这份资料，并确认可以用于本次内容创作。</span>
               </label>
-              <button id="topic-source-submit" class="button primary" type="submit">确认资料并生成脚本</button>
+              <button id="topic-source-submit" class="button primary" type="submit" data-busy-lock>确认资料并生成脚本</button>
             </form>
           </section>
           <p id="manual-intake-intro" class="panel-note intake-intro">输入一个人物和他的核心观点，系统会先自动研究可追溯资料，再把观点中的冲突、反直觉与现实意义展开成完整视频脚本。</p>
@@ -283,7 +234,7 @@
               <p class="field-hint">上传后，它会成为全部视觉章节的最高优先级视觉基准，但不作为观点依据。JPG、PNG 或 WebP，最大 10 MB。</p>
             </section>
             <div class="actions source-form-actions">
-              <button id="source-submit-button" class="button primary" type="submit">生成脚本</button>
+              <button id="source-submit-button" class="button primary" type="submit" data-busy-lock>生成脚本</button>
             </div>
           </form>
           <form id="news-topic-form" class="form-stack" hidden>
@@ -308,18 +259,73 @@
               <input name="target_audience" maxlength="160" value="关注该主题的普通用户">
             </label>
             <div class="actions source-form-actions">
-              <button id="news-submit-button" class="button primary" type="submit">检索新闻并生成脚本</button>
+              <button id="news-submit-button" class="button primary" type="submit" data-busy-lock>检索新闻并生成脚本</button>
             </div>
           </form>
+          <details id="generation-orchestration" class="generation-orchestration">
+            <summary>
+              <span><strong>H3 如何统领画面生成</strong><small>固定编排层 · 可选查看</small></span>
+              <span>查看方法</span>
+            </summary>
+            <div class="generation-orchestration-body">
+              <div class="orchestration-heading">
+                <div>
+                  <p class="step">生成架构</p>
+                  <h3>内容约束、视觉语言与可选参考图，由 H3 编译为三类镜头指令</h3>
+                </div>
+                <span class="orchestration-lock">编排层固定</span>
+              </div>
+              <section class="orchestration-core prompt-profile-setting" aria-labelledby="prompt-profile-label">
+                <div class="orchestration-core-heading">
+                  <div>
+                    <span id="prompt-profile-label">唯一编排层</span>
+                    <strong id="prompt-profile-name">正在读取 H3</strong>
+                  </div>
+                  <small id="prompt-profile-version">自动启用</small>
+                </div>
+                <p id="prompt-profile-description">H3 统一判断每个镜头该呈现什么，再生成首帧和首帧驱动视频提示词。</p>
+                <p class="orchestration-selection" aria-live="polite">
+                  <span id="orchestration-content-name">正在读取内容 Skill</span>
+                  <b>+</b>
+                  <span id="orchestration-style-name">正在读取视觉风格</span>
+                  <b>→</b>
+                  <strong id="orchestration-profile-summary">H3 统一编排</strong>
+                </p>
+                <ol class="orchestration-priority" aria-label="提示词冲突优先级">
+                  <li>事实与安全</li>
+                  <li>镜头语义</li>
+                  <li id="reference-priority-state">参考图属性（未上传）</li>
+                  <li>视觉风格补全</li>
+                  <li>Provider 语法</li>
+                </ol>
+              </section>
+              <div class="orchestration-output">
+                <span class="orchestration-output-label">H3 编译输出</span>
+                <div class="orchestration-output-grid">
+                  <article><span>01</span><strong>分镜语义</strong><small>每个镜头表达什么</small></article>
+                  <article><span>02</span><strong>首帧提示词</strong><small>交给 Seedream 执行</small></article>
+                  <article><span>03</span><strong>I2V 动作提示词</strong><small>锚定首帧驱动 Seedance</small></article>
+                </div>
+              </div>
+              <p class="orchestration-boundary">参考图只接管已经定义的视觉属性，不提供事实，也不覆盖镜头语义。Seedream、Seedance 等模型只执行最终提示词，不参与职责分配。</p>
+            </div>
+          </details>
           <details id="generation-prompt-settings" class="advanced-settings prompt-settings global-prompt-settings">
-            <summary>调整脚本生成提示词（实验用）</summary>
-            <p class="field-hint">默认值可以直接使用。修改后会用于下一条新建视频，并保存在当前浏览器中；视觉提示词由上方显示的 H3 方法统一编排，避免多套导演规则互相覆盖。</p>
-            <label>脚本生成提示词
-              <textarea id="script-generation-prompt" rows="11" maxlength="8000" spellcheck="false"></textarea>
-              <span class="field-hint">来源卡和 JSON 输出结构由系统自动附加；修改只影响当前所选 Skill 的下一条新任务。</span>
+            <summary><span>脚本提示词高级设置</span><span id="script-prompt-mode-badge">系统默认</span></summary>
+            <p class="field-hint">默认由当前 Content Skill 提供并锁定，不会继承浏览器里的旧自定义内容。视觉提示词始终由 H3 统一编排。</p>
+            <label class="confirmation-check custom-prompt-toggle">
+              <input id="enable-custom-script-prompt" type="checkbox">
+              <span><strong>为下一条任务显式启用自定义脚本提示词</strong><small>只影响脚本内容，不改变 H3、视觉表现或 Provider 边界。</small></span>
             </label>
-            <div class="prompt-actions">
-              <button id="restore-prompt-defaults" class="button secondary" type="button">恢复默认脚本提示词</button>
+            <div id="custom-script-prompt-fields" hidden>
+              <p id="custom-script-prompt-warning" class="prompt-mode-warning">自定义模式已启用。当前任务将不再使用 Content Skill 的标准脚本提示词。</p>
+              <label>自定义脚本提示词
+                <textarea id="script-generation-prompt" rows="11" maxlength="8000" spellcheck="false" readonly></textarea>
+                <span class="field-hint">来源卡和 JSON 输出结构仍由系统自动附加；此内容不会保存到浏览器，也不会静默影响下一条任务。</span>
+              </label>
+              <div class="prompt-actions">
+                <button id="restore-prompt-defaults" class="button secondary" type="button">退出自定义并恢复默认</button>
+              </div>
             </div>
           </details>
         </section>
@@ -330,7 +336,7 @@
         </section>
       </aside>
 
-      <section class="right-column">
+      <section class="right-column" data-production-column="jobs">
         <section class="panel">
           <div class="panel-heading">
             <div><p class="step">02—05</p><h2>视频任务</h2></div>
@@ -345,12 +351,6 @@
             <span id="job-state" class="state-pill"></span>
           </div>
           <p id="job-access-note" class="resource-access-note" hidden></p>
-          <section id="job-generation-methods" class="job-generation-methods" aria-label="本任务使用的生成方法"></section>
-          <section id="job-reference-image" class="job-reference-image" hidden>
-            <img id="job-reference-preview" alt="本任务的全局参考图">
-            <div><strong>全局参考图已应用</strong><span>优先统一全部视觉章节的画风、色彩与人物造型</span></div>
-          </section>
-          <ol id="stage-track" class="stage-track" aria-label="生产进度"></ol>
           <section class="workflow-summary" aria-live="polite" aria-label="当前链路状态">
             <div class="workflow-summary-item current">
               <span>当前动作</span>
@@ -364,6 +364,15 @@
               <span>下一步</span>
               <strong id="next-action">系统将自动继续</strong>
             </div>
+          </section>
+          <ol id="stage-track" class="stage-track" aria-label="生产进度"></ol>
+          <section id="production-progress" class="task-subprogress" hidden>
+            <div><strong>当前阶段进度</strong><span id="task-progress">等待后台任务…</span></div>
+            <div id="task-progress-meter" class="progress" role="progressbar" aria-label="自动流程总进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="task-progress-bar"></span></div>
+          </section>
+          <section id="job-reference-image" class="job-reference-image" hidden>
+            <img id="job-reference-preview" alt="本任务的全局参考图">
+            <div><strong>全局参考图已应用</strong><span>优先统一全部视觉章节的画风、色彩与人物造型</span></div>
           </section>
           <section id="seedance-usage-summary" class="usage-summary" aria-label="AI 生成用量" hidden>
             <div class="usage-stat">
@@ -384,6 +393,7 @@
               <p id="seedance-price-basis" class="field-hint"></p>
             </details>
           </section>
+          <details id="job-generation-methods" class="job-generation-methods"></details>
           <div id="job-error" class="error-box" hidden></div>
           <section id="script-review" class="review-section" hidden>
             <div class="section-title"><h3>脚本确认</h3><span id="script-review-spec">确认后开始配音与画面生成</span></div>
@@ -410,7 +420,7 @@
                 </label>
               </div>
               <div class="tts-preview-row">
-                <button id="preview-tts-button" class="button secondary" type="button">保存并试听开场</button>
+                <button id="preview-tts-button" class="button secondary" type="button" data-busy-lock>保存并试听开场</button>
                 <audio id="tts-preview-audio" controls preload="none" hidden></audio>
               </div>
               <p id="tts-preview-status" class="field-hint" aria-live="polite">重复播放同一试听不会重复计费。</p>
@@ -426,6 +436,14 @@
               <div id="script-beat-editor" class="script-beat-editor"></div>
               <p class="field-hint script-document-hint">每一段都包含画面、旁白和可选的屏幕文字。只有旁白会进入配音；屏幕文字由 Remotion 后期排版，不会让 AI 直接画字。</p>
             </section>
+            <section id="script-cost-estimate" class="script-cost-estimate" aria-live="polite">
+              <div>
+                <span>整单成本预估</span>
+                <strong id="script-cost-total">正在按本任务规格计算…</strong>
+              </div>
+              <p id="script-cost-breakdown">包含已发生调用、完整旁白、全部首帧和 3 段默认 AI 视频。</p>
+              <small id="script-cost-basis">刊例价估算，最终以供应商账单和实际生成时长为准。</small>
+            </section>
             <label class="pre-generation-media-choice" for="prepare-media-first">
               <input id="prepare-media-first" type="checkbox">
               <span>
@@ -434,13 +452,9 @@
               </span>
             </label>
             <div class="actions">
-              <button id="save-script-button" class="button secondary" type="button">保存修改</button>
-              <button id="approve-script-button" class="button primary" type="button">确认脚本并生成</button>
+              <button id="save-script-button" class="button secondary" type="button" data-busy-lock>保存修改</button>
+              <button id="approve-script-button" class="button primary" type="button" data-busy-lock>确认脚本并生成</button>
             </div>
-          </section>
-          <section id="production-progress" class="review-section" hidden>
-            <div class="section-title"><h3>自动流程进行中</h3><span id="task-progress">等待后台任务…</span></div>
-            <div id="task-progress-meter" class="progress" role="progressbar" aria-label="自动流程总进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="task-progress-bar"></span></div>
           </section>
           <section id="shot-storyboard" class="review-section storyboard-section" hidden>
             <div class="section-title storyboard-heading">
@@ -457,7 +471,7 @@
                 <strong id="pre-generation-media-title">生成前素材安排</strong>
                 <span id="pre-generation-media-detail">上传自己的素材后，系统只生成剩余 AI 画面</span>
               </div>
-              <button id="confirm-pre-generation-media-button" class="button primary" type="button">确认素材并生成剩余画面</button>
+              <button id="confirm-pre-generation-media-button" class="button primary" type="button" data-busy-lock>确认素材并生成剩余画面</button>
             </div>
             <div id="pending-shot-media-bar" class="pending-shot-media-bar" hidden>
               <div>
@@ -465,8 +479,8 @@
                 <span id="pending-shot-media-detail">素材已准备，当前成片尚未改变</span>
               </div>
               <div class="pending-shot-media-actions">
-                <button id="discard-pending-shot-media-button" class="button secondary" type="button">撤销全部</button>
-                <button id="apply-pending-shot-media-button" class="button primary" type="button">一次应用并重新生成成片</button>
+                <button id="discard-pending-shot-media-button" class="button secondary" type="button" data-busy-lock>撤销全部</button>
+                <button id="apply-pending-shot-media-button" class="button primary" type="button" data-busy-lock>一次应用并重新生成成片</button>
               </div>
             </div>
           </section>
@@ -475,7 +489,7 @@
             <video id="draft-video" controls preload="metadata" playsinline></video>
             <figure class="cover-preview"><img id="draft-cover" alt="待确认视频封面"><figcaption>封面同时属于本次确认对象</figcaption></figure>
             <div id="quality-summary" class="quality-grid"></div>
-            <button id="approve-final-button" class="button primary" type="button">确认成片包并生成发布版本</button>
+            <button id="approve-final-button" class="button primary" type="button" data-busy-lock>确认成片包并生成发布版本</button>
           </section>
           <section id="artifact-section" class="review-section" hidden>
             <div class="section-title"><h3>下载发布内容</h3><span>优先使用完整发布包</span></div>
@@ -501,7 +515,7 @@
               <label for="douyin-link-input">发布后粘贴抖音视频链接
                 <textarea id="douyin-link-input" rows="2" maxlength="4000" placeholder="支持抖音分享文本、v.douyin.com 短链或 www.douyin.com/video/... 标准链接" spellcheck="false"></textarea>
               </label>
-              <button id="douyin-bind-button" class="button primary" type="submit">绑定并读取作品数据</button>
+              <button id="douyin-bind-button" class="button primary" type="submit" data-busy-lock>绑定并读取作品数据</button>
             </form>
             <div id="douyin-performance-result" hidden>
               <div class="douyin-performance-heading">
@@ -517,7 +531,7 @@
                   <span id="douyin-refresh-hint">作品数据不会自动更新，请点击按钮手动刷新。</span>
                   <span id="douyin-refresh-status" class="douyin-refresh-status" role="status" aria-live="polite" hidden></span>
                 </div>
-                <button id="douyin-refresh-button" class="button primary" type="button">手动刷新作品数据</button>
+                <button id="douyin-refresh-button" class="button primary" type="button" data-busy-lock>手动刷新作品数据</button>
               </div>
               <p class="douyin-metric-group-title">抖音累计数据</p>
               <div class="douyin-platform-grid">
@@ -546,15 +560,15 @@
             <p class="cost-note">TikHub 本次未返回的互动指标显示为“未返回”，不会按 0 记录。</p>
             <p id="douyin-cost-warning" class="performance-warning" hidden></p>
           </section>
-          <button id="revise-script-button" class="button primary" type="button" hidden>返回修改脚本</button>
-          <button id="retry-button" class="button danger" type="button" hidden>从失败阶段重试</button>
+          <button id="revise-script-button" class="button primary" type="button" data-busy-lock hidden>返回修改脚本</button>
+          <button id="retry-button" class="button danger" type="button" data-busy-lock hidden>从失败阶段重试</button>
           <p id="research-retry-detail" class="cost-note" hidden></p>
-          <button id="retry-research-button" class="button danger" type="button" hidden>重新研究并生成脚本（产生一次检索费用）</button>
+          <button id="retry-research-button" class="button danger" type="button" data-busy-lock hidden>重新研究并生成脚本（产生一次检索费用）</button>
         </section>
       </section>
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.21.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.22.0"></script>
 </body>
 </html>

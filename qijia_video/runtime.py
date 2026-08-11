@@ -451,10 +451,18 @@ async def _execute(
         elif action == "package":
             job = await runtime.service.package(job_id, actor, progress=report)
         elif action == "regenerate_shot":
+            # Tasks created before 1.22.0 persisted a fully compiled `prompt`.
+            # Only the internal recovery path may replay that frozen payload;
+            # the current API strictly accepts `revision_intent` instead.
+            legacy_compiled_prompt = (
+                str(parameters.get("prompt") or "")
+                if "revision_intent" not in parameters
+                else ""
+            )
             job = await runtime.service.regenerate_shot(
                 job_id,
                 str(parameters.get("shot_id") or ""),
-                str(parameters.get("prompt") or ""),
+                str(parameters.get("revision_intent") or ""),
                 str(parameters.get("expected_selected_fingerprint") or ""),
                 actor,
                 progress=report,
@@ -462,6 +470,7 @@ async def _execute(
                     parameters.get("first_frame_candidate_id") or ""
                 ),
                 seedance_model=str(parameters.get("seedance_model") or ""),
+                _legacy_compiled_prompt=legacy_compiled_prompt,
             )
         elif action == "select_shot_version":
             job = await runtime.service.select_shot_version(

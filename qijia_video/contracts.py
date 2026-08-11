@@ -1186,6 +1186,9 @@ class VisualGenerationRequest(ContractModel):
 
     request_id: str = Field(min_length=1, max_length=64)
     prompt: str = Field(min_length=1, max_length=4000)
+    # Human editors describe the desired change in semantic language. The
+    # provider prompt remains a compiled, read-only artifact.
+    revision_intent: str = Field(default="", max_length=600)
     model_id: SeedanceModelId | Literal[""] = ""
     resolution: Literal["480p", "720p", "1080p"] = "480p"
     ratio: Literal["9:16"] = "9:16"
@@ -1201,6 +1204,10 @@ class VisualGenerationRequest(ContractModel):
         # their paid-request fingerprint, so polling can never become a submit.
         if not payload.get("model_id"):
             payload.pop("model_id", None)
+        # Preserve fingerprints for requests persisted before semantic shot
+        # revisions were introduced.
+        if not payload.get("revision_intent"):
+            payload.pop("revision_intent", None)
         return content_hash(payload)
 
 

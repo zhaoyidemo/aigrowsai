@@ -58,48 +58,51 @@ test('content Skills select versioned expert or recent-news workflows', () => {
   assert.match(app, /unexpected_response_fields/);
   assert.match(app, /validation_errors/);
   assert.match(app, /实际联网检索次数：供应商未回传/);
-  assert.match(app, /recent_news_research: 1/);
+  assert.match(app, /recent_news_research: 0/);
   assert.match(app, /job\.skill_snapshot\?\.display_name/);
 });
 
 test('visual styles are selected and frozen independently from content Skills and models', () => {
   assert.match(page, /id="visual-style"/);
-  assert.match(page, /输入 02 · 视觉语言/);
+  assert.match(page, /选择观众实际会看到的画面语言/);
   assert.match(page, /只补全外观，不改写内容语义/);
   assert.match(app, /DEFAULT_VISUAL_STYLE_ID = 'content-skill-default'/);
   assert.doesNotMatch(app, /function visualStyleGenerationDefaults/);
   assert.match(app, /visual_style_id: requestedStyle\.style_id/);
   assert.match(app, /visual_style_version: requestedStyle\.version/);
   assert.match(app, /job\.visual_style_snapshot\?\.display_name/);
+  assert.match(page, /id="visual-style-previews"/);
+  assert.match(app, /function renderVisualStylePreviews/);
+  assert.match(app, /data-visual-style-id/);
   assert.match(styles, /\.visual-style-setting/);
+  assert.match(styles, /\.visual-style-preview/);
 });
 
 test('H3 is shown as the compiler between independent inputs and media prompts', () => {
-  assert.match(page, /id="generation-orchestration"/);
-  assert.match(page, /内容、视觉与可选参考，由 H3 编译为三类镜头指令/);
-  assert.match(page, /输入 01 · 内容约束/);
-  assert.match(page, /输入 02 · 视觉语言/);
-  assert.match(page, /可选输入 · 参考图/);
-  assert.match(page, /id="orchestration-reference-action"/);
+  assert.match(page, /<details id="generation-orchestration"/);
+  assert.match(page, /内容约束、视觉语言与可选参考图，由 H3 编译为三类镜头指令/);
+  assert.match(page, /先确定讲什么、依据什么/);
+  assert.match(page, /选择观众实际会看到的画面语言/);
   assert.match(page, /不提供事实，也不覆盖镜头语义/);
-  assert.match(page, /合并，但不互相覆盖/);
   assert.match(page, /id="prompt-profile-name"/);
   assert.match(page, /id="prompt-profile-version">自动启用/);
   assert.match(page, /唯一编排层/);
   assert.match(page, /事实与安全[\s\S]*镜头语义[\s\S]*参考图属性[\s\S]*视觉风格补全[\s\S]*Provider 语法/);
   assert.match(page, /分镜语义[\s\S]*首帧提示词[\s\S]*I2V 动作提示词/);
-  assert.match(page, /模型只执行最终提示词，不参与内容 Skill 与提示词方法的职责分配/);
-  assert.match(page, /id="job-generation-methods"/);
+  assert.match(page, /模型只执行最终提示词，不参与职责分配/);
+  assert.match(page, /<details id="job-generation-methods"/);
   assert.match(app, /function promptWritingProfile/);
   assert.match(app, /function renderOrchestrationSelection/);
   assert.match(app, /参考图属性（已接管）/);
-  assert.match(app, /当前内容 Skill 不使用参考图/);
+  assert.match(app, /参考图属性（当前 Skill 不使用）/);
   assert.match(app, /selectedContentSkill\(\)\?\.input_mode !== 'recent_news_topic'/);
   assert.match(app, /state\.capabilities\?\.prompt_writing_profile/);
   assert.match(app, /job\.prompt_writing_profile_snapshot/);
   assert.match(app, /已随任务冻结/);
   assert.match(app, /任务冻结的唯一编排层/);
   assert.match(app, /job-orchestration-core/);
+  assert.equal((page.match(/id="reference-image-input"/g) || []).length, 1);
+  assert.doesNotMatch(page, /id="orchestration-reference-action"/);
   assert.doesNotMatch(page, /<select id="prompt-profile/);
   assert.match(styles, /\.generation-orchestration/);
   assert.match(styles, /\.orchestration-core/);
@@ -289,18 +292,19 @@ test('creation intake offers one optional global reference image without extra f
   assert.match(page, /id="job-reference-image"/);
 });
 
-test('workflow exposes three videos and configurable image chapters with action context', () => {
+test('workflow exposes five understandable stages with detailed action context', () => {
   for (const label of [
-    '观点已确认', '生成脚本', '确认脚本', '生成旁白', '分镜与素材', 'AI 视频 1/3',
-    'AI 视频 2/3', 'AI 视频 3/3', '图像与视频合成', '确认成片', '发布包完成',
+    '准备内容', '确认脚本', '制作画面', '确认成片', '发布包',
   ]) assert.match(app, new RegExp(label.replace('/', '\\/')));
+  assert.match(app, /const workflowStages = \[[\s\S]*'准备内容'[\s\S]*'发布包'[\s\S]*\];/);
   assert.match(page, /id="current-action"/);
   assert.match(page, /id="stage-elapsed"/);
   assert.match(page, /总计 \/ 当前阶段/);
   assert.match(app, /phaseElapsedText\(task\)/);
-  assert.match(app, /seedance_parallel: 5/);
-  assert.match(app, /remotion_render: 8/);
-  assert.match(app, /remotion_normalize: 8/);
+  assert.match(app, /seedance_parallel: 2/);
+  assert.match(app, /remotion_render: 2/);
+  assert.match(app, /remotion_normalize: 2/);
+  assert.match(styles, /grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/);
   assert.match(page, /id="next-action"/);
   assert.match(page, /AI 视频始终保持 3 段/);
   assert.match(page, /可选 2–10 段，默认 10 段/);
@@ -330,7 +334,7 @@ test('Seed-TTS uses three verified voices and explicit speed choices with 1.2x d
   assert.match(app, /tts_voice_id: ttsVoiceId/);
   assert.match(app, /tts_speed_ratio: ttsSpeedRatio/);
   assert.match(app, /'1\.2': \[265, 355\]/);
-  assert.match(app, /legacyPreTtsSpeedPrompt/);
+  assert.match(app, /setTtsSettingsFields/);
   assert.match(app, /confirm_cost: true/);
   assert.match(app, /ttsPreviewKey/);
   assert.match(app, /narrationPreviewText/);
@@ -378,6 +382,12 @@ test('AI shots are visible storyboard cards with isolated version controls', () 
   assert.match(app, /seedance_model: seedanceModel/);
   assert.match(app, /刊例价预估约/);
   assert.match(app, /first_frame_candidate_id/);
+  assert.match(app, /id="shot-revision-intent"/);
+  assert.match(app, /revision_intent: revisionIntent/);
+  assert.match(app, /这是内容层要表达的画面含义/);
+  assert.match(app, /编译后的只读提示词/);
+  assert.match(app, /不会直接发送给 Seedance/);
+  assert.doesNotMatch(app, /id="shot-prompt-editor"/);
   assert.match(app, /\/frames\/\$\{encodeURIComponent\(candidate\.candidate_id\)\}\/media/);
   assert.match(app, /\/shots\/\$\{encodeURIComponent\(state\.selectedShotId\)\}\/actions\/regenerate/);
   assert.match(app, /\/versions\/\$\{encodeURIComponent\(select\.dataset\.selectVersion\)\}\/actions\/select/);
@@ -476,24 +486,60 @@ test('person viewpoint flow starts a real job and polling resumes after refresh'
   assert.match(app, /fetchTask\(job\.last_run_task_id\)/);
 });
 
-test('script prompt stays configurable while H3 exclusively owns visual prompting', () => {
+test('custom script prompting is explicit, one-task-only, and never owns visuals', () => {
   assert.match(page, /id="script-generation-prompt"/);
+  assert.match(page, /id="enable-custom-script-prompt"/);
+  assert.match(page, /为下一条任务显式启用自定义脚本提示词/);
+  assert.match(page, /此内容不会保存到浏览器，也不会静默影响下一条任务/);
   assert.doesNotMatch(page, /id="seedance-generation-prompt"/);
   assert.doesNotMatch(page, /id="job-seedance-prompt"/);
-  assert.match(page, /来源卡和 JSON 输出结构由系统自动附加/);
-  assert.match(page, /视觉提示词由上方显示的 H3 方法统一编排/);
+  assert.match(page, /来源卡和 JSON 输出结构仍由系统自动附加/);
+  assert.match(page, /视觉提示词始终由 H3 统一编排/);
   assert.match(app, /generation_settings: generationSettings/);
   assert.doesNotMatch(app, /seedance_prompt: seedancePrompt/);
   assert.doesNotMatch(app, /job-seedance-prompt/);
   assert.match(app, /video_resolution: videoResolution/);
   assert.match(app, /restore-prompt-defaults/);
-  assert.match(app, /legacyFixedStructure/);
-  assert.match(app, /legacyLongScript/);
-  assert.match(app, /legacySingleTrackScript/);
-  assert.match(app, /legacyPreRetentionHook/);
-  assert.match(app, /legacyScriptDirectorLayer/);
-  assert.match(app, /降低 2 秒流失率、提高 5 秒完播率/);
-  assert.match(app, /贯穿全片的可见变化/);
+  assert.match(app, /function customScriptPromptEnabled/);
+  assert.match(app, /customScriptPromptEnabled\(\)/);
+  assert.match(app, /delete settings\.script_prompt/);
+  assert.match(app, /localStorage\.removeItem\(LEGACY_PROMPT_STORAGE_KEY\)/);
+  assert.match(app, /setCustomScriptPromptMode\(false/);
+  assert.doesNotMatch(app, /legacyFixedStructure|legacyLongScript|legacySingleTrackScript|legacyPreRetentionHook|legacyScriptDirectorLayer/);
+});
+
+test('production UI prioritizes the current task and stays usable on mobile', () => {
+  assert.match(page, /class="production-view-tabs"/);
+  assert.match(page, /data-production-pane="create"/);
+  assert.match(page, /data-production-pane="jobs"/);
+  assert.match(app, /productionPane: 'create'/);
+  assert.match(app, /function switchProductionPane/);
+  assert.match(app, /\['ArrowLeft', 'ArrowRight'\][\s\S]*data-production-pane/);
+  assert.match(app, /<button class="job-card/);
+  assert.match(app, /formatDateTime\(job\.updated_at/);
+  assert.match(styles, /\.job-list \{ max-height:/);
+  assert.match(styles, /\.workspace-grid > \.mobile-pane-hidden/);
+  assert.match(styles, /@media \(max-width: 900px\)[\s\S]*\.production-view-tabs \{ display: flex/);
+  assert.ok(page.indexOf('id="current-action"') < page.indexOf('id="job-generation-methods"'));
+  assert.match(app, /querySelectorAll\('\[data-busy-lock\]'\)/);
+  for (const formId of ['topic-source-form', 'source-card-form', 'news-topic-form']) {
+    const handler = app.slice(
+      app.indexOf(`$('#${formId}').addEventListener('submit'`),
+      app.indexOf('\n});', app.indexOf(`$('#${formId}').addEventListener('submit'`)) + 4,
+    );
+    assert.match(handler, /if \(state\.busy\) return/);
+  }
+  assert.doesNotMatch(page, /id="new-card-button"/);
+});
+
+test('script review shows a whole-job cost range before confirmation', () => {
+  assert.match(page, /id="script-cost-estimate"/);
+  assert.match(page, /整单成本预估/);
+  assert.match(app, /function renderScriptCostEstimate/);
+  assert.match(app, /usageRecordCostCny/);
+  assert.match(app, /每段 8–10 秒/);
+  assert.match(app, /未生成的 AI 画面会从实际费用中扣除/);
+  assert.match(styles, /\.script-cost-estimate/);
 });
 
 test('final approval packages in the background task flow', () => {
