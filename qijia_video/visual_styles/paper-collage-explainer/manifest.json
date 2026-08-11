@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "display_name": "编辑纸张拼贴",
-  "description": "用高级杂志拼贴、半色调纸纹和可触摸的定格组装解释观点与知识。",
+  "description": "用概念隐喻、共享裁纸资产、分层舞台和可触摸的拼贴运动完整解释观点与知识。",
   "default": false,
   "director_prompt_file": "references/director-prompt.md",
   "storyboard_rules_file": "references/storyboard-rules.md",

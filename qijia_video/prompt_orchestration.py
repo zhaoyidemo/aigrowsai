@@ -56,6 +56,51 @@ def _evidence_pack(
     return pack
 
 
+def compile_quality_script_prompt(
+    input_snapshot: CreativeInputSnapshot,
+    *,
+    script_skill: ScriptSkillSnapshot,
+    minimum_characters: int,
+    maximum_characters: int,
+) -> str:
+    """Compile the v4 writer prompt without any pre-creative policy layer."""
+
+    materials = [
+        {
+            "material_id": f"material_{index:02d}",
+            "title": item.title,
+            "text": item.text,
+            "url": item.url,
+        }
+        for index, item in enumerate(input_snapshot.verified_materials, start=1)
+    ]
+    material_block = (
+        json.dumps(materials, ensure_ascii=False, indent=2)
+        if materials
+        else "无。不要因为没有附件而把用户的原始表达降级成研究风险说明。"
+    )
+    return _join_blocks(
+        (
+            "你是这条视频唯一的脚本主编。用户原始表达未经任何摘要、分类、研究或"
+            "提示词适配，必须直接成为创作起点。完成内容取舍并写出一篇真正成立的"
+            "口播作品；不要展示计划、候选角度或思维过程，也不要设计任何画面。"
+        ),
+        "【用户原始创作请求｜原文】\n" + input_snapshot.original_request,
+        "【用户主动提供的内容资料】\n" + material_block,
+        f"【Script Skill】{script_skill.skill_id}@{script_skill.version}",
+        "【内部选题与论证方法】\n" + script_skill.planning_instructions,
+        "【口播写作方法】\n" + script_skill.writing_instructions,
+        "【作品质量标准】\n- " + "\n- ".join(script_skill.critic_rules),
+        (
+            "【交付要求】\n"
+            f"完整 narration 建议 {minimum_characters}—{maximum_characters} 个汉字，"
+            "内容完整和自然优先；按真实语义拆成 3—10 个 beats，首段为 hook，"
+            "末段为 closing。source_refs 只能填写上方真实存在的 material_id；"
+            "没有对应材料时保持为空。只交付 ScriptDraft JSON。"
+        ),
+    )
+
+
 def compile_direct_script_prompt(
     input_snapshot: CreativeInputSnapshot,
     *,

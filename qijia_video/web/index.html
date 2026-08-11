@@ -268,7 +268,7 @@
           </section>
           <section id="job-reference-image" class="job-reference-image" hidden>
             <img id="job-reference-preview" alt="本任务的全局参考图">
-            <div><strong>全局参考图已应用</strong><span>优先统一全部视觉章节的画风、色彩与人物造型</span></div>
+            <div><strong>参考图已由导演解析</strong><span>只保留被明确指定的人物、场景、物件或风格属性，不会自动照搬全部内容</span></div>
           </section>
           <section id="seedance-usage-summary" class="usage-summary" aria-label="AI 生成用量" hidden>
             <div class="usage-stat">
@@ -338,7 +338,7 @@
               <p id="script-cost-breakdown">包含已发生调用、完整旁白，以及按语义自适应规划的首帧和 AI 视频。</p>
               <small id="script-cost-basis">刊例价估算，最终以供应商账单和实际生成时长为准。</small>
             </section>
-            <label class="pre-generation-media-choice" for="prepare-media-first">
+            <label id="pre-generation-media-choice" class="pre-generation-media-choice" for="prepare-media-first">
               <input id="prepare-media-first" type="checkbox">
               <span>
                 <strong>我有自己的图片或视频，先安排素材</strong>
@@ -355,6 +355,16 @@
               <div><h3>混合制作故事板</h3><span id="storyboard-summary">Director Skill 会按语义变化规划图片与必要的视频镜头</span></div>
               <span class="storyboard-hint">选中镜头，可上传自己的图片或视频，也可恢复 AI 素材；屏幕文字由 Remotion 后期排版，不会让 AI 直接画字</span>
             </div>
+            <section id="style-frame-review" class="style-frame-review" hidden>
+              <div class="style-frame-heading">
+                <div>
+                  <strong>先确认全片视觉方向</strong>
+                  <span>这三张样片来自同一套 DirectorTreatment 与 AssetBible；选择一张作为后续所有 AI 镜头的视觉基准</span>
+                </div>
+                <span id="style-frame-status" class="style-frame-status">尚未选择</span>
+              </div>
+              <div id="style-frame-grid" class="style-frame-grid" role="list" aria-label="视觉开发样片"></div>
+            </section>
             <p id="frame-selection-warning" class="frame-selection-warning" hidden></p>
             <div class="storyboard-layout">
               <div id="shot-grid" class="shot-grid" role="list" aria-label="混合制作镜头列表"></div>
@@ -461,6 +471,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.31.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.32.0"></script>
 </body>
 </html>

@@ -6,11 +6,14 @@ import wave
 from pathlib import Path
 
 from qijia_video.contracts import (
+    AssetBible,
     ContentFormat,
+    DirectorTreatment,
     EditorialAngle,
     EditorialPlan,
     NarrationAudioSegment,
     NarrationManifest,
+    MultimodalReferenceIR,
     ScriptBeat,
     ScriptDraft,
     ScriptReview,
@@ -110,6 +113,31 @@ class TemplateScriptProvider:
     ) -> ScriptDraft:
         del on_usage
         return await self.generate(card, prompt)
+
+    async def generate_quality_script(
+        self,
+        card: SourceCard,
+        prompt: str,
+        *,
+        on_usage=None,
+    ) -> tuple[ScriptDraft, ScriptReview]:
+        del on_usage
+        script = await self.generate(card, prompt)
+        review = await self.review(card, script)
+        review.quality_scores = {
+            'input_fidelity': 9,
+            'central_insight': 8,
+            'argument_progression': 8,
+            'specificity': 8,
+            'spoken_language': 8,
+            'originality': 8,
+            'factual_discipline': 9,
+        }
+        review.strengths = ['测试脚本保持单一中心判断并完整覆盖输入']
+        review.preserve = ['开场判断与结尾收束']
+        review.reviewed_draft_hash = content_hash(script)
+        review.prompt_version = 'template_quality_script_v1'
+        return script, review
 
     async def generate_with_plan(
         self,
@@ -215,6 +243,87 @@ class TemplateStoryboardProvider:
     """Deterministic director plans for tests and the local demo."""
 
     name = "template-storyboard-mock"
+
+    async def generate_quality_director_plan(
+        self,
+        script: ScriptDraft,
+        director_instruction: str,
+        narration_durations: dict[str, float],
+        *,
+        director_skill_id: str,
+        director_skill_version: str,
+        input_hash: str,
+        reference_image_url: str = '',
+        on_usage=None,
+    ) -> tuple[DirectorTreatment, VisualBible, AssetBible, StoryboardPlan]:
+        bible, plan = await self.generate_director_plan(
+            script,
+            director_instruction,
+            narration_durations,
+            director_skill_id=director_skill_id,
+            director_skill_version=director_skill_version,
+            input_hash=input_hash,
+            on_usage=on_usage,
+        )
+        is_paper = (
+            '纸张' in director_instruction or '纸艺' in director_instruction
+        )
+        treatment = DirectorTreatment(
+            visual_thesis='让同一主体面对一连串可见选择，使视觉结果随论证逐章推进。',
+            audience_experience='先看见冲突，再理解机制，最后看到判断落入现实的代价。',
+            chapter_progression=[
+                '直接进入核心冲突',
+                '揭开决定关系的机制',
+                '让选择产生可见后果',
+            ],
+            motif_system=['贯穿全片的核心主体', '状态持续变化的关键物件'],
+            rhythm_strategy='关键判断使用稳定构图，转折处以明确动作改变画面状态。',
+            edit_pattern='以动作结果或构图方向承接章节，独立论证节点允许克制硬切。',
+            style_application=(
+                '纸材厚度、纤维、接触阴影和逐格运动共同承担解释。'
+                if is_paper
+                else '编辑插画用层次、留白和克制运动承担解释。'
+            ),
+            model_id=self.name,
+            input_hash=input_hash,
+            created_at=timestamp(),
+        )
+        references = (
+            [
+                MultimodalReferenceIR(
+                    reference_id='global_reference',
+                    roles=['style'],
+                    applies_to=['all_shots'],
+                    retention_level='strong',
+                    preserve=['媒介、色彩、材质和光线'],
+                    allow_change=['人物、场景、构图和动作'],
+                    forbidden_transfer=['可读文字、Logo、偶然背景和事实主张'],
+                )
+            ]
+            if reference_image_url
+            else []
+        )
+        asset_bible = AssetBible(
+            subjects=['核心主体：身份、轮廓、服装与比例在全片保持一致'],
+            locations=['统一视觉世界中的主场景及其可辨认空间锚点'],
+            props=['一个随论证改变状态的关键物件'],
+            identity_locks=['主体身份、年龄感、轮廓和服装结构不得漂移'],
+            material_locks=['全片使用同一材质尺度、光线方向和接触阴影'],
+            allowed_variations=['表情、姿态、景别和与论证有关的环境状态'],
+            motion_grammar=[
+                (
+                    '纸片沿平面滑动、翻折或逐格转动，保持纸材物理结构'
+                    if is_paper
+                    else '主体动作清楚，摄影机运动克制且只服务信息变化'
+                )
+            ],
+            review_criteria=['主体与资产连续', '每章事件与旁白语义匹配'],
+            references=references,
+            model_id=self.name,
+            input_hash=input_hash,
+            created_at=timestamp(),
+        )
+        return treatment, bible, asset_bible, plan
 
     async def generate_director_plan(
         self,

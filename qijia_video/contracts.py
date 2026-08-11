@@ -31,7 +31,7 @@ DEFAULT_VISUAL_STYLE_ID = "content-skill-default"
 H3_PROMPT_WRITING_PROFILE_ID = "h3-prompt-writing"
 DEFAULT_PROMPT_WRITING_PROFILE_ID = H3_PROMPT_WRITING_PROFILE_ID
 DEFAULT_PROMPT_ADAPTER_ID = H3_PROMPT_WRITING_PROFILE_ID
-DEFAULT_SCRIPT_SKILL_ID = 'evidence-led-explainer'
+DEFAULT_SCRIPT_SKILL_ID = 'insight-led-scriptwriter'
 DEFAULT_DIRECTOR_SKILL_ID = 'animated-explainer'
 DEFAULT_PROVIDER_ADAPTER_ID = 'seedream-seedance'
 SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-0-pro-fast-251015"
@@ -100,6 +100,7 @@ class PipelineVersion(StrEnum):
     LEGACY = 'v1'
     SINGLE_OWNER = 'v2'
     DIRECT_SCRIPT = 'v3'
+    QUALITY_FIRST = 'v4'
 
 
 class RiskLevel(StrEnum):
@@ -810,6 +811,21 @@ class ScriptReview(ContractModel):
     boundary_checks: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     blocking_reasons: list[str] = Field(default_factory=list)
+    quality_scores: dict[str, int] = Field(default_factory=dict)
+    strengths: list[str] = Field(default_factory=list, max_length=6)
+    revision_requests: list[dict[str, Any]] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+    factual_risks: list[dict[str, Any]] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+    preserve: list[str] = Field(default_factory=list, max_length=8)
+    reviewed_draft_hash: str = Field(
+        default="",
+        pattern=r"^$|^[a-f0-9]{64}$",
+    )
     model_id: str = ""
     prompt_version: str = ""
     input_hash: str = Field(default="", pattern=r"^$|^[a-f0-9]{64}$")
@@ -1187,9 +1203,9 @@ class GenerationSettings(ContractModel):
     video_resolution: Literal["480p", "720p", "1080p"] = "1080p"
     tts_voice_id: TtsVoiceId = DEFAULT_TTS_VOICE_ID
     tts_speed_ratio: TtsSpeedRatio = DEFAULT_TTS_SPEED_RATIO
-    # 1.0 Pro Fast remains the efficient default when the Director Skill marks
-    # motion as semantically necessary. 2.0 remains a per-shot upgrade.
-    seedance_model: SeedanceModelId = SEEDANCE_EFFICIENT_MODEL
+    # Quality-first tasks use Seedance 2.0 by default. 1.0 Pro Fast remains
+    # available as an explicit preview/cost-saving choice.
+    seedance_model: SeedanceModelId = SEEDANCE_FLAGSHIP_MODEL
     image_count: int = Field(
         default=0,
         ge=0,
@@ -1253,6 +1269,57 @@ class ShotContextIR(ContractModel):
     camera_intent: str = Field(min_length=1, max_length=600)
     media_rationale: str = Field(min_length=1, max_length=600)
     reference_roles: list[str] = Field(default_factory=list, max_length=8)
+
+
+class MultimodalReferenceIR(ContractModel):
+    """H3-derived reference-role contract, independent from provider syntax."""
+
+    reference_id: str = Field(min_length=1, max_length=96)
+    roles: list[
+        Literal["identity", "wardrobe", "object", "location", "style", "composition"]
+    ] = Field(min_length=1, max_length=6)
+    applies_to: list[str] = Field(default_factory=list, max_length=20)
+    retention_level: Literal["strict", "strong", "inspiration"] = "strong"
+    preserve: list[str] = Field(default_factory=list, max_length=12)
+    allow_change: list[str] = Field(default_factory=list, max_length=12)
+    forbidden_transfer: list[str] = Field(default_factory=list, max_length=12)
+
+
+class DirectorTreatment(ContractModel):
+    """Global directing decision made before any shot is planned."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    visual_thesis: str = Field(min_length=1, max_length=1200)
+    audience_experience: str = Field(min_length=1, max_length=800)
+    chapter_progression: list[str] = Field(min_length=3, max_length=10)
+    motif_system: list[str] = Field(min_length=1, max_length=12)
+    rhythm_strategy: str = Field(min_length=1, max_length=1000)
+    edit_pattern: str = Field(min_length=1, max_length=1000)
+    style_application: str = Field(min_length=1, max_length=1200)
+    model_id: str = Field(default="", max_length=256)
+    input_hash: str = Field(default="", pattern=r"^$|^[a-f0-9]{64}$")
+    created_at: str = Field(default="", max_length=64)
+
+
+class AssetBible(ContractModel):
+    """Reusable subjects, locations and props locked before shot planning."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    subjects: list[str] = Field(min_length=1, max_length=20)
+    locations: list[str] = Field(min_length=1, max_length=16)
+    props: list[str] = Field(default_factory=list, max_length=20)
+    identity_locks: list[str] = Field(min_length=1, max_length=20)
+    material_locks: list[str] = Field(min_length=1, max_length=20)
+    allowed_variations: list[str] = Field(default_factory=list, max_length=16)
+    motion_grammar: list[str] = Field(min_length=1, max_length=16)
+    review_criteria: list[str] = Field(min_length=2, max_length=20)
+    references: list[MultimodalReferenceIR] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+    model_id: str = Field(default="", max_length=256)
+    input_hash: str = Field(default="", pattern=r"^$|^[a-f0-9]{64}$")
+    created_at: str = Field(default="", max_length=64)
 
 
 class VisualBible(ContractModel):
@@ -1516,6 +1583,27 @@ class FirstFrameCandidate(ContractModel):
     variant: int = Field(ge=1, le=4)
     prompt: str = Field(min_length=1, max_length=2000)
     seed: int = Field(ge=0, le=4294967295)
+    model_id: str = Field(default="", max_length=256)
+    source_url: str = Field(default="", max_length=4000)
+    size: str = Field(default="", max_length=64)
+    usage_total_tokens: int = Field(default=0, ge=0)
+    estimated_cost_cny: float | None = Field(default=None, ge=0)
+    pricing_basis: str = Field(default="", max_length=500)
+    asset: AssetRef | None = None
+    created_at: str
+
+
+class StyleFrameCandidate(ContractModel):
+    """One paid visual-development frame created before bulk generation."""
+
+    candidate_id: str = Field(
+        min_length=1,
+        max_length=96,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    variant: int = Field(ge=1, le=3)
+    prompt: str = Field(min_length=1, max_length=6000)
+    seed: int = Field(ge=0, le=(1 << 31) - 1)
     model_id: str = Field(default="", max_length=256)
     source_url: str = Field(default="", max_length=4000)
     size: str = Field(default="", max_length=64)
@@ -1838,7 +1926,14 @@ class VideoJob(ContractModel):
     approvals: list[ApprovalRecord] = Field(default_factory=list)
     narration_manifest: NarrationManifest | None = None
     storyboard_plan: StoryboardPlan | None = None
+    director_treatment: DirectorTreatment | None = None
+    asset_bible: AssetBible | None = None
     visual_bible: VisualBible | None = None
+    style_frame_candidates: list[StyleFrameCandidate] = Field(
+        default_factory=list,
+        max_length=3,
+    )
+    selected_style_frame_id: str = Field(default="", max_length=96)
     first_frame_candidates: list[FirstFrameCandidate] = Field(default_factory=list)
     # 旧任务读兼容字段。新任务每镜头只有一张首帧，不写入选择记录。
     frame_selections: list[FrameSelection] = Field(default_factory=list)
@@ -1880,7 +1975,11 @@ class VideoJob(ContractModel):
         if "video_resolution" not in settings:
             additions["video_resolution"] = "480p"
         if "seedance_model" not in settings:
-            additions["seedance_model"] = SEEDANCE_FLAGSHIP_MODEL
+            additions["seedance_model"] = (
+                SEEDANCE_FLAGSHIP_MODEL
+                if value.get("pipeline_version") == PipelineVersion.QUALITY_FIRST.value
+                else SEEDANCE_EFFICIENT_MODEL
+            )
         if "tts_voice_id" not in settings:
             additions["tts_voice_id"] = DEFAULT_TTS_VOICE_ID
         if "tts_speed_ratio" not in settings:

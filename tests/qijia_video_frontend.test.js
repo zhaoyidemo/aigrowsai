@@ -63,6 +63,10 @@ test('creator selects only visual style while internal roles stay server-owned',
   assert.match(app, /data-visual-style-id/);
   assert.match(styles, /\.visual-style-setting/);
   assert.match(styles, /\.visual-style-preview/);
+  assert.match(
+    styles,
+    /\.visual-style-preview img \{[^}]*height: auto;[^}]*min-height: 0;/s,
+  );
   for (const asset of [
     'modern-editorial.webp',
     'paper-collage.webp',
@@ -382,7 +386,7 @@ test('AI shots are visible storyboard cards with isolated version controls', () 
   assert.match(app, /data-select-version/);
   assert.match(app, /用这张首帧换一版/);
   assert.match(app, /id="shot-seedance-model"/);
-  assert.match(app, /默认 1\.0 Pro Fast 保持原生 1080P/);
+  assert.match(app, /默认使用 Seedance 2\.0/);
   assert.match(app, /seedance_model: seedanceModel/);
   assert.match(app, /刊例价预估约/);
   assert.match(app, /first_frame_candidate_id/);
@@ -419,6 +423,18 @@ test('final video mixes generated videos and motion images without narration tex
   assert.match(renderer, /whiteSpace: 'nowrap'/);
   assert.match(renderer, /padding: '0 74px 220px'/);
   assert.match(renderer, /Array\.from\(cue\.text\)\.length/);
+});
+
+test('v4 visual development is selected before bulk AI generation', () => {
+  assert.match(page, /id="style-frame-review"/);
+  assert.match(page, /先确认全片视觉方向/);
+  assert.match(app, /function renderStyleFrameReview\(job\)/);
+  assert.match(app, /data-select-style-frame/);
+  assert.match(app, /style-frames\/\$\{encodeURIComponent\(button\.dataset\.selectStyleFrame\)\}\/actions\/select/);
+  assert.match(app, /job\.pipeline_version === 'v4'[\s\S]*!job\.selected_style_frame_id/);
+  assert.match(app, /确认脚本并开发视觉方案/);
+  assert.match(app, /mediaChoiceContainer\.hidden = qualityFirst/);
+  assert.match(app, /含 3 张视觉样片/);
 });
 
 test('storyboard supports editor images and videos without losing AI versions', () => {

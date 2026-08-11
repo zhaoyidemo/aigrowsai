@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "display_name": "纸艺定格讲解",
-  "description": "用手工纸偶、微缩纸艺场景和可信定格运动呈现具体关系与变化。",
+  "description": "用共享纸偶资产、可搭建微缩舞台和遵循纸材物理的定格运动呈现具体关系与变化。",
   "default": false,
   "director_prompt_file": "references/director-prompt.md",
   "storyboard_rules_file": "references/storyboard-rules.md",

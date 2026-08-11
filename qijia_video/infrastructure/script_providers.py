@@ -12,7 +12,9 @@ import httpx
 from pydantic import ValidationError
 
 from qijia_video.contracts import (
+    AssetBible,
     CreativeBrief,
+    DirectorTreatment,
     EditorialPlan,
     ProviderUsageRecord,
     ScriptDraft,
@@ -42,9 +44,11 @@ from qijia_video.tts_options import (
 SCRIPT_PROMPT_VERSION = "qijia_script_v14_single_creative_brief"
 SCRIPT_SKILL_PROMPT_VERSION = 'qijia_script_v15_editorial_plan'
 DIRECT_SCRIPT_PROMPT_VERSION = 'qijia_script_v16_direct_draft'
+QUALITY_SCRIPT_PROMPT_VERSION = 'qijia_script_v20_writer_critic_revision'
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v12_semantic_adaptive"
 DIRECTOR_PROMPT_VERSION = 'qijia_director_v13_shot_context_ir'
 DIRECTOR_V3_PROMPT_VERSION = 'qijia_director_v20_concrete_event'
+DIRECTOR_QUALITY_PROMPT_VERSION = 'qijia_director_v30_treatment_then_shots'
 OPENROUTER_REASONING_EFFORT = "high"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 STORYBOARD_MAX_COMPLETION_TOKENS = 128_000
@@ -242,6 +246,91 @@ _DIRECT_SCRIPT_RESPONSE_SCHEMA['required'] = [
     if item != 'creative_brief'
 ]
 
+_SCRIPT_CRITIQUE_RESPONSE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'verdict': {'type': 'string', 'enum': ['revise', 'polish']},
+        'quality_scores': {
+            'type': 'object',
+            'properties': {
+                key: {'type': 'integer', 'minimum': 1, 'maximum': 10}
+                for key in (
+                    'input_fidelity',
+                    'central_insight',
+                    'argument_progression',
+                    'specificity',
+                    'spoken_language',
+                    'originality',
+                    'factual_discipline',
+                )
+            },
+            'required': [
+                'input_fidelity',
+                'central_insight',
+                'argument_progression',
+                'specificity',
+                'spoken_language',
+                'originality',
+                'factual_discipline',
+            ],
+            'additionalProperties': False,
+        },
+        'strengths': {
+            'type': 'array',
+            'maxItems': 4,
+            'items': {'type': 'string'},
+        },
+        'revision_requests': {
+            'type': 'array',
+            'maxItems': 8,
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'priority': {
+                        'type': 'string',
+                        'enum': ['critical', 'important', 'polish'],
+                    },
+                    'issue': {'type': 'string'},
+                    'instruction': {'type': 'string'},
+                },
+                'required': ['priority', 'issue', 'instruction'],
+                'additionalProperties': False,
+            },
+        },
+        'factual_risks': {
+            'type': 'array',
+            'maxItems': 8,
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'claim': {'type': 'string'},
+                    'risk': {'type': 'string'},
+                    'action': {
+                        'type': 'string',
+                        'enum': ['remove', 'rephrase', 'manual_check'],
+                    },
+                },
+                'required': ['claim', 'risk', 'action'],
+                'additionalProperties': False,
+            },
+        },
+        'preserve': {
+            'type': 'array',
+            'maxItems': 6,
+            'items': {'type': 'string'},
+        },
+    },
+    'required': [
+        'verdict',
+        'quality_scores',
+        'strengths',
+        'revision_requests',
+        'factual_risks',
+        'preserve',
+    ],
+    'additionalProperties': False,
+}
+
 
 _STORYBOARD_RESPONSE_SCHEMA = {
     "type": "object",
@@ -375,6 +464,112 @@ _VISUAL_BIBLE_RESPONSE_SCHEMA = {
     'additionalProperties': False,
 }
 
+_MULTIMODAL_REFERENCE_RESPONSE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'reference_id': {'type': 'string'},
+        'roles': {
+            'type': 'array',
+            'minItems': 1,
+            'maxItems': 6,
+            'items': {
+                'type': 'string',
+                'enum': [
+                    'identity',
+                    'wardrobe',
+                    'object',
+                    'location',
+                    'style',
+                    'composition',
+                ],
+            },
+        },
+        'applies_to': {'type': 'array', 'items': {'type': 'string'}},
+        'retention_level': {
+            'type': 'string',
+            'enum': ['strict', 'strong', 'inspiration'],
+        },
+        'preserve': {'type': 'array', 'items': {'type': 'string'}},
+        'allow_change': {'type': 'array', 'items': {'type': 'string'}},
+        'forbidden_transfer': {'type': 'array', 'items': {'type': 'string'}},
+    },
+    'required': [
+        'reference_id',
+        'roles',
+        'applies_to',
+        'retention_level',
+        'preserve',
+        'allow_change',
+        'forbidden_transfer',
+    ],
+    'additionalProperties': False,
+}
+
+_DIRECTOR_TREATMENT_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'visual_thesis': {'type': 'string'},
+        'audience_experience': {'type': 'string'},
+        'chapter_progression': {'type': 'array', 'items': {'type': 'string'}},
+        'motif_system': {'type': 'array', 'items': {'type': 'string'}},
+        'rhythm_strategy': {'type': 'string'},
+        'edit_pattern': {'type': 'string'},
+        'style_application': {'type': 'string'},
+    },
+    'required': [
+        'visual_thesis',
+        'audience_experience',
+        'chapter_progression',
+        'motif_system',
+        'rhythm_strategy',
+        'edit_pattern',
+        'style_application',
+    ],
+    'additionalProperties': False,
+}
+
+_ASSET_BIBLE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'subjects': {'type': 'array', 'items': {'type': 'string'}},
+        'locations': {'type': 'array', 'items': {'type': 'string'}},
+        'props': {'type': 'array', 'items': {'type': 'string'}},
+        'identity_locks': {'type': 'array', 'items': {'type': 'string'}},
+        'material_locks': {'type': 'array', 'items': {'type': 'string'}},
+        'allowed_variations': {'type': 'array', 'items': {'type': 'string'}},
+        'motion_grammar': {'type': 'array', 'items': {'type': 'string'}},
+        'review_criteria': {'type': 'array', 'items': {'type': 'string'}},
+        'references': {
+            'type': 'array',
+            'maxItems': 8,
+            'items': _MULTIMODAL_REFERENCE_RESPONSE_SCHEMA,
+        },
+    },
+    'required': [
+        'subjects',
+        'locations',
+        'props',
+        'identity_locks',
+        'material_locks',
+        'allowed_variations',
+        'motion_grammar',
+        'review_criteria',
+        'references',
+    ],
+    'additionalProperties': False,
+}
+
+_DIRECTOR_TREATMENT_RESPONSE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'director_treatment': _DIRECTOR_TREATMENT_SCHEMA,
+        'visual_bible': _VISUAL_BIBLE_RESPONSE_SCHEMA,
+        'asset_bible': _ASSET_BIBLE_SCHEMA,
+    },
+    'required': ['director_treatment', 'visual_bible', 'asset_bible'],
+    'additionalProperties': False,
+}
+
 _DIRECTOR_RESPONSE_SCHEMA = {
     'type': 'object',
     'properties': {
@@ -443,7 +638,14 @@ _SHOT_CONTEXT_V3_RESPONSE_SCHEMA['properties']['reference_roles'] = {
     'type': 'array',
     'items': {
         'type': 'string',
-        'enum': ['identity', 'wardrobe', 'object', 'location', 'style'],
+            'enum': [
+                'identity',
+                'wardrobe',
+                'object',
+                'location',
+                'style',
+                'composition',
+            ],
     },
     'maxItems': 8,
 }
@@ -477,6 +679,15 @@ _DIRECTOR_V3_RESPONSE_SCHEMA = {
         },
     },
     'required': ['visual_bible', 'shots'],
+    'additionalProperties': False,
+}
+
+_DIRECTOR_SHOT_PLAN_RESPONSE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'shots': _DIRECTOR_V3_RESPONSE_SCHEMA['properties']['shots'],
+    },
+    'required': ['shots'],
     'additionalProperties': False,
 }
 
@@ -1323,6 +1534,143 @@ class OpenRouterScriptProvider:
         )
         return self._script_from_generated(card, response.data)
 
+    async def generate_quality_script(
+        self,
+        card: SourceCard,
+        prompt: str,
+        *,
+        on_usage: UsageRecorder | None = None,
+    ) -> tuple[ScriptDraft, ScriptReview]:
+        """Run one writer, one independent critic, then the same writer again."""
+
+        if not self.configured:
+            raise ProviderUnavailable(
+                '真实脚本生成未配置：请设置 OPENROUTER_API_KEY'
+            )
+        writer_prompt = self._prompt(
+            card,
+            prompt,
+            output_contract=DIRECT_SCRIPT_OUTPUT_CONTRACT,
+        )
+        draft_response = await _openrouter_json_request(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            messages=[
+                {
+                    'role': 'system',
+                    'content': (
+                        '你是唯一的脚本主编。用户原始表达直接抵达你，没有研究简报、'
+                        'Content Policy、EvidencePolicy 或视觉方法介入。写出判断鲜明、'
+                        '论证持续推进、适合真实朗读的完整作品，只返回 ScriptDraft JSON。'
+                    ),
+                },
+                {'role': 'user', 'content': writer_prompt},
+            ],
+            label='脚本初稿生成',
+            schema_name='qijia_quality_script_draft_v1',
+            response_schema=_DIRECT_SCRIPT_RESPONSE_SCHEMA,
+            max_completion_tokens=SCRIPT_MAX_COMPLETION_TOKENS,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+            operation='script_draft_generation',
+            on_usage=on_usage,
+            reasoning_effort='xhigh',
+        )
+        draft = self._script_from_generated(card, draft_response.data)
+        draft_hash = content_hash(draft)
+        critique_prompt = (
+            '独立审阅下面这篇口播初稿。你的职责不是把观点改得中立、保险或四平八稳，'
+            '而是发现它为什么还不够精彩、不够具体或不够成立。重点检查：是否忠实回应'
+            '用户原始输入；中心判断是否清楚且可争论；每段是否推进；抽象概念是否落到'
+            '具体处境与后果；语言是否自然可说；是否存在套话、重复或没有依据的精确事实。'
+            '只返回 Review JSON，不要重写脚本。\n\n'
+            + prompt
+            + '\n\n【待审初稿】\n'
+            + json.dumps(draft.model_dump(mode='json'), ensure_ascii=False)
+        )
+        critique_response = await _openrouter_json_request(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            messages=[
+                {
+                    'role': 'system',
+                    'content': (
+                        '你是独立的资深脚本评论员。保护作品中真正有力量的判断和语言，'
+                        '不要用中立、全面或风险规避压平作者声音；只指出能够实际提升成稿'
+                        '的问题，以及明确的事实风险。'
+                    ),
+                },
+                {'role': 'user', 'content': critique_prompt},
+            ],
+            label='脚本独立审稿',
+            schema_name='qijia_script_critique_v1',
+            response_schema=_SCRIPT_CRITIQUE_RESPONSE_SCHEMA,
+            max_completion_tokens=16_000,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+            operation='script_critique',
+            on_usage=on_usage,
+            reasoning_effort='high',
+        )
+        critique = critique_response.data
+        revision_prompt = (
+            prompt
+            + '\n\n【你的初稿】\n'
+            + json.dumps(draft.model_dump(mode='json'), ensure_ascii=False)
+            + '\n\n【独立审稿意见】\n'
+            + json.dumps(critique, ensure_ascii=False)
+            + '\n\n根据审稿意见重写成最终作品。审稿意见是质量诊断，不是新的创作'
+            '负责人：保留 preserve 和初稿中真正有力量的表达，只修复确实存在的问题。'
+            '不要在正文解释修改过程，不要增加风险声明，只返回最终 ScriptDraft JSON。\n\n'
+            + DIRECT_SCRIPT_OUTPUT_CONTRACT
+        )
+        final_response = await _openrouter_json_request(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            messages=[
+                {
+                    'role': 'system',
+                    'content': (
+                        '你仍是这篇作品唯一的脚本主编。完成最终重写，保持鲜明判断、'
+                        '思想张力和自然口语；禁止输出计划、评论、视觉方案或修改说明。'
+                    ),
+                },
+                {'role': 'user', 'content': revision_prompt},
+            ],
+            label='脚本主编重写',
+            schema_name='qijia_quality_script_final_v1',
+            response_schema=_DIRECT_SCRIPT_RESPONSE_SCHEMA,
+            max_completion_tokens=SCRIPT_MAX_COMPLETION_TOKENS,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+            operation='script_revision',
+            on_usage=on_usage,
+            reasoning_effort='xhigh',
+        )
+        final_script = self._script_from_generated(card, final_response.data)
+        review = await self.review(card, final_script)
+        review.quality_scores = {
+            str(key): int(value)
+            for key, value in dict(critique.get('quality_scores') or {}).items()
+        }
+        review.strengths = list(critique.get('strengths') or [])
+        review.revision_requests = list(critique.get('revision_requests') or [])
+        review.factual_risks = list(critique.get('factual_risks') or [])
+        review.preserve = list(critique.get('preserve') or [])
+        review.reviewed_draft_hash = draft_hash
+        review.model_id = (
+            f'{draft_response.model_id} writer + '
+            f'{critique_response.model_id} critic + '
+            f'{final_response.model_id} revision'
+        )
+        review.prompt_version = QUALITY_SCRIPT_PROMPT_VERSION
+        review.input_hash = content_hash(final_script)
+        review.reviewed_at = timestamp()
+        return final_script, review
+
     async def generate_with_brief(
         self,
         card: SourceCard,
@@ -1429,6 +1777,236 @@ class OpenRouterStoryboardProvider:
     """Turn an approved script into an ordered provider-neutral shot plan."""
 
     name = "openrouter-storyboard"
+
+    async def generate_quality_director_plan(
+        self,
+        script: ScriptDraft,
+        director_instruction: str,
+        narration_durations: dict[str, float],
+        *,
+        director_skill_id: str,
+        director_skill_version: str,
+        input_hash: str,
+        reference_image_url: str = '',
+        on_usage: UsageRecorder | None = None,
+    ) -> tuple[DirectorTreatment, VisualBible, AssetBible, StoryboardPlan]:
+        """Develop the visual world first, then plan shots in a fresh call."""
+
+        if not self.configured:
+            raise ProviderUnavailable('真实分镜生成未配置：请设置 OPENROUTER_API_KEY')
+        expected_beat_ids = [item.id for item in script.beats]
+        if (
+            not 3 <= len(expected_beat_ids) <= 12
+            or set(narration_durations) != set(expected_beat_ids)
+            or any(float(narration_durations[item]) <= 0 for item in expected_beat_ids)
+        ):
+            raise ProviderUnavailable('Director v4 需要完整脚本与逐段旁白时长')
+        beat_payload = [
+            {
+                'beat_id': item.id,
+                'role': item.role,
+                'duration_seconds': round(float(narration_durations[item.id]), 3),
+                'narration': item.narration,
+            }
+            for item in script.beats
+        ]
+        reference_instruction = (
+            '本次附有一张 global_reference。请真实观察图片后，只声明它实际适合'
+            '承担的 identity、wardrobe、object、location、style 或 composition '
+            '职责；不得默认继承全部属性。references 中 reference_id 固定写 '
+            'global_reference，并明确 preserve、allow_change 与 forbidden_transfer。'
+            if reference_image_url
+            else '本次没有参考图，asset_bible.references 必须为空数组。'
+        )
+        treatment_prompt = (
+            f'{director_instruction}\n\n'
+            '【第一阶段：视觉开发】先不要拆镜头。根据完整口播和真实时长，建立一条'
+            '能够随论证推进的视觉命题，而不是逐句配图。交付 DirectorTreatment、'
+            'VisualBible 与 AssetBible：锁定重复主体、场景、道具、材质、视觉母题、'
+            '章节递进、剪辑节奏和所选风格特有的 MotionGrammar 与 ReviewCriteria。'
+            '具体事件将在第二阶段设计，本阶段不得输出 shots 或供应商提示词。\n\n'
+            '参考素材采用 H3 Context-IR 的职责分离方法。'
+            + reference_instruction
+            + '\n\n【完整脚本与真实时长】\n'
+            + json.dumps(beat_payload, ensure_ascii=False, indent=2)
+        )
+        treatment_user_content: str | list[dict] = treatment_prompt
+        if reference_image_url:
+            treatment_user_content = [
+                {'type': 'text', 'text': treatment_prompt},
+                {
+                    'type': 'image_url',
+                    'image_url': {'url': reference_image_url},
+                },
+            ]
+        treatment_response = await _openrouter_json_request(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            messages=[
+                {
+                    'role': 'system',
+                    'content': (
+                        '你是唯一的 Animated Explainer Director。当前只做视觉开发：'
+                        '建立导演处理、视觉世界和可复用资产，不写脚本、不拆镜头、'
+                        '不写 Seedream/Seedance 提示词。'
+                    ),
+                },
+                {'role': 'user', 'content': treatment_user_content},
+            ],
+            label='导演视觉开发',
+            schema_name='qijia_director_treatment_v1',
+            response_schema=_DIRECTOR_TREATMENT_RESPONSE_SCHEMA,
+            max_completion_tokens=64_000,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+            operation='director_treatment',
+            on_usage=on_usage,
+            reasoning_effort='xhigh',
+        )
+        now = timestamp()
+        try:
+            treatment = DirectorTreatment.model_validate({
+                **dict(treatment_response.data.get('director_treatment') or {}),
+                'schema_version': '1.0',
+                'model_id': treatment_response.model_id,
+                'input_hash': input_hash,
+                'created_at': now,
+            })
+            visual_bible = VisualBible.model_validate({
+                **dict(treatment_response.data.get('visual_bible') or {}),
+                'schema_version': '1.0',
+                'director_skill_id': director_skill_id,
+                'director_skill_version': director_skill_version,
+                'model_id': treatment_response.model_id,
+                'input_hash': input_hash,
+                'created_at': now,
+            })
+            asset_bible = AssetBible.model_validate({
+                **dict(treatment_response.data.get('asset_bible') or {}),
+                'schema_version': '1.0',
+                'model_id': treatment_response.model_id,
+                'input_hash': input_hash,
+                'created_at': now,
+            })
+        except (TypeError, ValidationError) as exc:
+            raise ProviderUnavailable(
+                'Director 第一阶段没有交付完整的视觉方案与资产圣经'
+            ) from exc
+        if bool(asset_bible.references) != bool(reference_image_url):
+            raise ProviderUnavailable('Director 返回的参考素材职责与实际输入不一致')
+        if reference_image_url and any(
+            item.reference_id != 'global_reference'
+            for item in asset_bible.references
+        ):
+            raise ProviderUnavailable('Director 返回了未知参考素材 ID')
+
+        shot_prompt = (
+            f'{director_instruction}\n\n'
+            '【第二阶段：正式分镜】下面的 DirectorTreatment、VisualBible 与 AssetBible '
+            '已经锁定，不能重新发明视觉世界。根据完整口播与真实 TTS 时长，自主合并'
+            '相邻 beats，设计 3—12 个具体事件章节；每个 beat_id 必须且只能出现一次并'
+            '保持顺序。每章写清 concrete_event、blocking、主体、动作、环境、构图、'
+            '起止状态、连续性承接和可执行摄影机。图片是默认媒介；仅在连续动作不可'
+            '替代、对应旁白不超过十秒且八秒内能完成时使用 video，全片最多三段。'
+            '只返回 shots，不重复输出视觉方案，不写供应商提示词。\n\n'
+            '【锁定的 DirectorTreatment】\n'
+            + json.dumps(treatment.model_dump(mode='json'), ensure_ascii=False)
+            + '\n\n【锁定的 VisualBible】\n'
+            + json.dumps(visual_bible.model_dump(mode='json'), ensure_ascii=False)
+            + '\n\n【锁定的 AssetBible】\n'
+            + json.dumps(asset_bible.model_dump(mode='json'), ensure_ascii=False)
+            + '\n\n【完整脚本与真实时长】\n'
+            + json.dumps(beat_payload, ensure_ascii=False, indent=2)
+        )
+        shot_response = await _openrouter_json_request(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            messages=[
+                {
+                    'role': 'system',
+                    'content': (
+                        '你仍是同一位导演。严格服从已经锁定的视觉方案和资产，'
+                        '现在只交付具体、可读、可生产的 ShotContextIR 章节。'
+                    ),
+                },
+                {'role': 'user', 'content': shot_prompt},
+            ],
+            label='导演正式分镜',
+            schema_name='qijia_director_shot_plan_v1',
+            response_schema=_DIRECTOR_SHOT_PLAN_RESPONSE_SCHEMA,
+            max_completion_tokens=STORYBOARD_MAX_COMPLETION_TOKENS,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+            operation='storyboard_generation',
+            on_usage=on_usage,
+            reasoning_effort='xhigh',
+        )
+        raw_shots = shot_response.data.get('shots')
+        if not isinstance(raw_shots, list) or not 3 <= len(raw_shots) <= 12:
+            raise ProviderUnavailable('Director Skill 返回了错误的章节数量')
+        returned_groups = [
+            list(item.get('beat_ids') or []) if isinstance(item, dict) else []
+            for item in raw_shots
+        ]
+        if not _beat_groups_cover_script(returned_groups, expected_beat_ids):
+            raise ProviderUnavailable('Director Skill 未按顺序完整覆盖确认脚本')
+        selected_types = [
+            str(item.get('visual_type') or '') for item in raw_shots
+        ]
+        if (
+            any(item not in {'image', 'video'} for item in selected_types)
+            or sum(item == 'video' for item in selected_types) > 3
+        ):
+            raise ProviderUnavailable('Director Skill 返回了无效的图片/视频分配')
+        beats_by_id = {item.id: item for item in script.beats}
+        shots: list[StoryboardShot] = []
+        try:
+            event_keys: set[str] = set()
+            for index, (raw, beat_ids, visual_type) in enumerate(
+                zip(raw_shots, returned_groups, selected_types),
+                1,
+            ):
+                chapter_duration = sum(
+                    float(narration_durations[beat_id]) for beat_id in beat_ids
+                )
+                if visual_type == 'video' and chapter_duration > 10.0:
+                    raise ValueError('video chapter exceeds narration limit')
+                context = ShotContextIR.model_validate(raw.get('context'))
+                event_key = re.sub(r'\s+', '', context.concrete_event).casefold()
+                if not event_key or event_key in event_keys:
+                    raise ValueError('duplicate concrete event')
+                event_keys.add(event_key)
+                if (
+                    re.sub(r'\s+', '', context.start_state).casefold()
+                    == re.sub(r'\s+', '', context.end_state).casefold()
+                ):
+                    raise ValueError('identical start and end states')
+                shots.append(StoryboardShot(
+                    shot_id=f'shot_{index:02d}',
+                    segment_id=beat_ids[0],
+                    beat_ids=beat_ids,
+                    narration_excerpt='\n'.join(
+                        beats_by_id[beat_id].narration for beat_id in beat_ids
+                    ),
+                    visual_type=visual_type,
+                    visual_intent=context.semantic_goal,
+                    context=context,
+                ))
+            plan = StoryboardPlan(
+                schema_version='3.0',
+                shots=shots,
+                model_id=shot_response.model_id,
+                prompt_version=DIRECTOR_QUALITY_PROMPT_VERSION,
+                input_hash=input_hash,
+                created_at=timestamp(),
+            )
+        except (KeyError, TypeError, ValueError, ValidationError) as exc:
+            raise ProviderUnavailable(
+                'Director 第二阶段返回内容不符合可执行分镜契约'
+            ) from exc
+        return treatment, visual_bible, asset_bible, plan
 
     async def generate_director_plan(
         self,

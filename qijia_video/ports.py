@@ -8,8 +8,10 @@ from typing import Protocol
 
 from qijia_video.contracts import (
     Actor,
+    AssetBible,
     AssetRef,
     NarrationManifest,
+    DirectorTreatment,
     ProviderUsageRecord,
     QualityReport,
     RenderManifest,
@@ -66,6 +68,24 @@ class ScriptProvider(Protocol):
 class StoryboardProvider(Protocol):
     name: str
 
+    async def generate_quality_director_plan(
+        self,
+        script: ScriptDraft,
+        director_instruction: str,
+        narration_durations: dict[str, float],
+        *,
+        director_skill_id: str,
+        director_skill_version: str,
+        input_hash: str,
+        reference_image_url: str = "",
+        on_usage=None,
+    ) -> tuple[
+        DirectorTreatment,
+        VisualBible,
+        AssetBible,
+        StoryboardPlan,
+    ]: ...
+
     async def generate_director_plan(
         self,
         script: ScriptDraft,
@@ -104,6 +124,7 @@ class ImageProvider(Protocol):
         *,
         seed: int,
         reference_image_url: str = "",
+        reference_image_urls: list[str] | None = None,
     ) -> GeneratedImage: ...
 
     async def download(self, source_url: str, destination: Path) -> Path: ...

@@ -35,6 +35,7 @@ from qijia_video.contracts import (
     GenerationSettings,
     JobState,
     InterpretationBoundary,
+    MultimodalReferenceIR,
     NewsResearchBrief,
     PendingShotMediaEdit,
     PersonResearchBrief,
@@ -62,6 +63,7 @@ from qijia_video.contracts import (
     SkillResearchMode,
     StoryboardPlan,
     StoryboardShot,
+    StyleFrameCandidate,
     ScreenTextCue,
     SubtitleCue,
     VideoJob,
@@ -105,6 +107,7 @@ from qijia_video.prompts import (
 from qijia_video.prompt_orchestration import (
     compile_direct_script_prompt,
     compile_legacy_h3_script_prompt,
+    compile_quality_script_prompt,
     compile_script_skill_prompt,
 )
 from qijia_video.prompt_adapter_registry import (
@@ -119,6 +122,7 @@ from qijia_video.director_skill_registry import (
 )
 from qijia_video.provider_prompting import (
     compile_image_provider_prompt,
+    compile_style_frame_prompt,
     compile_video_provider_prompt,
 )
 from qijia_video.provider_adapter_registry import (
@@ -407,8 +411,8 @@ class QijiaVideoService:
         return await self._save_job(job, actor)
 
     def _snapshot_image_cost(
-        self, candidate: FirstFrameCandidate
-    ) -> FirstFrameCandidate:
+        self, candidate: FirstFrameCandidate | StyleFrameCandidate
+    ) -> FirstFrameCandidate | StyleFrameCandidate:
         if (
             self.image_provider.name == "volcengine-seedream"
             and self.seedream_price_per_image > 0
@@ -704,13 +708,7 @@ class QijiaVideoService:
             parent_question=snapshot.original_request[:500],
             sources=sources,
             verified_facts=facts,
-            interpretation_boundary=[{
-                'id': 'boundary_01',
-                'text': (
-                    '模型已有知识不是本次已核对来源；人物归属、逐字引语、精确出处、'
-                    '版本、日期、数据和最新动态把握不足时必须降格表述或交由人工复核。'
-                ),
-            }],
+            interpretation_boundary=[],
             reference_assets=list(snapshot.reference_assets),
             id=card_id,
             revision=1,
@@ -747,6 +745,22 @@ class QijiaVideoService:
             input_snapshot,
             prompt_adapter=prompt_adapter,
             content_policy=content_policy,
+            script_skill=script_skill,
+            minimum_characters=minimum,
+            maximum_characters=maximum,
+        )
+
+    @staticmethod
+    def _quality_script_prompt_for_settings(
+        input_snapshot: CreativeInputSnapshot,
+        settings: GenerationSettings,
+        script_skill: ScriptSkillSnapshot,
+    ) -> str:
+        minimum, maximum = TTS_SCRIPT_CHARACTER_TARGETS[
+            settings.tts_speed_ratio
+        ]
+        return compile_quality_script_prompt(
+            input_snapshot,
             script_skill=script_skill,
             minimum_characters=minimum,
             maximum_characters=maximum,
@@ -1003,10 +1017,17 @@ class QijiaVideoService:
                 )
             rebound_hash = self._storyboard_input_hash(job)
             job.storyboard_plan.input_hash = rebound_hash
+            if job.director_treatment:
+                job.director_treatment.input_hash = rebound_hash
+            if job.asset_bible:
+                job.asset_bible.input_hash = rebound_hash
             if job.visual_bible:
                 job.visual_bible.input_hash = rebound_hash
         else:
             job.storyboard_plan = None
+            job.director_treatment = None
+            job.asset_bible = None
+            job.visual_bible = None
             job.first_frame_candidates = []
             job.frame_selections = []
             job.frame_selection_warning = ""
@@ -1120,9 +1141,8 @@ class QijiaVideoService:
                 "最新新闻依赖实时检索，当前工作台已停用该入口。"
                 "请在统一创作请求中粘贴你已经掌握的事实与材料。"
             )
-        # The legacy request shape is accepted, but every newly created task
-        # enters the same v3 runtime. SourceCard is converted once at the API
-        # boundary and is not retained as a pre-script workflow stage.
+        # This method is retained for CLI and historical SourceCard callers.
+        # The production Web intake uses create_direct_job and enters v4.
         original_request = card.core_idea.strip() or card.title
         snapshot = CreativeInputSnapshot(
             original_request=original_request,
@@ -1172,9 +1192,9 @@ class QijiaVideoService:
         verified_materials: list[CreativeMaterial] | None = None,
         reference_assets: list[dict] | None = None,
     ) -> VideoJob:
-        """Create one v3 job atomically from the creator's original request."""
+        """Create one v4 job atomically from the creator's original request."""
 
-        request = re.sub(r'\s+', ' ', str(creative_request or '')).strip()
+        request = str(creative_request or '').strip()
         if len(request) < 10:
             raise QualityGateFailed('请用至少 10 个字说明你想做的内容')
         now = timestamp()
@@ -1193,7 +1213,7 @@ class QijiaVideoService:
             card,
             actor,
             generation_settings,
-            pipeline_version=PipelineVersion.DIRECT_SCRIPT,
+            pipeline_version=PipelineVersion.QUALITY_FIRST,
             input_snapshot=snapshot,
         )
 
@@ -1221,15 +1241,24 @@ class QijiaVideoService:
             requested_settings.image_count or requested_settings.shot_count
         )
         try:
-            frozen_settings, skill_snapshot = self.skill_registry.freeze(
-                card,
-                requested_settings,
-            )
+            if pipeline_version == PipelineVersion.QUALITY_FIRST:
+                if requested_settings.skill_id or requested_settings.skill_version:
+                    raise SkillRegistryError(
+                        'v4 脚本入口不再接受 Content Skill；用户原始输入将直达脚本主编'
+                    )
+                frozen_settings = requested_settings.model_copy(deep=True)
+                skill_snapshot = None
+                prompt_adapter_snapshot = None
+            else:
+                frozen_settings, skill_snapshot = self.skill_registry.freeze(
+                    card,
+                    requested_settings,
+                )
+                prompt_adapter_snapshot = (
+                    self.prompt_adapter_registry.freeze_default()
+                )
             frozen_settings, script_skill_snapshot = (
                 self.script_skill_registry.freeze(card, frozen_settings)
-            )
-            prompt_adapter_snapshot = (
-                self.prompt_adapter_registry.freeze_default()
             )
             frozen_settings, director_skill_snapshot = (
                 self.director_skill_registry.freeze(card, frozen_settings)
@@ -1271,6 +1300,9 @@ class QijiaVideoService:
         # still deserialize with the contract defaults and keep their snapshots.
         frozen_settings.script_prompt = ''
         frozen_settings.seedance_prompt = ''
+        if pipeline_version == PipelineVersion.QUALITY_FIRST:
+            frozen_settings.skill_id = ''
+            frozen_settings.skill_version = ''
         frozen_settings.prompt_writing_profile_id = ''
         frozen_settings.prompt_writing_profile_version = ''
         now = timestamp()
@@ -1550,7 +1582,7 @@ class QijiaVideoService:
 
             self._report(
                 progress,
-                message="正在读取原始输入、用户材料与知识边界…",
+                message="正在把你的原始输入直接交给脚本主编…",
                 stage="material_confirmed",
                 percent=4,
             )
@@ -1576,12 +1608,59 @@ class QijiaVideoService:
                 stage="script_generation",
                 percent=14,
             )
+            is_v4 = job.pipeline_version == PipelineVersion.QUALITY_FIRST
             is_v3 = job.pipeline_version == PipelineVersion.DIRECT_SCRIPT
             is_v2 = job.pipeline_version == PipelineVersion.SINGLE_OWNER
             generate_with_usage = getattr(
                 self.script_provider, 'generate_with_usage', None
             )
-            if is_v3:
+            if is_v4:
+                if not job.input_snapshot or not job.script_skill_snapshot:
+                    raise QualityGateFailed(
+                        'v4 任务缺少冻结的原始输入或 Script Skill'
+                    )
+                if job.skill_snapshot or job.prompt_adapter_snapshot:
+                    raise QualityGateFailed(
+                        'v4 脚本入口不得包含 Content Policy、EvidencePolicy '
+                        '或 H3 Script Adapter'
+                    )
+                script_prompt = self._quality_script_prompt_for_settings(
+                    job.input_snapshot,
+                    settings,
+                    job.script_skill_snapshot,
+                )
+                generate_quality_script = getattr(
+                    self.script_provider,
+                    'generate_quality_script',
+                    None,
+                )
+                if callable(generate_quality_script):
+                    script, review = await generate_quality_script(
+                        card,
+                        script_prompt,
+                        on_usage=persist_script_usage,
+                    )
+                else:
+                    generate_direct_script = getattr(
+                        self.script_provider,
+                        'generate_direct_script',
+                        None,
+                    )
+                    if callable(generate_direct_script):
+                        script = await generate_direct_script(
+                            card,
+                            script_prompt,
+                            on_usage=persist_script_usage,
+                        )
+                    else:
+                        script = await self.script_provider.generate(
+                            card,
+                            script_prompt,
+                        )
+                    review = await self.script_provider.review(card, script)
+                creative_brief = None
+                editorial_plan = None
+            elif is_v3:
                 if (
                     not job.input_snapshot
                     or not job.skill_snapshot
@@ -1679,6 +1758,7 @@ class QijiaVideoService:
                         card, job.research_brief
                     )
                 editorial_plan = None
+            provider_script_hash = content_hash(script)
             if editorial_plan:
                 self._validate_editorial_plan(editorial_plan, card)
             script.estimated_duration_seconds = max(
@@ -1698,13 +1778,19 @@ class QijiaVideoService:
                 editorial_plan.draft_script_hash = generated_script_hash
             self._report(
                 progress,
-                message="脚本已生成，正在自动核对引用与安全边界…",
+                message="主编重写已完成，正在校验最终脚本结构…",
                 stage="script_generation",
                 percent=24,
             )
-            review = await self.script_provider.review(card, script)
+            if not is_v4:
+                review = await self.script_provider.review(card, script)
             if not review.passed or review.blocking_reasons:
                 raise QualityGateFailed("自动脚本审核未通过")
+            if is_v4 and review.input_hash == provider_script_hash:
+                # The service owns duration metadata because it knows the
+                # frozen TTS speed. Rebind only after verifying the exact
+                # provider-returned script that the critic/reviewer assessed.
+                review.input_hash = generated_script_hash
             if review.input_hash != generated_script_hash:
                 raise QualityGateFailed("脚本审核结果没有绑定当前脚本")
             job.script = script
@@ -1890,7 +1976,10 @@ class QijiaVideoService:
         ))
         job.pre_generation_media_mode = (
             PreGenerationMediaMode.REVIEW_BEFORE_GENERATION
-            if prepare_media_first
+            if (
+                prepare_media_first
+                or job.pipeline_version == PipelineVersion.QUALITY_FIRST
+            )
             else PreGenerationMediaMode.AUTOMATIC
         )
         job.state = JobState.SCRIPT_APPROVED
@@ -1915,6 +2004,17 @@ class QijiaVideoService:
             raise InvalidTransition("当前任务没有启用生成前素材安排")
         if not job.narration_manifest or not job.storyboard_plan:
             raise QualityGateFailed("旁白或文字分镜尚未准备完成")
+        if job.pipeline_version == PipelineVersion.QUALITY_FIRST:
+            available_style_frames = {
+                item.candidate_id
+                for item in job.style_frame_candidates
+                if item.asset
+            }
+            if (
+                len(available_style_frames) != 3
+                or job.selected_style_frame_id not in available_style_frames
+            ):
+                raise QualityGateFailed('请先从三张视觉开发样片中确认一张')
         if job.pending_shot_media_edits:
             raise QualityGateFailed("生成前素材安排不能包含成片后的待应用修改")
         known_media = {
@@ -1931,6 +2031,68 @@ class QijiaVideoService:
         job.pre_generation_media_mode = PreGenerationMediaMode.CONFIRMED
         job.state = JobState.SCRIPT_APPROVED
         job.error = ""
+        return await self._save_job(job, actor)
+
+    @staticmethod
+    def style_frame_asset(
+        job: VideoJob,
+        candidate_id: str,
+    ) -> AssetRef | None:
+        candidate = next(
+            (
+                item
+                for item in job.style_frame_candidates
+                if item.candidate_id == candidate_id
+            ),
+            None,
+        )
+        return candidate.asset if candidate else None
+
+    async def select_style_frame(
+        self,
+        job_id: str,
+        candidate_id: str,
+        expected_revision: int,
+        actor: Actor,
+    ) -> VideoJob:
+        job = await self.get_job(job_id, actor)
+        self._assert_revision(job.revision, expected_revision)
+        if (
+            job.pipeline_version != PipelineVersion.QUALITY_FIRST
+            or job.state != JobState.MEDIA_REVIEW_REQUIRED
+            or not job.asset_bible
+        ):
+            raise InvalidTransition('当前没有可确认的视觉开发样片')
+        candidate = next(
+            (
+                item
+                for item in job.style_frame_candidates
+                if item.candidate_id == candidate_id and item.asset
+            ),
+            None,
+        )
+        if not candidate:
+            raise ResourceNotFound('视觉开发样片不存在')
+        job.selected_style_frame_id = candidate.candidate_id
+        job.asset_bible.references = [
+            item
+            for item in job.asset_bible.references
+            if item.reference_id != 'approved_style_frame'
+        ] + [
+            MultimodalReferenceIR(
+                reference_id='approved_style_frame',
+                roles=['style'],
+                applies_to=['all_shots'],
+                retention_level='strong',
+                preserve=[
+                    '媒介、材质、色彩、光线、造型语言和空间层级',
+                ],
+                allow_change=['每章的主体动作、环境状态、景别与构图'],
+                forbidden_transfer=[
+                    '样片中的偶然动作、无关物件、可读文字和一次性构图',
+                ],
+            )
+        ]
         return await self._save_job(job, actor)
 
     @staticmethod
@@ -2323,6 +2485,7 @@ class QijiaVideoService:
         return job.pipeline_version in {
             PipelineVersion.SINGLE_OWNER,
             PipelineVersion.DIRECT_SCRIPT,
+            PipelineVersion.QUALITY_FIRST,
         }
 
     @classmethod
@@ -2418,6 +2581,7 @@ class QijiaVideoService:
             and job.director_skill_snapshot
             and job.director_skill_snapshot.mode != 'legacy-style-director'
         )
+        director_v4 = job.pipeline_version == PipelineVersion.QUALITY_FIRST
         if director_v3:
             if not job.script or not job.director_skill_snapshot:
                 raise InvalidTransition('Director v3 任务缺少确认脚本或导演快照')
@@ -2436,6 +2600,15 @@ class QijiaVideoService:
                     or returned_ids != expected_ids
                     or not job.visual_bible
                     or job.visual_bible.input_hash != expected_hash
+                    or (
+                        director_v4
+                        and (
+                            not job.director_treatment
+                            or job.director_treatment.input_hash != expected_hash
+                            or not job.asset_bible
+                            or job.asset_bible.input_hash != expected_hash
+                        )
+                    )
                     or job.visual_bible.director_skill_id
                     != job.director_skill_snapshot.skill_id
                     or job.visual_bible.director_skill_version
@@ -2447,17 +2620,14 @@ class QijiaVideoService:
                 return job
             self._report(
                 progress,
-                message='导演正在依据完整脚本和真实旁白时长规划视觉章节…',
+                message=(
+                    '导演正在先建立视觉方案与资产圣经，再规划正式镜头…'
+                    if director_v4
+                    else '导演正在依据完整脚本和真实旁白时长规划视觉章节…'
+                ),
                 stage='storyboard',
                 percent=44,
             )
-            generate_director_plan = getattr(
-                self.storyboard_provider, 'generate_director_plan', None
-            )
-            if not callable(generate_director_plan):
-                raise ProviderUnavailable(
-                    '当前分镜 Provider 不支持 Director v3 具体事件契约'
-                )
 
             async def persist_director_usage(
                 usage: ProviderUsageRecord,
@@ -2465,15 +2635,64 @@ class QijiaVideoService:
                 nonlocal job
                 job = await self._persist_usage_record(job, usage, actor)
 
-            visual_bible, plan = await generate_director_plan(
-                job.script,
-                self._storyboard_base_style(job),
-                timings,
-                director_skill_id=job.director_skill_snapshot.skill_id,
-                director_skill_version=job.director_skill_snapshot.version,
-                input_hash=expected_hash,
-                on_usage=persist_director_usage,
-            )
+            if director_v4:
+                generate_quality_director_plan = getattr(
+                    self.storyboard_provider,
+                    'generate_quality_director_plan',
+                    None,
+                )
+                if not callable(generate_quality_director_plan):
+                    raise ProviderUnavailable(
+                        '当前分镜 Provider 不支持 v4 两阶段导演契约'
+                    )
+                source_card = self._source_card_for_job(job)
+                reference_asset = (
+                    AssetRef.model_validate(source_card.reference_assets[0])
+                    if source_card.reference_assets
+                    else None
+                )
+                reference_image_url = (
+                    await self.storage.signed_get_url(
+                        reference_asset,
+                        expires=21600,
+                    )
+                    if reference_asset
+                    else ''
+                )
+                (
+                    director_treatment,
+                    visual_bible,
+                    asset_bible,
+                    plan,
+                ) = await generate_quality_director_plan(
+                    job.script,
+                    self._storyboard_base_style(job),
+                    timings,
+                    director_skill_id=job.director_skill_snapshot.skill_id,
+                    director_skill_version=job.director_skill_snapshot.version,
+                    input_hash=expected_hash,
+                    reference_image_url=reference_image_url,
+                    on_usage=persist_director_usage,
+                )
+            else:
+                generate_director_plan = getattr(
+                    self.storyboard_provider, 'generate_director_plan', None
+                )
+                if not callable(generate_director_plan):
+                    raise ProviderUnavailable(
+                        '当前分镜 Provider 不支持 Director v3 具体事件契约'
+                    )
+                visual_bible, plan = await generate_director_plan(
+                    job.script,
+                    self._storyboard_base_style(job),
+                    timings,
+                    director_skill_id=job.director_skill_snapshot.skill_id,
+                    director_skill_version=job.director_skill_snapshot.version,
+                    input_hash=expected_hash,
+                    on_usage=persist_director_usage,
+                )
+                director_treatment = None
+                asset_bible = None
             returned_ids = [
                 beat_id for shot in plan.shots for beat_id in shot.beat_ids
             ]
@@ -2484,7 +2703,12 @@ class QijiaVideoService:
                 if context
             ]
             allowed_reference_roles = {
-                'identity', 'wardrobe', 'object', 'location', 'style'
+                'identity',
+                'wardrobe',
+                'object',
+                'location',
+                'style',
+                'composition',
             }
             reference_roles = [
                 role
@@ -2507,6 +2731,15 @@ class QijiaVideoService:
                 != job.director_skill_snapshot.skill_id
                 or visual_bible.director_skill_version
                 != job.director_skill_snapshot.version
+                or (
+                    director_v4
+                    and (
+                        not director_treatment
+                        or director_treatment.input_hash != expected_hash
+                        or not asset_bible
+                        or asset_bible.input_hash != expected_hash
+                    )
+                )
             ):
                 raise ProviderUnavailable(
                     'Director 未交付完整、唯一且可执行的具体事件方案'
@@ -2519,6 +2752,8 @@ class QijiaVideoService:
                         'Director 把超过十秒的旁白章节错误分配为八秒视频'
                     )
             job.storyboard_plan = plan
+            job.director_treatment = director_treatment
+            job.asset_bible = asset_bible
             job.visual_bible = visual_bible
             job = await self._save_job(job, actor)
             self._report(
@@ -2689,6 +2924,12 @@ class QijiaVideoService:
                 job.visual_bible,
                 shot,
                 has_reference_image=has_reference_image,
+                asset_bible=job.asset_bible,
+                available_reference_ids=(
+                    {'approved_style_frame'}
+                    if job.pipeline_version == PipelineVersion.QUALITY_FIRST
+                    else {'global_reference'}
+                ),
             )
         settings = QijiaVideoService._generation_settings(job)
         return compile_first_frame_prompt(
@@ -2767,6 +3008,7 @@ class QijiaVideoService:
                 storyboard_shot,
                 opening_direction=cls._opening_direction_for_shot(job, shot_id),
                 revision_intent=revision_intent,
+                asset_bible=job.asset_bible,
             )
         return compile_video_prompt(
             settings.seedance_prompt,
@@ -2820,6 +3062,151 @@ class QijiaVideoService:
         )
         return candidate.asset if candidate else None
 
+    @staticmethod
+    def _replace_style_frame_candidate(
+        job: VideoJob,
+        candidate: StyleFrameCandidate,
+    ) -> None:
+        job.style_frame_candidates = [
+            item
+            for item in job.style_frame_candidates
+            if item.candidate_id != candidate.candidate_id
+        ] + [candidate]
+        job.style_frame_candidates.sort(key=lambda item: item.variant)
+
+    async def _ensure_style_frames(
+        self,
+        job: VideoJob,
+        actor: Actor,
+        workspace: Path,
+        progress: ProgressReporter | None = None,
+    ) -> VideoJob:
+        if job.pipeline_version != PipelineVersion.QUALITY_FIRST:
+            return job
+        if not job.director_treatment or not job.visual_bible or not job.asset_bible:
+            raise InvalidTransition('v4 视觉开发样片缺少导演方案或 AssetBible')
+        for variant in range(1, 4):
+            candidate_id = f'style_frame_{variant:02d}'
+            candidate = next(
+                (
+                    item
+                    for item in job.style_frame_candidates
+                    if item.candidate_id == candidate_id
+                ),
+                None,
+            )
+            if candidate and candidate.asset:
+                continue
+            if not candidate:
+                prompt = compile_style_frame_prompt(
+                    job.director_treatment,
+                    job.visual_bible,
+                    job.asset_bible,
+                    variant=variant,
+                )
+                seed = secrets.randbits(31)
+                self._report(
+                    progress,
+                    message=f'正在生成视觉开发样片 {variant}/3…',
+                    stage='style_development',
+                    percent=46 + variant,
+                )
+                try:
+                    # Visual development deliberately does not resend the
+                    # creator's uploaded reference. That private asset remains
+                    # scoped to the already-authorized final-shot generation.
+                    generated = await self.image_provider.generate(
+                        prompt,
+                        seed=seed,
+                    )
+                except ProviderUnavailable:
+                    job = await self._persist_usage_record(
+                        job,
+                        ProviderUsageRecord(
+                            usage_id=(
+                                f'usage_seedream_style_attempt_{uuid.uuid4().hex}'
+                            ),
+                            operation='seedream_style_frame',
+                            provider=self.image_provider.name,
+                            model_id=str(
+                                getattr(self.image_provider, 'model', '') or ''
+                            ),
+                            request_id=candidate_id,
+                            succeeded=False,
+                            quantity=1,
+                            unit='image',
+                            note='视觉开发样片请求失败或结果未知，是否计费需对账',
+                            occurred_at=timestamp(),
+                        ),
+                        actor,
+                    )
+                    raise
+                candidate = self._snapshot_image_cost(StyleFrameCandidate(
+                    candidate_id=candidate_id,
+                    variant=variant,
+                    prompt=prompt,
+                    seed=seed,
+                    model_id=generated.model_id,
+                    source_url=generated.url,
+                    size=generated.size,
+                    usage_total_tokens=generated.usage_total_tokens,
+                    created_at=timestamp(),
+                ))
+                self._remember_usage_record(job, ProviderUsageRecord(
+                    usage_id=(
+                        'usage_seedream_style_'
+                        + content_hash({
+                            'job_id': job.id,
+                            'candidate_id': candidate_id,
+                        })[:36]
+                    ),
+                    operation='seedream_style_frame',
+                    provider=self.image_provider.name,
+                    model_id=candidate.model_id,
+                    request_id=candidate_id,
+                    succeeded=True,
+                    total_tokens=candidate.usage_total_tokens,
+                    quantity=1,
+                    unit='image',
+                    estimated_cost=candidate.estimated_cost_cny,
+                    estimated_currency=(
+                        'CNY'
+                        if candidate.estimated_cost_cny is not None
+                        else None
+                    ),
+                    pricing_basis=candidate.pricing_basis,
+                    note=(
+                        '测试 Provider 不计入生产费用'
+                        if self.image_provider.name != 'volcengine-seedream'
+                        else ''
+                    ),
+                    occurred_at=candidate.created_at,
+                ))
+                self._replace_style_frame_candidate(job, candidate)
+                job = await self._save_job(job, actor)
+            if not candidate.source_url:
+                raise ProviderUnavailable(
+                    f'视觉开发样片 {candidate.candidate_id} 缺少下载地址'
+                )
+            local_path = (
+                workspace / 'style-frames' / f'{candidate.candidate_id}.image'
+            )
+            await self.image_provider.download(candidate.source_url, local_path)
+            extension, media_type = self._image_format(local_path)
+            asset = await self.storage.put_file(
+                object_key=(
+                    f'qijia-video/{job.id}/style-frames/'
+                    f'{candidate.candidate_id}{extension}'
+                ),
+                path=local_path,
+                asset_id=candidate.candidate_id,
+                media_type=media_type,
+            )
+            candidate.asset = asset
+            self._replace_style_frame_candidate(job, candidate)
+            job = await self._save_job(job, actor)
+        return job
+
     async def _ensure_first_frames(
         self,
         job: VideoJob,
@@ -2845,6 +3232,30 @@ class QijiaVideoService:
             await self.storage.signed_get_url(reference_asset, expires=21600)
             if reference_asset
             else ""
+        )
+        selected_style_frame = next(
+            (
+                item
+                for item in job.style_frame_candidates
+                if (
+                    item.candidate_id == job.selected_style_frame_id
+                    and item.asset
+                )
+            ),
+            None,
+        )
+        style_frame_url = (
+            await self.storage.signed_get_url(
+                selected_style_frame.asset,
+                expires=21600,
+            )
+            if selected_style_frame and selected_style_frame.asset
+            else ''
+        )
+        effective_reference_url = (
+            style_frame_url
+            if job.pipeline_version == PipelineVersion.QUALITY_FIRST
+            else reference_image_url
         )
         target_indices = [
             index
@@ -2882,7 +3293,7 @@ class QijiaVideoService:
                 prompt = self._first_frame_prompt(
                     job,
                     shot,
-                    has_reference_image=bool(reference_asset),
+                    has_reference_image=bool(effective_reference_url),
                 )
                 if not candidate:
                     # Ark ImageGenerations defines Seedream seed as signed int32.
@@ -2903,11 +3314,11 @@ class QijiaVideoService:
                     )
 
                     try:
-                        if reference_image_url:
+                        if effective_reference_url:
                             generated = await self.image_provider.generate(
                                 prompt,
                                 seed=seed,
-                                reference_image_url=reference_image_url,
+                                reference_image_url=effective_reference_url,
                             )
                         else:
                             generated = await self.image_provider.generate(
@@ -5666,11 +6077,29 @@ class QijiaVideoService:
                         job.editorial_plan.model_dump(mode='json')
                         if job.editorial_plan else None
                     ),
-                } if job.pipeline_version != PipelineVersion.DIRECT_SCRIPT else {}),
+                } if job.pipeline_version in {
+                    PipelineVersion.LEGACY,
+                    PipelineVersion.SINGLE_OWNER,
+                } else {}),
+                'director_treatment': (
+                    job.director_treatment.model_dump(mode='json')
+                    if job.director_treatment else None
+                ),
                 'visual_bible': (
                     job.visual_bible.model_dump(mode='json')
                     if job.visual_bible else None
                 ),
+                'asset_bible': (
+                    job.asset_bible.model_dump(mode='json')
+                    if job.asset_bible else None
+                ),
+                'style_development': {
+                    'selected_style_frame_id': job.selected_style_frame_id,
+                    'candidates': [
+                        item.model_dump(mode='json', exclude={'source_url'})
+                        for item in job.style_frame_candidates
+                    ],
+                },
             }, ensure_ascii=False, indent=2),
             encoding='utf-8',
         )
@@ -5744,6 +6173,8 @@ class QijiaVideoService:
             "tts_provider": self.tts_provider.name,
             "image_provider": self.image_provider.name,
             "first_frame_strategy": "one_generated_frame_per_shot",
+            "style_frame_generation_count": len(job.style_frame_candidates),
+            "selected_style_frame_id": job.selected_style_frame_id,
             "video_provider": self.video_provider.name,
             "storyboard_input_hash": (
                 job.storyboard_plan.input_hash if job.storyboard_plan else ""
@@ -5923,6 +6354,10 @@ class QijiaVideoService:
                 if rebind_reused_director_plan:
                     rebound_hash = self._storyboard_input_hash(job)
                     job.storyboard_plan.input_hash = rebound_hash
+                    if job.director_treatment:
+                        job.director_treatment.input_hash = rebound_hash
+                    if job.asset_bible:
+                        job.asset_bible.input_hash = rebound_hash
                     job.visual_bible.input_hash = rebound_hash
                 job.render_manifest = self._build_render_manifest(
                     job, audio_assets, previous_visual_assets
@@ -5964,6 +6399,17 @@ class QijiaVideoService:
             else:
                 job = await self._ensure_storyboard_plan(job, actor, progress)
                 if (
+                    job.pipeline_version == PipelineVersion.QUALITY_FIRST
+                    and job.pre_generation_media_mode
+                    == PreGenerationMediaMode.REVIEW_BEFORE_GENERATION
+                ):
+                    job = await self._ensure_style_frames(
+                        job,
+                        actor,
+                        workspace,
+                        progress,
+                    )
+                if (
                     job.pre_generation_media_mode
                     == PreGenerationMediaMode.REVIEW_BEFORE_GENERATION
                 ):
@@ -5973,7 +6419,15 @@ class QijiaVideoService:
                     self._report(
                         progress,
                         message=(
-                            "旁白和文字分镜已就绪，请安排自有素材；"
+                            (
+                                "视觉方案、三张样片和文字分镜已就绪，"
+                                "请确认视觉方向并安排自有素材；"
+                            )
+                            if job.pipeline_version
+                            == PipelineVersion.QUALITY_FIRST
+                            else "旁白和文字分镜已就绪，请安排自有素材；"
+                        )
+                        + (
                             "确认前不会生成 AI 图片或视频"
                         ),
                         stage="confirm_media",

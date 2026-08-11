@@ -318,7 +318,7 @@ class QijiaVideoContractTests(unittest.TestCase):
         legacy_profile = default_prompt_writing_profile_registry.resolve(
             "structured-multimodal"
         )
-        self.assertEqual(collage.version, "1.1.0")
+        self.assertEqual(collage.version, "2.0.0")
         self.assertIn("编辑纸张拼贴", collage.director_prompt)
         self.assertIn("纸片", collage.motion_rules)
         self.assertIn("纸偶关节", papercraft.storyboard_rules)
@@ -571,7 +571,7 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertIn("不会联网核验", card.interpretation_boundary[0].text)
         self.assertIn("模型可以使用其已有的稳定知识", card.interpretation_boundary[0].text)
 
-    def test_unified_creative_request_api_exposes_only_atomic_v3_creation(self):
+    def test_unified_creative_request_api_exposes_only_atomic_v4_creation(self):
         paths = {route.path for route in qijia_api.api_router.routes}
         prefix = "/api/qijia-video"
 
@@ -689,7 +689,7 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(settings.image_count, 0)
         self.assertEqual(settings.shot_count, 0)
         self.assertEqual(settings.video_resolution, "1080p")
-        self.assertEqual(settings.seedance_model, SEEDANCE_EFFICIENT_MODEL)
+        self.assertEqual(settings.seedance_model, SEEDANCE_FLAGSHIP_MODEL)
         self.assertEqual(
             settings.tts_voice_id,
             "zh_female_vv_uranus_bigtts",
@@ -713,7 +713,7 @@ class QijiaVideoContractTests(unittest.TestCase):
         )
         self.assertEqual(
             legacy_job.generation_settings.seedance_model,
-            SEEDANCE_FLAGSHIP_MODEL,
+            SEEDANCE_EFFICIENT_MODEL,
         )
         self.assertEqual(legacy_job.generation_settings.image_count, 2)
         self.assertEqual(legacy_job.generation_settings.shot_count, 5)
@@ -1912,6 +1912,115 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(script.source_card_id, card.id)
         self.assertEqual(script.video_title, "真正重要的是判断标准")
 
+    async def test_openrouter_quality_script_uses_writer_critic_writer_calls(self):
+        calls: list[dict] = []
+
+        def script_payload(title: str, suffix: str = "") -> dict:
+            return {
+                "schema_version": "3.0",
+                "video_title": title,
+                "cover_text": "先问是非，再问结果",
+                "beats": [
+                    {
+                        "id": f"n{index:02d}",
+                        "narration": (text + suffix).ljust(40, "。"),
+                        "role": role,
+                        "on_screen_text": "",
+                        "source_refs": [],
+                        "quote_ref": None,
+                    }
+                    for index, (role, text) in enumerate([
+                        ("hook", "真正困难的不是赢，而是先判断什么值得做。"),
+                        ("context", "这句话把是非放在利害和成败之前。"),
+                        ("explanation", "它要求人承担判断带来的现实代价。"),
+                        ("application", "今天做选择，也要追问它会留下什么。"),
+                        ("closing", "结果会过去，判断塑造一个人最终成为什么。"),
+                    ], 1)
+                ],
+                "caption": "先判断什么值得做，再衡量输赢。",
+                "hashtags": ["人物观点", "判断", "选择"],
+            }
+
+        critique = {
+            "verdict": "revise",
+            "quality_scores": {
+                "input_fidelity": 9,
+                "central_insight": 8,
+                "argument_progression": 7,
+                "specificity": 6,
+                "spoken_language": 8,
+                "originality": 8,
+                "factual_discipline": 9,
+            },
+            "strengths": ["中心判断清楚"],
+            "revision_requests": [{
+                "priority": "important",
+                "issue": "具体处境不足",
+                "instruction": "增加一个选择与代价同时出现的处境",
+            }],
+            "factual_risks": [],
+            "preserve": ["开场判断"],
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            calls.append(body)
+            schema_name = body["response_format"]["json_schema"]["name"]
+            if schema_name == "qijia_script_critique_v1":
+                result = critique
+            elif schema_name == "qijia_quality_script_final_v1":
+                result = script_payload("最终稿", "具体代价")
+            else:
+                result = script_payload("初稿")
+            return httpx.Response(200, json={
+                "id": f"request-{len(calls)}",
+                "model": "openai/gpt-5.6-sol",
+                "choices": [{"message": {"content": json.dumps(
+                    result, ensure_ascii=False
+                )}}],
+            })
+
+        provider = OpenRouterScriptProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="openai/gpt-5.6-sol",
+            transport=httpx.MockTransport(handler),
+        )
+        card = SourceCard(
+            **valid_card().model_dump(mode="json"),
+            id="card-quality-script",
+            revision=1,
+            status="verified",
+        )
+
+        script, review = await provider.generate_quality_script(
+            card,
+            "【用户原始创作请求｜原文】\n黄宗羲及这段话的思想力量",
+        )
+
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(
+            [item["reasoning"]["effort"] for item in calls],
+            ["xhigh", "high", "xhigh"],
+        )
+        self.assertTrue(all(item["model"] == "openai/gpt-5.6-sol" for item in calls))
+        self.assertTrue(all("tools" not in item for item in calls))
+        self.assertEqual(
+            [item["response_format"]["json_schema"]["name"] for item in calls],
+            [
+                "qijia_quality_script_draft_v1",
+                "qijia_script_critique_v1",
+                "qijia_quality_script_final_v1",
+            ],
+        )
+        self.assertNotIn("【硬性政策】", calls[0]["messages"][1]["content"])
+        self.assertNotIn("H3 Prompt Adapter", calls[0]["messages"][1]["content"])
+        self.assertEqual(script.video_title, "最终稿")
+        self.assertEqual(review.quality_scores["central_insight"], 8)
+        self.assertEqual(review.revision_requests, critique["revision_requests"])
+        self.assertEqual(review.input_hash, content_hash(script))
+        self.assertNotEqual(review.reviewed_draft_hash, content_hash(script))
+
     async def test_openrouter_reports_truncated_json_with_the_exact_stage(self):
         def handler(_: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -2238,6 +2347,137 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertEqual(bible.director_skill_id, "animated-explainer")
         self.assertEqual(bible.input_hash, "a" * 64)
+
+    async def test_openrouter_quality_director_locks_world_before_shots(self):
+        card = SourceCard(
+            **valid_card().model_dump(mode="json"),
+            id="card-director-v4",
+            revision=1,
+            status="verified",
+        )
+        script = await TemplateScriptProvider().generate(card)
+        beat_ids = [item.id for item in script.beats]
+        durations = {item.id: 5.0 for item in script.beats}
+        groups = [[beat_ids[0]], beat_ids[1:3], beat_ids[3:]]
+        calls: list[dict] = []
+
+        def context(index: int) -> dict:
+            return {
+                "semantic_goal": f"推进第 {index} 章判断",
+                "concrete_event": (
+                    f"第 {index} 章中，同一人物在书桌前移动关键物件，"
+                    "另一人物改变站位，桌面形成新的明确关系。"
+                ),
+                "blocking": "主角在左侧中景，配角在右后方，关键物件位于两人之间。",
+                "visual_metaphor": "",
+                "subject": "固定造型的主角、配角和同一关键物件",
+                "action": "主角移动物件，配角后退并给出可见反馈",
+                "environment": "空间骨架和右侧窗光固定的书房",
+                "composition": "竖屏中景，人物分居两侧，桌面为焦点",
+                "continuity_handoff": "开场建立关系" if index == 1 else "承接上一章结果",
+                "start_state": f"第 {index} 章动作尚未发生",
+                "end_state": f"第 {index} 章新关系已经清楚可见",
+                "camera_intent": "胸口高度轻微跟随，停在桌面新关系",
+                "media_rationale": "首章动作连续，后续决定性瞬间可由图片表达",
+                "reference_roles": [],
+            }
+
+        treatment_payload = {
+            "director_treatment": {
+                "visual_thesis": "用同一物件的位置变化承载判断标准的变化。",
+                "audience_experience": "从眼前输赢逐步看到长期判断。",
+                "chapter_progression": ["建立冲突", "显现代价", "完成重构"],
+                "motif_system": ["关键物件", "右侧窗光"],
+                "rhythm_strategy": "开场迅速，中段停顿观察，结尾收束。",
+                "edit_pattern": "动作结果接下一章起始状态。",
+                "style_application": "现代编辑插画，以纸纹、色块和负空间组织关系。",
+            },
+            "visual_bible": {
+                "core_visual_idea": "物件位置改变人物关系。",
+                "visual_world": "统一的现代编辑插画书房。",
+                "recurring_subjects": ["主角", "配角", "关键物件"],
+                "scene_anchors": ["固定书桌", "右侧窗光"],
+                "continuity_rules": ["人物造型固定", "物件位置承接"],
+                "color_material_system": "低饱和纸纹与陶土橙重点色。",
+                "composition_system": "竖屏中景与清楚负空间。",
+                "reference_strategy": "无参考图。",
+                "forbidden_elements": ["可读文字", "随机换脸"],
+            },
+            "asset_bible": {
+                "subjects": ["主角", "配角"],
+                "locations": ["固定书房"],
+                "props": ["关键物件"],
+                "identity_locks": ["主角轮廓、服装与比例固定"],
+                "material_locks": ["纸纹、色块和侧光固定"],
+                "allowed_variations": ["动作、景别和局部构图可变"],
+                "motion_grammar": ["单一动作链", "克制跟随"],
+                "review_criteria": ["事件一眼可读", "人物与材质连续"],
+                "references": [],
+            },
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            calls.append(body)
+            schema_name = body["response_format"]["json_schema"]["name"]
+            if schema_name == "qijia_director_treatment_v1":
+                result = treatment_payload
+            else:
+                result = {
+                    "shots": [
+                        {
+                            "beat_ids": group,
+                            "visual_type": "video" if index == 1 else "image",
+                            "context": context(index),
+                        }
+                        for index, group in enumerate(groups, 1)
+                    ],
+                }
+            return httpx.Response(200, json={
+                "id": f"director-{len(calls)}",
+                "model": "openai/gpt-5.6-sol",
+                "choices": [{"message": {"content": json.dumps(
+                    result, ensure_ascii=False
+                )}}],
+            })
+
+        provider = OpenRouterStoryboardProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="openai/gpt-5.6-sol",
+            transport=httpx.MockTransport(handler),
+        )
+
+        treatment, bible, assets, plan = (
+            await provider.generate_quality_director_plan(
+                script,
+                "【导演方法】动画解说导演@2.0.0",
+                durations,
+                director_skill_id="animated-explainer",
+                director_skill_version="2.0.0",
+                input_hash="b" * 64,
+            )
+        )
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            [item["reasoning"]["effort"] for item in calls],
+            ["xhigh", "xhigh"],
+        )
+        self.assertEqual(
+            [item["response_format"]["json_schema"]["name"] for item in calls],
+            ["qijia_director_treatment_v1", "qijia_director_shot_plan_v1"],
+        )
+        first_schema = calls[0]["response_format"]["json_schema"]["schema"]
+        second_schema = calls[1]["response_format"]["json_schema"]["schema"]
+        self.assertNotIn("shots", first_schema["properties"])
+        self.assertEqual(set(second_schema["properties"]), {"shots"})
+        self.assertIn("先不要拆镜头", calls[0]["messages"][1]["content"])
+        self.assertIn("已经锁定，不能重新发明视觉世界", calls[1]["messages"][1]["content"])
+        self.assertEqual(treatment.input_hash, "b" * 64)
+        self.assertEqual(bible.director_skill_version, "2.0.0")
+        self.assertEqual(assets.motion_grammar, ["单一动作链", "克制跟随"])
+        self.assertEqual([shot.beat_ids for shot in plan.shots], groups)
 
     async def test_storyboard_normalizes_a_missing_shot_without_second_call(self):
         card = SourceCard(
@@ -2863,6 +3103,103 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.temporary.cleanup()
 
+    async def test_quality_first_direct_job_has_clean_script_entry_and_style_gate(self):
+        original_request = (
+            "黄宗羲，大丈夫行事，论是非不论利害，论顺逆不论成败，\n"
+            "论万世不论一生。请解释这段话真正有力量的地方。"
+        )
+        image_provider = RecordingImageProvider()
+        self.service.image_provider = image_provider
+
+        job = await self.service.create_direct_job(
+            original_request,
+            self.actor,
+        )
+
+        self.assertEqual(job.pipeline_version, "v4")
+        self.assertEqual(job.input_snapshot.original_request, original_request)
+        self.assertIsNone(job.skill_snapshot)
+        self.assertIsNone(job.prompt_adapter_snapshot)
+        self.assertIsNone(job.prompt_writing_profile_snapshot)
+        self.assertEqual(
+            job.script_skill_snapshot.skill_id,
+            "insight-led-scriptwriter",
+        )
+        self.assertEqual(job.director_skill_snapshot.version, "2.0.0")
+        self.assertEqual(job.provider_adapter_snapshot.version, "2.0.0")
+        self.assertEqual(job.generation_settings.seedance_model, SEEDANCE_FLAGSHIP_MODEL)
+
+        job = await self.service.generate_script(job.id, self.actor)
+        self.assertEqual(job.state, JobState.SCRIPT_REVIEW_REQUIRED)
+        self.assertIsNone(job.research_brief)
+        self.assertIsNone(job.creative_brief)
+        self.assertIsNone(job.editorial_plan)
+        self.assertTrue(job.script_review.quality_scores)
+        self.assertEqual(job.script_review.input_hash, job.script_hash)
+
+        job = await self.service.approve_script(
+            job.id,
+            job.revision,
+            job.script_hash,
+            self.actor,
+        )
+        self.assertEqual(
+            job.pre_generation_media_mode,
+            PreGenerationMediaMode.REVIEW_BEFORE_GENERATION,
+        )
+        job = await self.service.produce(job.id, self.actor)
+
+        self.assertEqual(job.state, JobState.MEDIA_REVIEW_REQUIRED)
+        self.assertIsNotNone(job.director_treatment)
+        self.assertIsNotNone(job.visual_bible)
+        self.assertIsNotNone(job.asset_bible)
+        self.assertEqual(len(job.style_frame_candidates), 3)
+        self.assertTrue(all(item.asset for item in job.style_frame_candidates))
+        self.assertEqual(job.first_frame_candidates, [])
+        self.assertEqual(job.visual_requests, [])
+        self.assertEqual(job.video_tasks, [])
+        self.assertEqual(image_provider.reference_image_urls, ["", "", ""])
+
+        with self.assertRaisesRegex(QualityGateFailed, "三张视觉开发样片"):
+            await self.service.confirm_pre_generation_media(
+                job.id,
+                job.revision,
+                self.actor,
+            )
+
+        selected = job.style_frame_candidates[1]
+        job = await self.service.select_style_frame(
+            job.id,
+            selected.candidate_id,
+            job.revision,
+            self.actor,
+        )
+        self.assertEqual(job.selected_style_frame_id, selected.candidate_id)
+        approved_reference = next(
+            item
+            for item in job.asset_bible.references
+            if item.reference_id == "approved_style_frame"
+        )
+        self.assertEqual(approved_reference.roles, ["style"])
+
+        job = await self.service.confirm_pre_generation_media(
+            job.id,
+            job.revision,
+            self.actor,
+        )
+        job = await self.service.produce(job.id, self.actor)
+
+        self.assertEqual(job.state, JobState.FINAL_REVIEW_REQUIRED)
+        self.assertEqual(
+            len(job.first_frame_candidates),
+            len(job.storyboard_plan.shots),
+        )
+        selected_url = await self.storage.signed_get_url(selected.asset, expires=21600)
+        self.assertTrue(all(
+            value == selected_url
+            for value in image_provider.reference_image_urls[3:]
+        ))
+
     async def test_generic_source_card_requires_evidence_before_verification(self):
         card = await self.service.create_source_card(
             valid_card(sources=[], verified_facts=[]),
@@ -2902,7 +3239,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job.pipeline_version, "v3")
         self.assertIsNotNone(job.input_snapshot)
         self.assertEqual(job.source_card_snapshot, {})
-        self.assertEqual(job.script_skill_snapshot.skill_id, "evidence-led-explainer")
+        self.assertEqual(job.script_skill_snapshot.skill_id, "insight-led-scriptwriter")
         self.assertEqual(job.generation_settings.script_prompt, "")
         self.assertEqual(job.generation_settings.seedance_prompt, "")
 
@@ -2963,18 +3300,18 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(job.pipeline_version, "v3")
-        self.assertEqual(job.script_skill_snapshot.skill_id, "evidence-led-explainer")
+        self.assertEqual(job.script_skill_snapshot.skill_id, "insight-led-scriptwriter")
         self.assertEqual(
             job.director_skill_snapshot.skill_id,
             "animated-explainer",
         )
-        self.assertEqual(job.director_skill_snapshot.version, "1.0.0")
+        self.assertEqual(job.director_skill_snapshot.version, "2.0.0")
         self.assertEqual(job.director_skill_snapshot.mode, "animated_explainer")
         self.assertEqual(
             job.provider_adapter_snapshot.adapter_id,
             "seedream-seedance",
         )
-        self.assertEqual(job.provider_adapter_snapshot.version, "1.3.0")
+        self.assertEqual(job.provider_adapter_snapshot.version, "2.0.0")
         self.assertEqual(
             job.visual_style_snapshot.style_id,
             "paper-collage-explainer",
@@ -3003,8 +3340,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("【唯一视觉负责人】", compiled)
         self.assertIn("已确认脚本是内容唯一真相", compiled)
         self.assertIn("高级编辑纸张拼贴", compiled)
-        self.assertIn("【导演方法】动画解说导演@1.0.0", compiled)
-        self.assertIn("【独立 Visual Style】编辑纸张拼贴@1.1.0", compiled)
+        self.assertIn("【导演方法】动画解说导演@2.0.0", compiled)
+        self.assertIn("【独立 Visual Style】编辑纸张拼贴@2.0.0", compiled)
         self.assertIn("VisualBible", compiled)
         self.assertIn("ShotContextIR", compiled)
         self.assertNotIn("H3", compiled)
@@ -3026,17 +3363,15 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             for shot in job.storyboard_plan.shots
         ))
         self.assertTrue(all(
-            "【Provider Adapter】seedream-seedance@1.3.0" in item.prompt
-            and "【VisualBible】" in item.prompt
-            and "【ShotContextIR】" in item.prompt
+            "决定性事件：" in item.prompt
+            and "全片视觉语言：" in item.prompt
             and job.visual_bible.visual_world in item.prompt
-            and "【Director Skill 艺术语言】" not in item.prompt
+            and "【ShotContextIR】" not in item.prompt
             for item in job.first_frame_candidates
         ))
         self.assertTrue(all(
-            "【Provider Adapter】seedream-seedance@1.3.0" in item.prompt
-            and "最高且唯一视觉基准" in item.prompt
-            and job.visual_bible.visual_world in item.prompt
+            "最高且唯一视觉基准" in item.prompt
+            and "八秒内只完成这一条动作链" in item.prompt
             and "【Director Skill 动态语言】" not in item.prompt
             for item in job.visual_requests
         ))
@@ -3213,7 +3548,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"external_retrieval": false', provider.generated_prompt)
         self.assertIn("禁止联网搜索", provider.generated_prompt)
         self.assertIn(
-            "【Script Skill】evidence-led-explainer@2.0.0",
+            "【Script Skill】insight-led-scriptwriter@1.0.0",
             provider.generated_prompt,
         )
         self.assertNotIn("openrouter:web_search", provider.generated_prompt)
@@ -3775,8 +4110,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("【导演方法】", storyboard_provider.base_style)
         self.assertIn("高级编辑纸张拼贴", storyboard_provider.base_style)
         self.assertTrue(all(
-            "【参考素材保留协议】" in prompt
-            and '"reference_roles": ["identity"]' in prompt
+            "输入参考图只承担本镜头 ShotContextIR.reference_roles" in prompt
             for prompt in provider.prompts
         ))
         self.assertTrue(all(
@@ -3912,8 +4246,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             if shot.visual_type == "video"
         )
         self.assertIn("最高且唯一视觉基准", job.visual_requests[0].prompt)
-        self.assertIn("【VisualBible】", job.visual_requests[0].prompt)
-        self.assertIn("【ShotContextIR】", job.visual_requests[0].prompt)
+        self.assertIn("主要动作链：", job.visual_requests[0].prompt)
+        self.assertNotIn("【ShotContextIR】", job.visual_requests[0].prompt)
         self.assertIn(
             first_video_shot.context.camera_intent,
             job.visual_requests[0].prompt,
@@ -4029,12 +4363,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertTrue(all(
-            request.prompt.startswith(
-                "【Provider Adapter】seedream-seedance@1.3.0"
-            )
-            and "输入首帧就是视频第一帧" in request.prompt
-            and "只生成无声画面" in request.prompt
-            and "可读文字" in request.prompt
+            request.prompt.startswith("输入模式：首帧驱动的无声 I2V")
+            and "最高且唯一视觉基准" in request.prompt
+            and "不要生成对白、音乐、音效和旁白" in request.prompt
+            and "不要新增人物、道具、文字" in request.prompt
             and "【首帧驱动】" not in request.prompt
             and "【动作与运镜】" not in request.prompt
             for request in job.visual_requests
@@ -4170,9 +4502,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(revision_intent, versions[1].request.prompt)
         self.assertIn("最高且唯一视觉基准", versions[1].request.prompt)
-        self.assertIn("generate_audio=false", versions[1].request.prompt)
+        self.assertIn("不要生成对白、音乐、音效和旁白", versions[1].request.prompt)
         self.assertIsNotNone(versions[1].request.seed)
-        self.assertEqual(versions[0].request.model_id, SEEDANCE_EFFICIENT_MODEL)
+        self.assertEqual(versions[0].request.model_id, SEEDANCE_FLAGSHIP_MODEL)
         self.assertEqual(versions[1].request.model_id, SEEDANCE_FLAGSHIP_MODEL)
         selected = next(
             item for item in job.visual_requests if item.request_id == shot_id
@@ -5135,7 +5467,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(provider.prompt.startswith("你是本任务唯一的 Script Skill"))
         self.assertIn("【用户原始创作请求｜最高优先级】", provider.prompt)
         self.assertIn("【用户明确核对的材料】", provider.prompt)
-        self.assertIn("【Script Skill】evidence-led-explainer@2.0.0", provider.prompt)
+        self.assertIn("【Script Skill】insight-led-scriptwriter@1.0.0", provider.prompt)
         self.assertIn('"external_retrieval": false', provider.prompt)
         self.assertIn("禁止联网搜索", provider.prompt)
         self.assertIn("【硬性政策】", provider.prompt)
@@ -5165,7 +5497,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(requests), 3)
         self.assertTrue(all(
             request.resolution == "1080p"
-            and request.model_id == SEEDANCE_EFFICIENT_MODEL
+            and request.model_id == SEEDANCE_FLAGSHIP_MODEL
             and 8 <= request.duration_seconds <= 10
             for request in requests
         ))
@@ -5174,9 +5506,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             (1080, 1920),
         )
         self.assertTrue(all(
-            request.prompt.startswith("【Provider Adapter】seedream-seedance@1.3.0")
-            and "【VisualBible】" in request.prompt
-            and "【ShotContextIR】" in request.prompt
+            request.prompt.startswith("输入模式：首帧驱动的无声 I2V")
+            and "最高且唯一视觉基准" in request.prompt
+            and "主要动作链：" in request.prompt
             and "视频提示词结构" not in request.prompt
             for request in requests
         ))
@@ -5353,7 +5685,7 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         }).to_internal()
         self.assertEqual(internal.visual_style_id, "paper-collage-explainer")
         self.assertEqual(internal.visual_style_version, "1.1.0")
-        self.assertEqual(internal.script_skill_id, "evidence-led-explainer")
+        self.assertEqual(internal.script_skill_id, "insight-led-scriptwriter")
         self.assertEqual(internal.director_skill_id, "")
 
     def test_api_and_page_require_independent_permission(self):
@@ -5375,7 +5707,7 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         response = allowed.get("/api/qijia-video/capabilities")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"]["module"], "qijia_video")
-        self.assertEqual(response.json()["data"]["pipeline_version"], "v3")
+        self.assertEqual(response.json()["data"]["pipeline_version"], "v4")
         self.assertNotIn("mock", response.json()["data"]["script_provider"])
         self.assertNotIn("mock", response.json()["data"]["tts_provider"])
         self.assertNotIn("mock", response.json()["data"]["video_provider"])
@@ -5388,7 +5720,7 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         )
         self.assertEqual(
             response.json()["data"]["generation_defaults"]["seedance_model"],
-            SEEDANCE_EFFICIENT_MODEL,
+            SEEDANCE_FLAGSHIP_MODEL,
         )
         self.assertNotIn(
             "seedance_prompt",

@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "display_name": "Seedream + Seedance 媒体适配器",
-  "description": "只把已确认的具体事件、主体调度和 ShotContextIR 编译为 Seedream 首帧与 Seedance I2V 提示词，不参与选题、脚本或导演决策。",
+  "description": "用 H3 Context-IR 的参考职责与时间线方法，把已确认的视觉方案、资产圣经和 ShotContextIR 编译为简洁的 Seedream 与 Seedance 提示词。",
   "default": true,
   "image_provider_family": "seedream",
   "video_provider_family": "seedance",

@@ -3,7 +3,7 @@
   "version": "2.0.0",
   "display_name": "模型知识解读主编",
   "description": "直接理解用户完整请求，内部完成角度取舍、论证结构与审稿，只交付最终口播稿。",
-  "default": true,
+  "default": false,
   "compatible_formats": [
     "person_idea_explainer",
     "research_explainer",

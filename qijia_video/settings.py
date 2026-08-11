@@ -23,8 +23,8 @@ class QijiaVideoSettings(BaseSettings):
 
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api"
-    QIJIA_VIDEO_SCRIPT_MODEL: str = "x-ai/grok-4.5"
-    QIJIA_VIDEO_DIRECTOR_MODEL: str = "x-ai/grok-4.5"
+    QIJIA_VIDEO_SCRIPT_MODEL: str = "openai/gpt-5.6-sol"
+    QIJIA_VIDEO_DIRECTOR_MODEL: str = "openai/gpt-5.6-sol"
 
     # 家庭教育选题研究：仅使用 TikHub 的抖音读接口。中国大陆默认走 .dev。
     TIKHUB_API_KEY: str = ""
@@ -44,7 +44,7 @@ class QijiaVideoSettings(BaseSettings):
     )
     # Provider fallback for legacy requests without a frozen model. New tasks
     # always send the model stored in GenerationSettings/VisualGenerationRequest.
-    QIJIA_VIDEO_SEEDANCE_MODEL: str = "doubao-seedance-1-0-pro-fast-251015"
+    QIJIA_VIDEO_SEEDANCE_MODEL: str = "doubao-seedance-2-0-260128"
     # Legacy fallback price. Model-specific prices below are authoritative for
     # all new requests and allow mixed current / historical cost accounting.
     QIJIA_VIDEO_SEEDANCE_PRICE_PER_MILLION: float = 4.2

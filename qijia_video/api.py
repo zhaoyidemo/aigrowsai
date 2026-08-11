@@ -28,7 +28,7 @@ from qijia_video.contracts import (
     DEFAULT_VISUAL_STYLE_ID,
     GenerationSettings,
     PreGenerationMediaMode,
-    SEEDANCE_EFFICIENT_MODEL,
+    SEEDANCE_FLAGSHIP_MODEL,
     SeedanceModelId,
     ScriptDraft,
 )
@@ -88,6 +88,8 @@ def public_job_payload(job, user: dict) -> dict:
 
     payload = public_resource_payload(job, user)
     for candidate in payload.get("first_frame_candidates") or []:
+        candidate.pop("source_url", None)
+    for candidate in payload.get("style_frame_candidates") or []:
         candidate.pop("source_url", None)
     payload["douyin_performance_analysis"] = (
         runtime.service.douyin_performance_analysis(job)
@@ -165,7 +167,7 @@ class CreateGenerationSettings(StrictRequest):
     video_resolution: Literal["480p", "720p", "1080p"] = "1080p"
     tts_voice_id: TtsVoiceId = "zh_female_vv_uranus_bigtts"
     tts_speed_ratio: TtsSpeedRatio = 1.2
-    seedance_model: SeedanceModelId = SEEDANCE_EFFICIENT_MODEL
+    seedance_model: SeedanceModelId = SEEDANCE_FLAGSHIP_MODEL
 
     def to_internal(self) -> GenerationSettings:
         return GenerationSettings.model_validate(self.model_dump(mode="json"))
@@ -720,11 +722,19 @@ async def approve_script(
         actor,
         prepare_media_first=body.prepare_media_first,
     )
-    action = (
-        "prepare_media_review"
-        if body.prepare_media_first
-        else "produce"
+    requires_media_review = (
+        getattr(
+            job,
+            "pre_generation_media_mode",
+            (
+                PreGenerationMediaMode.REVIEW_BEFORE_GENERATION
+                if body.prepare_media_first
+                else PreGenerationMediaMode.AUTOMATIC
+            ),
+        )
+        == PreGenerationMediaMode.REVIEW_BEFORE_GENERATION
     )
+    action = "prepare_media_review" if requires_media_review else "produce"
     run = await start_run(action, job.id, actor)
     return ok({
         "job": public_job_payload(
@@ -733,10 +743,10 @@ async def approve_script(
         "task_id": run.task_id,
         "reused": run.reused,
         "requires_review": False,
-        "media_review_requested": body.prepare_media_first,
+        "media_review_requested": requires_media_review,
     }, (
         "脚本已确认，先生成旁白和文字分镜"
-        if body.prepare_media_first
+        if requires_media_review
         else "脚本已确认，开始生成成片"
     ))
 
@@ -762,6 +772,28 @@ async def confirm_pre_generation_media(
         "task_id": run.task_id,
         "reused": run.reused,
     }, "素材安排已确认，只生成剩余 AI 画面")
+
+
+@api_router.post(
+    "/jobs/{job_id}/style-frames/{candidate_id}/actions/select"
+)
+@boundary
+async def select_style_frame(
+    job_id: str,
+    candidate_id: str,
+    body: RevisionRequest,
+    user: dict = Depends(get_current_user),
+):
+    job = await runtime.service.select_style_frame(
+        job_id,
+        candidate_id,
+        body.expected_revision,
+        actor_from_user(user),
+    )
+    return ok(
+        public_job_payload(job, user),
+        "视觉方向已锁定，可以继续安排自有素材",
+    )
 
 
 @api_router.post("/jobs/{job_id}/actions/retry")
@@ -1299,6 +1331,30 @@ async def preview_first_frame_candidate(
     }.get(asset.media_type, ".image")
     return await asset_response(
         asset, filename=f"{candidate_id}{extension}"
+    )
+
+
+@api_router.get(
+    "/jobs/{job_id}/style-frames/{candidate_id}/media"
+)
+@boundary
+async def preview_style_frame(
+    job_id: str,
+    candidate_id: str,
+    user: dict = Depends(get_current_user),
+):
+    job = await runtime.service.view_job(job_id, actor_from_user(user))
+    asset = runtime.service.style_frame_asset(job, candidate_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail="视觉开发样片不存在")
+    extension = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+    }.get(asset.media_type, ".image")
+    return await asset_response(
+        asset,
+        filename=f"{candidate_id}{extension}",
     )
 
 

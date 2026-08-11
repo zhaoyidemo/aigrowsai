@@ -29,9 +29,13 @@ class MockImageProvider:
         *,
         seed: int,
         reference_image_url: str = "",
+        reference_image_urls: list[str] | None = None,
     ) -> GeneratedImage:
+        references = list(reference_image_urls or [])
+        if reference_image_url and reference_image_url not in references:
+            references.insert(0, reference_image_url)
         digest = hashlib.sha256(
-            f"{seed}:{reference_image_url}:{prompt}".encode("utf-8")
+            f"{seed}:{'|'.join(references)}:{prompt}".encode("utf-8")
         ).hexdigest()
         return GeneratedImage(
             url=f"mock://first-frame/{digest}.png",
@@ -120,6 +124,7 @@ class SeedreamImageProvider:
         *,
         seed: int,
         reference_image_url: str = "",
+        reference_image_urls: list[str] | None = None,
     ) -> GeneratedImage:
         seed_value = int(seed)
         if not 0 <= seed_value <= SEEDREAM_MAX_SEED:
@@ -135,10 +140,19 @@ class SeedreamImageProvider:
             "response_format": "url",
             "watermark": False,
         }
-        if reference_image_url:
-            if not str(reference_image_url).startswith("https://"):
+        references = [
+            str(item or '').strip()
+            for item in list(reference_image_urls or [])
+            if str(item or '').strip()
+        ]
+        if reference_image_url and reference_image_url not in references:
+            references.insert(0, str(reference_image_url))
+        if len(references) > 10:
+            raise ProviderUnavailable("Seedream 最多接收 10 张参考图")
+        if references:
+            if any(not item.startswith("https://") for item in references):
                 raise ProviderUnavailable("Seedream 参考图必须使用 HTTPS 访问地址")
-            body["image"] = [str(reference_image_url)]
+            body["image"] = references
         async with self._client() as client:
             try:
                 response = await client.post("/images/generations", json=body)

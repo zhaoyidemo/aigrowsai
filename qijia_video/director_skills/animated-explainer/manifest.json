@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "display_name": "动画解说导演",
-  "description": "把已确认口播与真实 TTS 时长导演成具体、可读、可生产的视觉事件；负责章节节奏、主体调度、摄影机、连续性和媒介选择，不负责画风或模型语法。",
+  "description": "先建立视觉命题、资产圣经和风格运动规则，再把确认口播与真实 TTS 时长导演成具体、连续、可生产的视觉事件。",
   "default": true,
   "mode": "animated_explainer",
   "compatible_formats": [
@@ -25,5 +25,7 @@
     "不得虚构脚本没有陈述的历史事件、人物行动、对白或因果",
     "图片是默认媒介；只有八秒内可完成的连续动作或状态变化才使用视频，全片最多三段",
     "Visual Style 只约束媒介、材质、色彩和造型，不得替代导演决策"
+    ,"DirectorTreatment、VisualBible 与 AssetBible 必须先于逐镜头计划锁定，正式分镜不得重新发明视觉世界"
+    ,"人物、场景、道具、材质和参考图职责必须具有可检查的连续性标准"
   ]
 }

@@ -222,8 +222,8 @@ class QijiaVideoRuntime:
         }
         return {
             "module": "qijia_video",
-            "mode": "direct-creative-pipeline",
-            "pipeline_version": "v3",
+            "mode": "quality-first-creative-pipeline",
+            "pipeline_version": "v4",
             "script_provider": self.script_provider.name,
             "script_model": self.script_provider.model,
             "knowledge_mode": "model_knowledge",
@@ -295,8 +295,8 @@ class QijiaVideoRuntime:
                         settings.QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION
                     ),
                 ),
-                "default_model": SEEDANCE_EFFICIENT_MODEL,
-                "upgrade_model": SEEDANCE_FLAGSHIP_MODEL,
+                "default_model": SEEDANCE_FLAGSHIP_MODEL,
+                "economy_model": SEEDANCE_EFFICIENT_MODEL,
                 "models": [
                     {
                         "id": SEEDANCE_EFFICIENT_MODEL,
@@ -308,7 +308,7 @@ class QijiaVideoRuntime:
                                 settings.QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION
                             ),
                         ),
-                        "default": True,
+                        "default": False,
                     },
                     {
                         "id": SEEDANCE_FLAGSHIP_MODEL,
@@ -320,7 +320,7 @@ class QijiaVideoRuntime:
                                 settings.QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION
                             ),
                         ),
-                        "default": False,
+                        "default": True,
                     },
                 ],
                 "basis": (
