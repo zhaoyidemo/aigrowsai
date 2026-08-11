@@ -367,7 +367,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .review-section { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 18px; }
 .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
 .section-title span { color: var(--muted); font-size: 12px; }
-.person-research-brief { display: grid; gap: 11px; margin-bottom: 13px; border: 1px solid #d8d3c8; border-radius: 10px; padding: 14px; background: #fbfaf7; }
+.content-planning-brief { display: grid; gap: 11px; margin-bottom: 13px; border: 1px solid #d8d3c8; border-radius: 10px; padding: 14px; background: #fbfaf7; }
 .research-brief-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .research-brief-heading > div { display: grid; gap: 3px; }
 .research-brief-heading strong { color: #315f56; font-size: 13px; }

@@ -5,6 +5,8 @@
   "input_mode": "recent_news_topic",
   "compatible_formats": ["recent_news_briefing"],
   "default_for_formats": ["recent_news_briefing"],
+  "available_for_new_jobs": false,
+  "knowledge_mode": "legacy_external_research",
   "research_mode": "recent_news_required",
   "policy_ids": [
     "source-grounding",

@@ -15,7 +15,6 @@ import zipfile
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from qijia_video import MODULE_VERSION
 from qijia_video.contracts import (
@@ -43,7 +42,6 @@ from qijia_video.contracts import (
     ProviderTaskState,
     ProviderUsageRecord,
     QualityReport,
-    ResearchDiagnostics,
     RenderManifest,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
@@ -100,7 +98,6 @@ from qijia_video.prompts import (
     narration_char_count,
 )
 from qijia_video.prompt_orchestration import (
-    compile_research_prompt,
     compile_legacy_h3_script_prompt,
     compile_script_skill_prompt,
 )
@@ -1004,6 +1001,11 @@ class QijiaVideoService:
         card = await self.get_source_card(source_card_id, actor)
         if card.status != SourceCardStatus.VERIFIED:
             raise QualityGateFailed("来源卡必须先核验")
+        if card.content_format == ContentFormat.RECENT_NEWS:
+            raise QualityGateFailed(
+                "最新新闻依赖实时检索，当前工作台已停用该入口。"
+                "请在统一创作请求中粘贴你已经掌握的事实与材料。"
+            )
         requested_settings = generation_settings or GenerationSettings()
         script_prompt_explicit = (
             "script_prompt" in requested_settings.model_fields_set
@@ -1108,64 +1110,6 @@ class QijiaVideoService:
         """Pipeline v1 metadata kept only for historical job inspection."""
 
         return self.prompt_writing_profile_registry.public_default()
-
-    @staticmethod
-    def _news_research_warning(brief: NewsResearchBrief) -> str:
-        hosts = {
-            (urlsplit(item.source_url).hostname or "")
-            .lower()
-            .removeprefix("www.")
-            for item in brief.evidence
-        }
-        hosts.discard("")
-        kinds = {item.source_kind for item in brief.evidence}
-        warnings: list[str] = []
-        if not any(
-            item.published_at or item.event_at for item in brief.evidence
-        ):
-            warnings.append("来源未提供明确的事件或发布时间，时效性仍需确认")
-        if len(hosts) < 2:
-            warnings.append(
-                "本次新闻研究只有一个可追溯站点，未完成跨站点交叉验证"
-            )
-        if not kinds.intersection({"official", "primary"}):
-            warnings.append("尚未找到官方或原始材料")
-        if "independent" not in kinds:
-            warnings.append("尚未找到可信独立报道")
-        return "；".join(warnings) + ("。请在脚本审核时谨慎确认。" if warnings else "")
-
-    async def authorize_news_research_retry(
-        self,
-        job_id: str,
-        expected_revision: int,
-        actor: Actor,
-    ) -> VideoJob:
-        """Authorize one additional user-initiated retry of a failed news search."""
-
-        job = await self.get_job(job_id, actor)
-        self._assert_revision(job.revision, expected_revision)
-        if (
-            job.state != JobState.FAILED
-            or job.failed_stage != "script"
-            or job.research_brief is not None
-            or not job.skill_snapshot
-            or job.skill_snapshot.research_mode
-            != SkillResearchMode.RECENT_NEWS_REQUIRED
-        ):
-            raise InvalidTransition("当前任务不需要重新研究最新新闻")
-        attempt_count = sum(
-            item.operation == "recent_news_research"
-            for item in job.usage_records
-        )
-        attempt_limit = 1 + job.research_retry_authorizations
-        if attempt_count >= attempt_limit:
-            job.research_retry_authorizations += 1
-        job.state = JobState.CARD_VERIFIED
-        job.failed_stage = ""
-        job.error = ""
-        job.research_warning = ""
-        job.research_diagnostics = None
-        return await self._save_job(job, actor)
 
     async def list_jobs(self, actor: Actor, *, limit: int = 100) -> list[VideoJob]:
         return [
@@ -1378,209 +1322,29 @@ class QijiaVideoService:
 
             self._report(
                 progress,
-                message="正在读取内容输入与来源边界…",
+                message="正在读取原始输入、用户材料与知识边界…",
                 stage="material_confirmed",
                 percent=4,
             )
-            if job.skill_snapshot:
-                research_mode = job.skill_snapshot.research_mode
-            elif card.content_format == ContentFormat.PERSON_IDEA:
-                research_mode = SkillResearchMode.PERSON_VIEWPOINT_OPTIONAL
-            else:
-                research_mode = SkillResearchMode.NONE
-            research_required = (
-                research_mode == SkillResearchMode.RECENT_NEWS_REQUIRED
-            )
-            research_as_of = (
-                job.skill_snapshot.frozen_at
-                if job.skill_snapshot
-                else job.created_at
-            )
-            research_operation = {
-                SkillResearchMode.PERSON_VIEWPOINT_OPTIONAL: "person_research",
-                SkillResearchMode.RECENT_NEWS_REQUIRED: "recent_news_research",
-            }.get(research_mode, "")
-            research_usage_count = sum(
-                item.operation == research_operation
-                for item in job.usage_records
-            ) if research_operation else 0
-            research_usage_exists = bool(research_usage_count)
-            research_attempt_limit = (
-                1 + job.research_retry_authorizations
-                if research_required
-                else 1
-            )
-            research_submission_available = (
-                research_usage_count < research_attempt_limit
-            )
-            skill_research = getattr(
-                self.script_provider, "research_for_skill", None
-            )
-            specific_research = getattr(
-                self.script_provider,
-                (
-                    "research_recent_news"
-                    if research_required
-                    else "research_person_viewpoint"
-                ),
-                None,
-            )
-            if research_mode != SkillResearchMode.NONE and job.research_brief:
+            if job.research_brief:
+                # Historical tasks may reuse an already persisted brief, but
+                # script generation never starts a new external research call.
                 card = self._card_with_person_research(
                     card, job.research_brief
                 )
             elif (
-                research_mode != SkillResearchMode.NONE
-                and research_usage_exists
-                and not research_submission_available
+                job.skill_snapshot
+                and job.skill_snapshot.research_mode
+                != SkillResearchMode.NONE
             ):
-                if not job.research_warning:
-                    job.research_warning = (
-                        "上次最新新闻研究调用未形成可追溯简报；为避免自动重复计费，"
-                        "请由编辑点击“重新研究”后再提交一次。"
-                        if research_required
-                        else (
-                            "上次自动研究调用未形成完整简报；为避免重复计费，"
-                            "本次直接使用原始创作请求继续生成。"
-                        )
-                    )
-                    job = await self._save_job(job, actor)
-                if research_required:
-                    raise QualityGateFailed(job.research_warning)
-            elif research_mode != SkillResearchMode.NONE and job.research_warning:
-                if research_required:
-                    raise QualityGateFailed(job.research_warning)
-            elif (
-                research_mode != SkillResearchMode.NONE
-                and (callable(skill_research) or callable(specific_research))
-            ):
-                if not job.research_prompt_snapshot:
-                    self._report(
-                        progress,
-                        message='EvidencePipeline 正在根据原始输入编排研究问题…',
-                        stage="research_prompt_compilation",
-                        percent=5,
-                    )
-                    job.research_prompt_snapshot = compile_research_prompt(
-                        card,
-                        skill=job.skill_snapshot,
-                        profile=(
-                            None
-                            if job.pipeline_version == PipelineVersion.SINGLE_OWNER
-                            else job.prompt_writing_profile_snapshot
-                        ),
-                        research_mode=research_mode,
-                        research_as_of=research_as_of,
-                    )
-                    job = await self._save_job(job, actor)
-                elif (
-                    job.research_prompt_snapshot.research_mode
-                    != research_mode
-                ):
-                    raise QualityGateFailed(
-                        "冻结的研究提示词与当前 Content Skill 研究模式不一致"
-                    )
-                self._report(
-                    progress,
-                    message=(
-                        "正在检索最新公开动态并交叉核验来源…"
-                        if research_required
-                        else "正在联网研究人物与主题，整理可追溯简报…"
-                    ),
-                    stage=research_operation,
-                    percent=7,
+                raise QualityGateFailed(
+                    "该任务由已停用的联网研究模式创建，系统不会继续发起搜索。"
+                    "请复制原始创作请求创建一个新的模型知识任务。"
                 )
-                try:
-                    if callable(skill_research):
-                        brief = await skill_research(
-                            card,
-                            research_mode=research_mode.value,
-                            research_prompt=job.research_prompt_snapshot.prompt,
-                            research_as_of=research_as_of,
-                            on_usage=persist_script_usage,
-                        )
-                    else:
-                        research_kwargs = {
-                            "on_usage": persist_script_usage,
-                        }
-                        if research_required:
-                            research_kwargs["as_of"] = research_as_of
-                        brief = await specific_research(card, **research_kwargs)
-                    if (
-                        research_required
-                        and not isinstance(brief, NewsResearchBrief)
-                    ):
-                        raise ProviderUnavailable(
-                            "新闻研究 Provider 返回了错误的简报类型"
-                        )
-                    if (
-                        not research_required
-                        and not isinstance(brief, PersonResearchBrief)
-                    ):
-                        raise ProviderUnavailable(
-                            "人物研究 Provider 返回了错误的简报类型"
-                        )
-                    card = self._card_with_person_research(card, brief)
-                    job.research_brief = brief
-                    job.research_warning = (
-                        self._news_research_warning(brief)
-                        if isinstance(brief, NewsResearchBrief)
-                        else ""
-                    )
-                    job.research_diagnostics = None
-                    job.source_card_snapshot = card.model_dump(mode="json")
-                    job = await self._save_job(job, actor)
-                except Exception as research_error:
-                    detail = str(research_error).strip() or "未知研究错误"
-                    job.research_warning = (
-                        (
-                            detail
-                            if detail.startswith("最新新闻研究")
-                            else "最新新闻研究失败，未生成无来源脚本：" + detail
-                        )
-                        if research_required
-                        else (
-                            "自动研究暂未形成可追溯简报，"
-                            "已使用原始创作请求继续生成：" + detail
-                        )
-                    )[:2000]
-                    if research_required:
-                        diagnostic_data = dict(
-                            getattr(research_error, "diagnostics", {}) or {}
-                        )
-                        diagnostic_data.update({
-                            "schema_version": "1.0",
-                            "operation": "recent_news_research",
-                            "attempt_count": sum(
-                                item.operation == "recent_news_research"
-                                for item in job.usage_records
-                            ),
-                            "detail": str(
-                                diagnostic_data.get("detail") or detail
-                            )[:1000],
-                            "generated_at": str(
-                                diagnostic_data.get("generated_at") or timestamp()
-                            ),
-                        })
-                        job.research_diagnostics = (
-                            ResearchDiagnostics.model_validate(diagnostic_data)
-                        )
-                    job = await self._save_job(job, actor)
-                    if research_required:
-                        raise QualityGateFailed(job.research_warning) from research_error
-            elif research_mode != SkillResearchMode.NONE:
-                job.research_warning = (
-                    "当前脚本 Provider 不支持最新新闻研究，禁止生成脚本。"
-                    if research_required
-                    else "当前脚本 Provider 不支持人物研究，已使用原始观点继续生成。"
-                )
-                job = await self._save_job(job, actor)
-                if research_required:
-                    raise QualityGateFailed(job.research_warning)
 
             self._report(
                 progress,
-                message="正在调用脚本模型生成口播脚本…",
+                message="正在由脚本模型理解输入并生成口播脚本…",
                 stage="script_generation",
                 percent=14,
             )
@@ -1591,7 +1355,7 @@ class QijiaVideoService:
             if is_v2:
                 if not job.skill_snapshot or not job.script_skill_snapshot:
                     raise QualityGateFailed(
-                        'v2 任务缺少冻结的 EvidencePipeline 或 Script Skill'
+                        'v2 任务缺少冻结的 Input Policy 或 Script Skill'
                     )
                 script_prompt = self._script_skill_prompt_for_settings(
                     card,

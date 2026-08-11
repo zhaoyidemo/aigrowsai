@@ -82,6 +82,18 @@ class SkillResearchMode(StrEnum):
     RECENT_NEWS_REQUIRED = "recent_news_required"
 
 
+class SkillKnowledgeMode(StrEnum):
+    """How a Content Skill may obtain background knowledge.
+
+    ``LEGACY_EXTERNAL_RESEARCH`` is the safe default for snapshots persisted
+    before this field existed. It prevents an old web-search workflow from
+    being silently reinterpreted as model-only generation.
+    """
+
+    MODEL_KNOWLEDGE = "model_knowledge"
+    LEGACY_EXTERNAL_RESEARCH = "legacy_external_research"
+
+
 class PipelineVersion(StrEnum):
     LEGACY = 'v1'
     SINGLE_OWNER = 'v2'
@@ -249,7 +261,7 @@ class SourceCardInput(ContractModel):
 
 
 class CreativeRequestInput(ContractModel):
-    """One immutable natural-language request for the evidence pipeline."""
+    """One immutable natural-language request for model-led creation."""
 
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     creative_request: str = Field(min_length=10, max_length=1800)
@@ -280,8 +292,9 @@ class CreativeRequestInput(ContractModel):
             interpretation_boundary=[{
                 "id": "boundary_01",
                 "text": (
-                    "原始创作请求只是待研究的主题与意图。涉及的人物、引语、观点归属、"
-                    "出处和语境在联网核验前均不得作为事实，也不得由系统猜测或补造。"
+                    "原始创作请求是本次内容意图与主要材料。脚本模型可以使用其已有的"
+                    "稳定知识帮助解释，但不会联网核验；人物归属、逐字引语、精确出处、"
+                    "版本、日期和最新动态不得假装已经查证，存在疑问时应降格表述并交由人工确认。"
                 ),
             }],
         )
@@ -312,8 +325,9 @@ class PersonViewpointInput(ContractModel):
             interpretation_boundary=[{
                 "id": "boundary_01",
                 "text": (
-                    "输入中的人物归属、逐字表述、出处与语境在联网核验前均视为待确认；"
-                    "可以解释观点本身，但不得把它写成人物原话或历史事实。"
+                    "输入中的人物与表述是用户提供的创作材料，不代表系统已经核验其逐字"
+                    "归属、出处与语境。可以结合模型已有知识解释观点，但不得虚构精确来源，"
+                    "不确定时应写成观点解读而不是人物原话。"
                 ),
             }],
         )
@@ -779,6 +793,9 @@ class ContentSkillSnapshot(ContractModel):
     description: str = Field(min_length=1, max_length=1000)
     input_mode: SkillInputMode
     compatible_formats: list[ContentFormat] = Field(min_length=1)
+    knowledge_mode: SkillKnowledgeMode = (
+        SkillKnowledgeMode.LEGACY_EXTERNAL_RESEARCH
+    )
     research_mode: SkillResearchMode = SkillResearchMode.NONE
     research_prompt: str = Field(default="", max_length=12000)
     # Compatibility-only prompt fields. Workflow presets created after v2

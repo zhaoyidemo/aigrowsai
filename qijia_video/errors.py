@@ -25,13 +25,5 @@ class ProviderUnavailable(QijiaVideoError):
     status_code = 503
 
 
-class ResearchEvidenceUnavailable(ProviderUnavailable):
-    """Provider failure carrying bounded, non-sensitive citation diagnostics."""
-
-    def __init__(self, message: str, diagnostics: dict | None = None):
-        super().__init__(message)
-        self.diagnostics = dict(diagnostics or {})
-
-
 class QualityGateFailed(QijiaVideoError):
     status_code = 422

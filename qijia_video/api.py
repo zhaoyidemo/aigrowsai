@@ -28,7 +28,6 @@ from qijia_video.contracts import (
     DEFAULT_SCRIPT_SKILL_ID,
     DEFAULT_VISUAL_STYLE_ID,
     GenerationSettings,
-    NewsTopicInput,
     PersonViewpointInput,
     PreGenerationMediaMode,
     QuickSourceCardInput,
@@ -228,10 +227,6 @@ class ScriptUpdateRequest(RevisionRequest):
 
 
 class NarrationPreviewRequest(RevisionRequest):
-    confirm_cost: Literal[True]
-
-
-class NewsResearchRetryRequest(RevisionRequest):
     confirm_cost: Literal[True]
 
 
@@ -547,25 +542,7 @@ async def create_creative_request(
         body.to_source_card_input(), actor
     )
     card = await runtime.service.verify_source_card(card.id, card.revision, actor)
-    return ok(card.model_dump(mode="json"), "原始创作请求已冻结，开始研究与创作")
-
-
-@api_router.post("/source-cards/news-topic")
-@boundary
-async def create_news_topic(
-    body: NewsTopicInput, user: dict = Depends(get_current_user)
-):
-    actor = actor_from_user(user)
-    card = await runtime.service.create_source_card(
-        body.to_source_card_input(), actor
-    )
-    card = await runtime.service.verify_source_card(
-        card.id, card.revision, actor
-    )
-    return ok(
-        card.model_dump(mode="json"),
-        "新闻主题已冻结，任务创建后将先检索并核验最新公开来源",
-    )
+    return ok(card.model_dump(mode="json"), "原始创作请求已冻结，开始模型创作")
 
 
 @api_router.post("/source-cards/idea-with-reference")
@@ -609,7 +586,7 @@ async def create_creative_request_with_reference(
     card = await runtime.service.verify_source_card(card.id, card.revision, actor)
     return ok(
         card.model_dump(mode="json"),
-        "原始创作请求和全局参考图已冻结，开始研究与创作",
+        "原始创作请求和全局参考图已冻结，开始模型创作",
     )
 
 
@@ -953,29 +930,6 @@ async def retry_job(job_id: str, user: dict = Depends(get_current_user)):
         "reused": run.reused,
         "requires_review": False,
     })
-
-
-@api_router.post("/jobs/{job_id}/actions/retry-news-research")
-@boundary
-async def retry_news_research(
-    job_id: str,
-    body: NewsResearchRetryRequest,
-    user: dict = Depends(get_current_user),
-):
-    actor = actor_from_user(user)
-    job = await runtime.service.authorize_news_research_retry(
-        job_id,
-        body.expected_revision,
-        actor,
-    )
-    run = await start_run("generate_script", job.id, actor)
-    return ok({
-        "job": public_job_payload(
-            await runtime.service.get_job(job.id, actor), user
-        ),
-        "task_id": run.task_id,
-        "reused": run.reused,
-    }, "已由编辑确认重新研究，正在生成脚本")
 
 
 @api_router.post("/jobs/{job_id}/actions/revise-script")

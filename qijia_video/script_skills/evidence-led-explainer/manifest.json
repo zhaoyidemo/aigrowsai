@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0",
-  "version": "1.0.0",
-  "display_name": "证据驱动解读主编",
-  "description": "从用户原始请求与 EvidencePack 中比较候选角度，选择最有解释力的一条论证路径并完成口播。",
+  "version": "1.1.0",
+  "display_name": "模型知识解读主编",
+  "description": "直接理解用户原始请求，结合用户材料与模型已有知识比较候选角度，选择最有解释力的一条论证路径并完成口播。",
   "default": true,
   "compatible_formats": [
     "person_idea_explainer",

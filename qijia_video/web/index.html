@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.25.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.26.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -114,10 +114,10 @@
           </div>
           <section class="creation-direction" aria-label="内容与视觉方向">
             <label class="creation-setting skill-setting" for="content-skill">
-              <span>任务与证据政策</span>
-              <strong>只决定输入方式、研究模式与事实边界</strong>
+              <span>输入与知识边界</span>
+              <strong>不联网，只限定模型可以怎样使用已有知识</strong>
               <select id="content-skill" aria-label="内容 Skill"></select>
-              <small id="content-skill-description">不再注入脚本或视觉提示词。</small>
+              <small id="content-skill-description">原始输入直接交给脚本模型，不增加搜索步骤。</small>
             </label>
             <label class="creation-setting script-skill-setting" for="script-skill">
               <span>脚本主编</span>
@@ -204,12 +204,12 @@
               <button id="topic-source-submit" class="button primary" type="submit" data-busy-lock>确认资料并生成脚本</button>
             </form>
           </section>
-          <p id="manual-intake-intro" class="panel-note intake-intro">用一段自然语言说明你想做的内容。系统原样冻结请求，先形成 EvidencePack，再由唯一 Script Skill 规划角度并完成脚本。</p>
+          <p id="manual-intake-intro" class="panel-note intake-intro">用一段自然语言说明你想做的内容。系统不联网检索，唯一 Script Skill 会直接理解原始输入，并结合模型已有知识规划角度和完成脚本。</p>
           <form id="source-card-form" class="form-stack">
             <label class="primary-field">
               <span class="question-line"><span class="question-number">1</span>你想做什么内容？</span>
               <textarea name="creative_request" required minlength="10" maxlength="1800" rows="9" placeholder="例如：黄宗羲，以及“大丈夫行事，论是非不论利害……”这段话。我想解释它的出处、真正含义和今天的价值。"></textarea>
-              <span class="field-hint">可以直接写人物、原话、观点、问题、资料或表达方向。请求会原样冻结；系统先判断它是引语、转述还是观点命题，再核验人物归属、可靠原文、出处和语境。没有可靠来源时会明确降级，不会虚构人物经历或引语。</span>
+              <span class="field-hint">可以直接写人物、原话、观点、问题、资料或表达方向。系统不会联网；模型可使用已有知识解释稳定背景，但不会把人物归属、精确出处、版本、日期或最新动态假装成已经核验。重要细节请在脚本确认时复核。</span>
             </label>
             <section class="reference-input" aria-labelledby="reference-input-title">
               <div class="reference-input-heading">
@@ -233,32 +233,7 @@
               <p class="field-hint">上传后，Director Skill 会在每个 ShotContextIR 中声明它是身份、场景还是风格参考；不会自动同时接管全部属性，也不作为观点或事实依据。JPG、PNG 或 WebP，最大 10 MB。</p>
             </section>
             <div class="actions source-form-actions">
-              <button id="source-submit-button" class="button primary" type="submit" data-busy-lock>研究并生成脚本</button>
-            </div>
-          </form>
-          <form id="news-topic-form" class="form-stack" hidden>
-            <label class="primary-field">
-              <span class="question-line"><span class="question-number">1</span>你想追踪什么主题？</span>
-              <input name="topic" required minlength="2" maxlength="300" autocomplete="off" placeholder="例如：TERALAB">
-              <span class="field-hint">可以输入公司、产品、项目、研究方向或商业事件。主题只是检索请求，不会被当作事实。</span>
-            </label>
-            <label class="primary-field">
-              <span class="question-line"><span class="question-number">2</span>最关心哪个角度？（可选）</span>
-              <textarea name="focus" maxlength="1000" rows="5" placeholder="例如：最近一周的重要发布、合作或产品变化，以及它对普通用户意味着什么。"></textarea>
-              <span class="field-hint">系统会冻结任务创建时间并优先检索官方与独立来源；至少一条证据必须能与检索注释匹配并可追溯。时间缺失或来源类型不完整时会醒目标注；只有单一站点时会醒目标注，交由你审核，不再阻断脚本。</span>
-            </label>
-            <label>内容领域
-              <select name="content_domain">
-                <option value="technology" selected>科技</option>
-                <option value="business">商业</option>
-                <option value="general_news">通用新闻</option>
-              </select>
-            </label>
-            <label>目标受众
-              <input name="target_audience" maxlength="160" value="关注该主题的普通用户">
-            </label>
-            <div class="actions source-form-actions">
-              <button id="news-submit-button" class="button primary" type="submit" data-busy-lock>检索新闻并生成脚本</button>
+              <button id="source-submit-button" class="button primary" type="submit" data-busy-lock>生成脚本</button>
             </div>
           </form>
           <details id="generation-orchestration" class="generation-orchestration">
@@ -270,7 +245,7 @@
               <div class="orchestration-heading">
                 <div>
                   <p class="step">生成架构</p>
-                  <h3>证据、脚本、导演和模型适配各守一个边界</h3>
+                  <h3>输入、脚本、导演和模型适配各守一个边界</h3>
                 </div>
                 <span class="orchestration-lock">Pipeline v2</span>
               </div>
@@ -284,7 +259,7 @@
                 </div>
                 <p id="provider-adapter-description">只把已经确定的镜头翻译成 Seedream/Seedance 可执行提示词，不参与选题、脚本或导演决策。</p>
                 <p class="orchestration-selection" aria-live="polite">
-                  <span id="orchestration-content-name">正在读取证据政策</span>
+                  <span id="orchestration-content-name">正在读取知识边界</span>
                   <b>→</b>
                   <span id="orchestration-script-name">正在读取 Script Skill</span>
                   <b>→</b>
@@ -293,7 +268,7 @@
                   <strong id="orchestration-adapter-summary">Provider Adapter</strong>
                 </p>
                 <ol class="orchestration-priority" aria-label="生成职责边界">
-                  <li>EvidencePack 只管事实</li>
+                  <li>Input Policy 只限定知识边界</li>
                   <li>Script Skill 只管内容</li>
                   <li>Director Skill 只管画面</li>
                   <li id="reference-priority-state">参考图属性（未上传）</li>
@@ -303,7 +278,7 @@
               <div class="orchestration-output">
                 <span class="orchestration-output-label">版本化产物链路</span>
                 <div class="orchestration-output-grid">
-                  <article><span>01</span><strong>EvidencePack</strong><small>只保留证据、出处与不确定性</small></article>
+                  <article><span>01</span><strong>ContextPack</strong><small>原始输入与用户材料，不调用外部检索</small></article>
                   <article><span>02</span><strong>EditorialPlan</strong><small>比较候选角度，只决定怎么讲</small></article>
                   <article><span>03</span><strong>确认的 ScriptDraft</strong><small>全片唯一内容真相，不夹带画面</small></article>
                   <article><span>04</span><strong>VisualBible</strong><small>由一个导演建立视觉世界与连续性</small></article>
@@ -383,7 +358,7 @@
           <div id="job-error" class="error-box" hidden></div>
           <section id="script-review" class="review-section" hidden>
             <div class="section-title"><h3>脚本确认</h3><span id="script-review-spec">确认后开始配音与画面生成</span></div>
-            <section id="person-research-brief" class="person-research-brief" aria-label="EvidencePack 与 EditorialPlan" hidden></section>
+            <section id="content-planning-brief" class="content-planning-brief" aria-label="ContextPack 与 EditorialPlan" hidden></section>
             <section class="tts-review-settings" aria-label="本任务配音设置">
               <div class="tts-review-heading">
                 <div><strong>配音试听</strong><span>试听当前开场，确认后用于整条视频</span></div>
@@ -548,13 +523,11 @@
           </section>
           <button id="revise-script-button" class="button primary" type="button" data-busy-lock hidden>返回修改脚本</button>
           <button id="retry-button" class="button danger" type="button" data-busy-lock hidden>从失败阶段重试</button>
-          <p id="research-retry-detail" class="cost-note" hidden></p>
-          <button id="retry-research-button" class="button danger" type="button" data-busy-lock hidden>重新研究并生成脚本（产生一次检索费用）</button>
         </section>
       </section>
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.25.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.26.0"></script>
 </body>
 </html>

@@ -34,7 +34,6 @@ from qijia_video.contracts import (
     ResearchDiagnostics,
     RenderManifest,
     ScriptDraft,
-    SkillResearchMode,
     SourceCard,
     SourceCardInput,
     StoryboardPlan,
@@ -55,7 +54,6 @@ from qijia_video.errors import (
     InvalidTransition,
     ProviderUnavailable,
     QualityGateFailed,
-    ResearchEvidenceUnavailable,
     RevisionConflict,
 )
 from qijia_video.infrastructure.memory_repository import InMemoryAggregateRepository
@@ -74,10 +72,6 @@ from qijia_video.infrastructure.script_providers import (
     OPENROUTER_REASONING_EFFORT,
     OpenRouterScriptProvider,
     OpenRouterStoryboardProvider,
-    NEWS_RESEARCH_MAX_COMPLETION_TOKENS,
-    NEWS_RESEARCH_PROMPT_VERSION,
-    PERSON_RESEARCH_MAX_COMPLETION_TOKENS,
-    PERSON_RESEARCH_PROMPT_VERSION,
     SCRIPT_MAX_COMPLETION_TOKENS,
     SCRIPT_PROMPT_VERSION,
     STORYBOARD_MAX_COMPLETION_TOKENS,
@@ -97,8 +91,9 @@ from qijia_video.infrastructure.video_providers import (
     SeedanceVideoProvider,
 )
 from qijia_video.prompts import SCRIPT_HARD_MAX_CHARS, narration_char_count
-from qijia_video.prompt_orchestration import compile_research_prompt
+from qijia_video.prompt_orchestration import compile_script_skill_prompt
 from qijia_video.service import QijiaVideoService, REQUIRED_PACKAGE_NAMES
+from qijia_video.script_skill_registry import default_script_skill_registry
 from qijia_video.skill_registry import default_skill_registry
 from qijia_video.visual_prompting import (
     compile_first_frame_prompt,
@@ -254,13 +249,17 @@ class QijiaVideoContractTests(unittest.TestCase):
         catalog = default_skill_registry.public_catalog()
         self.assertEqual(
             {item["skill_id"] for item in catalog},
-            {"brief-recent-news", "explain-expert-view"},
+            {"explain-expert-view"},
         )
         expert = default_skill_registry.resolve("explain-expert-view")
         news = default_skill_registry.resolve("brief-recent-news")
-        self.assertEqual(expert.version, "2.2.0")
+        self.assertEqual(expert.version, "3.0.0")
         self.assertEqual(news.version, "2.1.0")
         self.assertEqual(expert.input_mode.value, "creative_request")
+        self.assertEqual(expert.knowledge_mode.value, "model_knowledge")
+        self.assertEqual(expert.research_mode.value, "none")
+        self.assertTrue(expert.available_for_new_jobs)
+        self.assertFalse(news.available_for_new_jobs)
         self.assertEqual(news.research_mode.value, "recent_news_required")
         self.assertNotEqual(expert.manifest_hash, news.manifest_hash)
         self.assertIn("quote-integrity", expert.policy_ids)
@@ -270,6 +269,10 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(expert.snapshot().visual_policy, "")
         self.assertTrue(all(
             "generation_defaults" not in item
+            for item in catalog
+        ))
+        self.assertTrue(all(
+            item["external_retrieval"] is False
             for item in catalog
         ))
 
@@ -521,7 +524,8 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(card.core_idea, idea.viewpoint)
         self.assertEqual(card.sources, [])
         self.assertEqual(card.verified_facts, [])
-        self.assertIn("联网核验前", card.interpretation_boundary[0].text)
+        self.assertIn("可以结合模型已有知识", card.interpretation_boundary[0].text)
+        self.assertIn("不得虚构精确来源", card.interpretation_boundary[0].text)
 
     def test_creative_request_is_frozen_without_frontend_field_splitting(self):
         original = (
@@ -538,7 +542,8 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertIn("黄宗羲", card.title)
         self.assertEqual(card.sources, [])
         self.assertEqual(card.verified_facts, [])
-        self.assertIn("不得由系统猜测", card.interpretation_boundary[0].text)
+        self.assertIn("不会联网核验", card.interpretation_boundary[0].text)
+        self.assertIn("模型可以使用其已有的稳定知识", card.interpretation_boundary[0].text)
 
     def test_unified_creative_request_api_keeps_legacy_routes_compatible(self):
         paths = {route.path for route in qijia_api.api_router.routes}
@@ -551,8 +556,13 @@ class QijiaVideoContractTests(unittest.TestCase):
         )
         self.assertIn(f"{prefix}/source-cards/idea", paths)
         self.assertIn(f"{prefix}/source-cards/idea-with-reference", paths)
+        self.assertNotIn(f"{prefix}/source-cards/news-topic", paths)
+        self.assertNotIn(
+            f"{prefix}/jobs/{{job_id}}/actions/retry-news-research",
+            paths,
+        )
 
-    def test_h3_compiles_person_research_from_the_complete_original_input(self):
+    def test_script_skill_uses_model_knowledge_from_complete_original_input(self):
         request = CreativeRequestInput(
             creative_request=(
                 "黄宗羲，以及“大丈夫行事，论是非不论利害，论顺逆不论成败，"
@@ -568,27 +578,28 @@ class QijiaVideoContractTests(unittest.TestCase):
         skill = default_skill_registry.resolve(
             "explain-expert-view"
         ).snapshot()
-        profile = default_prompt_writing_profile_registry.resolve(
-            "h3-prompt-writing"
+        script_skill = default_script_skill_registry.resolve(
+            "evidence-led-explainer"
         ).snapshot()
 
-        compiled = compile_research_prompt(
+        compiled = compile_script_skill_prompt(
             card,
-            skill=skill,
-            profile=profile,
-            research_mode=SkillResearchMode.PERSON_VIEWPOINT_OPTIONAL,
-            research_as_of="2026-08-11T10:00:00+08:00",
+            content_policy=skill,
+            script_skill=script_skill,
+            research_brief=None,
+            minimum_characters=220,
+            maximum_characters=300,
         )
 
-        self.assertEqual(compiled.profile_version, "2.0.0")
-        self.assertIn(request.creative_request, compiled.prompt)
-        self.assertIn("用户原始创作请求", compiled.prompt)
-        self.assertIn('"大丈夫行事，论是非不论利害', compiled.prompt)
-        self.assertNotIn("对象：", compiled.prompt)
-        self.assertIn("人物归属、可靠原文、出处位置、文字异同与上下文", compiled.prompt)
-        self.assertIn("至少执行三个意图不同的查询", compiled.prompt)
-        self.assertNotIn("面向家长", compiled.prompt)
-        self.assertEqual(compiled.prompt_hash, content_hash(compiled.prompt))
+        self.assertIn(request.creative_request, compiled)
+        self.assertIn("【唯一 ContextPack（用户提供材料）】", compiled)
+        self.assertIn('"external_retrieval": false', compiled)
+        self.assertIn("禁止联网搜索、浏览器、检索插件和外部研究工具", compiled)
+        self.assertIn("可以使用模型训练中已有的稳定知识", compiled)
+        self.assertIn("不得写成已经核验的人物逐字原话", compiled)
+        self.assertNotIn("至少执行三个意图不同的查询", compiled)
+        self.assertNotIn("openrouter:web_search", compiled)
+        self.assertNotIn("H3", compiled)
 
     def test_verified_research_wording_becomes_a_source_bound_quote(self):
         idea = PersonViewpointInput(
@@ -1694,6 +1705,9 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             request_body["plugins"], [{"id": "response-healing"}]
         )
+        self.assertNotIn("tools", request_body)
+        self.assertNotIn("tool_choice", request_body)
+        self.assertNotIn("max_tool_calls", request_body)
         self.assertTrue(request_body["provider"]["require_parameters"])
         self.assertEqual(
             request_body["reasoning"]["effort"],
@@ -1742,767 +1756,6 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(custom_prompt.startswith("只用短句，语气平静。"))
         self.assertIn("【系统输出格式】", custom_prompt)
         self.assertNotIn("【本次来源卡】", custom_prompt)
-
-    async def test_person_research_uses_bounded_web_search_and_cited_evidence(self):
-        calls: list[httpx.Request] = []
-        cited_url = "https://example.edu/primary-source"
-        uncited_url = "https://untrusted.example/unsupported"
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            calls.append(request)
-            generated = {
-                "person_name": "阿尔弗雷德·阿德勒",
-                "input_type": "paraphrased_viewpoint",
-                "research_focus": "核验这项观点与阿德勒思想的关系和可靠语境。",
-                "attribution_status": "partially_supported",
-                "verified_wording": "",
-                "attribution_note": "没有把用户表述核验为人物逐字原话。",
-                "source_context": "可靠资料支持相关思想背景，但不支持逐字归属。",
-                "summary": "该人物的思想可以帮助家长区分支持与替代。",
-                "evidence": [
-                    {
-                        "claim": "可靠原始资料支持的背景事实。",
-                        "source_title": "模型填写但应由注释覆盖的标题",
-                        "source_url": cited_url,
-                        "source_kind": "primary",
-                        "evidence_type": "interpretation",
-                    },
-                    {
-                        "claim": "没有检索注释支持的内容不能进入简报。",
-                        "source_title": "未核验页面",
-                        "source_url": uncited_url,
-                        "source_kind": "other",
-                        "evidence_type": "other",
-                    },
-                ],
-                "uncertainties": ["该观点不能表述为人物逐字原话。"],
-            }
-            return httpx.Response(200, json={
-                "id": "generation-research-1",
-                "model": "resolved/research-model",
-                "choices": [{
-                    "message": {
-                        "content": json.dumps(generated, ensure_ascii=False),
-                        "annotations": [{
-                            "type": "url_citation",
-                            "url_citation": {
-                                "url": cited_url,
-                                "title": "大学原始资料",
-                                "content": "与主题相关的原始资料摘要。",
-                            },
-                        }],
-                    },
-                }],
-                "usage": {
-                    "prompt_tokens": 900,
-                    "completion_tokens": 300,
-                    "total_tokens": 1200,
-                    "cost": 0.045,
-                    "server_tool_use": {"web_search_requests": 2},
-                },
-            })
-
-        provider = OpenRouterScriptProvider(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api",
-            model="test/research-model",
-            transport=httpx.MockTransport(handler),
-        )
-        original_request = (
-            "阿尔弗雷德·阿德勒，以及“真正影响孩子的，是孩子如何理解自己在家庭中的位置”"
-            "这个观点。我想了解它与阿德勒思想的真实关系。"
-        )
-        card_input = CreativeRequestInput(
-            creative_request=original_request,
-        ).to_source_card_input()
-        card = SourceCard(
-            **card_input.model_dump(mode="json"),
-            id="card-person-research",
-            revision=1,
-            status="verified",
-        )
-        usage_records: list[ProviderUsageRecord] = []
-
-        async def record_usage(usage: ProviderUsageRecord) -> None:
-            usage_records.append(usage)
-
-        brief = await provider.research_person_viewpoint(
-            card, on_usage=record_usage
-        )
-
-        self.assertEqual(len(calls), 1)
-        request_body = json.loads(calls[0].content)
-        self.assertEqual(
-            request_body["reasoning"]["effort"],
-            OPENROUTER_REASONING_EFFORT,
-        )
-        self.assertEqual(
-            request_body["max_tokens"],
-            PERSON_RESEARCH_MAX_COMPLETION_TOKENS,
-        )
-        self.assertEqual(request_body["max_tool_calls"], 4)
-        self.assertEqual(request_body["tool_choice"], "required")
-        response_schema = request_body["response_format"]["json_schema"]["schema"]
-        self.assertIn("person_name", response_schema["required"])
-        tool = request_body["tools"][0]
-        self.assertEqual(tool["type"], "openrouter:web_search")
-        self.assertEqual(tool["parameters"]["engine"], "exa")
-        self.assertEqual(tool["parameters"]["mode"], "deep-lite")
-        self.assertEqual(tool["parameters"]["max_uses"], 4)
-        self.assertEqual(tool["parameters"]["max_total_results"], 16)
-        prompt = request_body["messages"][1]["content"]
-        self.assertIn("研究日期（UTC）", prompt)
-        self.assertIn("先核验归属、可靠原文、出处、文字异同与上下文", prompt)
-        self.assertEqual(card.subject.type, "topic")
-        self.assertEqual(brief.person_name, "阿尔弗雷德·阿德勒")
-        self.assertEqual(brief.viewpoint, original_request)
-        self.assertEqual(brief.prompt_version, PERSON_RESEARCH_PROMPT_VERSION)
-        self.assertEqual(brief.model_id, "resolved/research-model")
-        self.assertEqual(len(brief.evidence), 1)
-        self.assertEqual(brief.evidence[0].source_url, cited_url)
-        self.assertEqual(brief.evidence[0].source_title, "大学原始资料")
-        self.assertEqual(len(usage_records), 1)
-        self.assertEqual(usage_records[0].operation, "person_research")
-        self.assertIn("联网检索 2 次", usage_records[0].note)
-
-    async def test_person_research_rejects_evidence_without_search_citations(self):
-        def handler(_: httpx.Request) -> httpx.Response:
-            generated = {
-                "summary": "看似完整但没有引用注释的研究结果。",
-                "core_tension": "帮助与替代之间的张力。",
-                "audience_relevance": ["家长需要判断帮助边界。"],
-                "content_angles": ["先看风险，再决定介入程度。"],
-                "interaction_opportunity": "你会在哪一步停下来观察？",
-                "evidence": [{
-                    "claim": "没有注释支持的事实。",
-                    "source_title": "未知页面",
-                    "source_url": "https://example.com/uncited",
-                }],
-                "uncertainties": [],
-            }
-            return httpx.Response(200, json={
-                "choices": [{"message": {
-                    "content": json.dumps(generated, ensure_ascii=False),
-                }}],
-            })
-
-        provider = OpenRouterScriptProvider(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api",
-            model="test/research-model",
-            transport=httpx.MockTransport(handler),
-        )
-        card_input = PersonViewpointInput(
-            person_name="阿尔弗雷德·阿德勒",
-            viewpoint="真正影响孩子的，是孩子如何理解自己在家庭中的位置。",
-        ).to_source_card_input()
-        card = SourceCard(
-            **card_input.model_dump(mode="json"),
-            id="card-uncited-research",
-            revision=1,
-            status="verified",
-        )
-
-        with self.assertRaisesRegex(ProviderUnavailable, "检索注释匹配"):
-            await provider.research_person_viewpoint(card)
-
-    async def test_recent_news_research_freezes_time_and_uses_cited_sources(self):
-        calls: list[httpx.Request] = []
-        official_url = "https://official.example/releases/tera-lab"
-        independent_url = "https://news.example/analysis/tera-lab"
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            calls.append(request)
-            generated = {
-                "summary": "TERA LAB 发布了一个可核验的新版本。",
-                "evidence": [
-                    {
-                        "claim": "官方在 2026-08-08 发布了新版本说明。",
-                        "source_title": "模型标题会被检索注释覆盖",
-                        "source_url": official_url,
-                        "source_kind": "official",
-                        "published_at": "2026-08-08",
-                        "event_at": "2026-08-08",
-                    },
-                    {
-                        "claim": "独立媒体在 2026-08-09 报道了该发布。",
-                        "source_title": "模型标题会被检索注释覆盖",
-                        "source_url": independent_url,
-                        "source_kind": "independent",
-                        "published_at": "2026-08-09",
-                        "event_at": "2026-08-08",
-                    },
-                ],
-                "uncertainties": ["尚无长期使用效果数据。"],
-            }
-            annotations = [
-                {
-                    "type": "url_citation",
-                    "url_citation": {
-                        "url": official_url,
-                        "title": "TERA LAB 官方发布",
-                        "content": "官方版本发布说明。",
-                    },
-                },
-                {
-                    "type": "url_citation",
-                    "url_citation": {
-                        "url": independent_url,
-                        "title": "独立媒体分析",
-                        "content": "独立媒体对发布的报道。",
-                    },
-                },
-            ]
-            return httpx.Response(200, json={
-                "id": "generation-news-research-1",
-                "model": "resolved/news-model",
-                "choices": [{"message": {
-                    "content": json.dumps(generated, ensure_ascii=False),
-                    "annotations": annotations,
-                }}],
-                "usage": {
-                    "prompt_tokens": 1000,
-                    "completion_tokens": 400,
-                    "total_tokens": 1400,
-                    "server_tool_use": {"web_search_requests": 3},
-                },
-            })
-
-        provider = OpenRouterScriptProvider(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api",
-            model="test/script-model",
-            research_model="x-ai/grok-4.5",
-            transport=httpx.MockTransport(handler),
-        )
-        card_input = NewsTopicInput(
-            topic="TERA LAB",
-            focus="最近一周的重要公开动态",
-        ).to_source_card_input()
-        card = SourceCard(
-            **card_input.model_dump(mode="json"),
-            id="card-news-research",
-            revision=1,
-            status="verified",
-        )
-        usage_records: list[ProviderUsageRecord] = []
-
-        async def record_usage(usage: ProviderUsageRecord) -> None:
-            usage_records.append(usage)
-
-        brief = await provider.research_recent_news(
-            card,
-            research_prompt="优先官方与可信独立来源。",
-            on_usage=record_usage,
-        )
-
-        self.assertEqual(len(calls), 1)
-        request_body = json.loads(calls[0].content)
-        self.assertEqual(request_body["model"], "x-ai/grok-4.5")
-        self.assertEqual(
-            request_body["max_tokens"],
-            NEWS_RESEARCH_MAX_COMPLETION_TOKENS,
-        )
-        self.assertEqual(request_body["max_tool_calls"], 3)
-        self.assertEqual(request_body["tool_choice"], "required")
-        self.assertEqual(
-            request_body["response_format"]["json_schema"]["name"],
-            "recent_news_evidence_v6",
-        )
-        research_properties = request_body["response_format"]["json_schema"][
-            "schema"
-        ]["properties"]
-        self.assertEqual(
-            set(research_properties),
-            {"summary", "evidence", "uncertainties"},
-        )
-        self.assertEqual(
-            request_body["tools"][0]["parameters"]["max_total_results"],
-            12,
-        )
-        self.assertIn("检索截止时间（Asia/Shanghai）", request_body["messages"][1]["content"])
-        self.assertIn("优先官方与可信独立来源", request_body["messages"][1]["content"])
-        self.assertIn("claim 必须是非空事实描述", request_body["messages"][1]["content"])
-        claim_schema = request_body["response_format"]["json_schema"]["schema"][
-            "properties"
-        ]["evidence"]["items"]["properties"]["claim"]
-        self.assertIn("非空", claim_schema["description"])
-        self.assertEqual(brief.kind, "recent_news")
-        self.assertEqual(brief.prompt_version, NEWS_RESEARCH_PROMPT_VERSION)
-        self.assertEqual(
-            {item.source_url for item in brief.evidence},
-            {official_url, independent_url},
-        )
-        self.assertTrue(brief.as_of.endswith("+08:00"))
-        self.assertEqual(usage_records[0].operation, "recent_news_research")
-
-    async def test_recent_news_research_accepts_one_site_and_matches_tracking_url(self):
-        source_url = "https://official.example/releases/tera-lab"
-        cited_url = source_url + "?utm_source=exa&utm_medium=search"
-
-        def handler(_: httpx.Request) -> httpx.Response:
-            generated = {
-                "summary": "官方发布了一项可核验的新变化。",
-                "core_tension": "已发布能力与长期效果仍需区分。",
-                "audience_relevance": ["用户需要判断当前是否可用。"],
-                "content_angles": ["解释已确认变化和仍待观察的部分。"],
-                "interaction_opportunity": "你更关心功能还是实际效果？",
-                "evidence": [{
-                    "claim": "官方发布记录确认了本次变化。",
-                    "source_title": "模型标题",
-                    "source_url": source_url,
-                    "source_kind": "official",
-                    "published_at": "2026-08-09",
-                    "event_at": "2026-08-09",
-                }],
-                "uncertainties": [],
-            }
-            return httpx.Response(200, json={
-                "id": "generation-news-single-source",
-                "model": "resolved/news-model",
-                "choices": [{"message": {
-                    "content": json.dumps(generated, ensure_ascii=False),
-                    "annotations": [{
-                        "type": "url_citation",
-                        "url_citation": {
-                            "url": cited_url,
-                            "title": "官方发布记录",
-                        },
-                    }],
-                }}],
-                "usage": {"server_tool_use": {"web_search_requests": 2}},
-            })
-
-        provider = OpenRouterScriptProvider(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api",
-            model="test/news-model",
-            transport=httpx.MockTransport(handler),
-        )
-        card_input = NewsTopicInput(topic="TERA LAB").to_source_card_input()
-        card = SourceCard(
-            **card_input.model_dump(mode="json"),
-            id="card-news-single-source",
-            revision=1,
-            status="verified",
-        )
-
-        brief = await provider.research_recent_news(card)
-
-        self.assertEqual(len(brief.evidence), 1)
-        self.assertEqual(brief.evidence[0].source_url, cited_url)
-        self.assertTrue(any(
-            "只有一个可追溯站点" in item
-            for item in brief.uncertainties
-        ))
-        self.assertTrue(any(
-            "尚未找到可信独立报道" in item
-            for item in brief.uncertainties
-        ))
-
-    async def test_recent_news_research_recovers_blank_claim_from_citation_excerpt(self):
-        source_url = "https://official.example/releases/tera-fab"
-
-        def handler(_: httpx.Request) -> httpx.Response:
-            generated = {
-                "summary": "官方公布了一项可核验的新计划。",
-                "core_tension": "计划与实际落地仍需区分。",
-                "audience_relevance": ["用户需要知道已经确认了什么。"],
-                "content_angles": ["只讲来源能直接支持的已确认变化。"],
-                "interaction_opportunity": "你更关心计划还是落地进度？",
-                "evidence": [{
-                    "claim": "",
-                    "source_title": "模型标题",
-                    "source_url": source_url,
-                    "source_kind": "official",
-                    "published_at": "2026-08-09",
-                    "event_at": "2026-08-08",
-                }],
-                "uncertainties": [],
-            }
-            return httpx.Response(200, json={
-                "choices": [{"message": {
-                    "content": json.dumps(generated, ensure_ascii=False),
-                    "annotations": [
-                        {
-                            "type": "url_citation",
-                            "url_citation": {
-                                "url": source_url,
-                                "title": "官方发布记录",
-                                "content": (
-                                    "官方资料显示，TERA LAB 已公布新工厂计划。"
-                                    "[...] 量产时间仍待确认。"
-                                ),
-                            },
-                        },
-                        {
-                            "type": "url_citation",
-                            "url_citation": {
-                                "url": source_url,
-                                "title": "",
-                            },
-                        },
-                    ],
-                }}],
-            })
-
-        provider = OpenRouterScriptProvider(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api",
-            model="test/news-model",
-            transport=httpx.MockTransport(handler),
-        )
-        card_input = NewsTopicInput(topic="TERA LAB").to_source_card_input()
-        card = SourceCard(
-            **card_input.model_dump(mode="json"),
-            id="card-news-blank-claim-recovered",
-            revision=1,
-            status="verified",
-        )
-
-        brief = await provider.research_recent_news(card)
-
-        self.assertEqual(len(brief.evidence), 1)
-        self.assertEqual(
-            brief.evidence[0].claim,
-            "官方资料显示，TERA LAB 已公布新工厂计划。 量产时间仍待确认。",
-        )
-        self.assertEqual(brief.evidence[0].source_title, "官方发布记录")
-        self.assertTrue(any(
-            "检索注释原文摘录补全" in item
-            for item in brief.uncertainties
-        ))
-
-    async def test_recent_news_research_whitelists_fields_without_editorial_fill(self):
-        source_url = "https://official.example/releases/tera-fab"
-        claim = "官方在 2026-08-09 公布了 TERA FAB 项目计划。"
-
-        def handler(_: httpx.Request) -> httpx.Response:
-            generated = {
-                "summary": "",
-                "core_tension": "",
-                "audience_relevance": [""],
-                "content_angles": [],
-                "interaction_opportunity": "",
-                "evidence": [{
-                    "claim": claim,
-                    "source_title": "模型标题",
-                    "source_url": source_url,
-                    "source_kind": "official",
-                    "published_at": "2026-08-09",
-                    "event_at": "",
-                }],
-                "uncertainties": [""],
-                "provider_extra": {"trace": "must-not-enter-brief"},
-            }
-            return httpx.Response(200, json={
-                "choices": [{"message": {
-                    "content": json.dumps(generated, ensure_ascii=False),
-                    "annotations": [{
-                        "type": "url_citation",
-                        "url_citation": {
-                            "url": source_url,
-                            "title": "官方发布记录",
-                        },
-                    }],
-                }}],
-            })
-
-        provider = OpenRouterScriptProvider(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api",
-            model="test/news-model",
-            transport=httpx.MockTransport(handler),
-        )
-        card_input = NewsTopicInput(topic="TERA FAB").to_source_card_input()
-        card = SourceCard(
-            **card_input.model_dump(mode="json"),
-            id="card-news-provider-extra",
-            revision=1,
-            status="verified",
-        )
-
-        brief = await provider.research_recent_news(card)
-
-        self.assertEqual(brief.summary, claim)
-        self.assertEqual(brief.core_tension, "")
-        self.assertEqual(brief.audience_relevance, [])
-        self.assertEqual(brief.content_angles, [])
-        self.assertEqual(brief.interaction_opportunity, "")
-        self.assertNotIn(
-            "provider_extra",
-            brief.model_dump(mode="json"),
-        )
-
-    async def test_recent_news_research_accepts_traceable_source_without_time(self):
-        source_url = "https://official.example/releases/tera-fab"
-
-        def handler(_: httpx.Request) -> httpx.Response:
-            generated = {
-                "summary": "官方公布了一项可核验的新计划。",
-                "core_tension": "计划与实际落地仍需区分。",
-                "audience_relevance": ["用户需要知道已经确认了什么。"],
-                "content_angles": ["只讲来源能直接支持的已确认变化。"],
-                "interaction_opportunity": "",
-                "evidence": [{
-                    "claim": "官方公布了 TERA FAB 项目计划。",
-                    "source_title": "模型标题",
-                    "source_url": source_url,
-                    "source_kind": "official",
-                    "published_at": "",
-                    "event_at": "",
-                }],
-                "uncertainties": [],
-            }
-            return httpx.Response(200, json={
-                "choices": [{"message": {
-                    "content": json.dumps(generated, ensure_ascii=False),
-                    "annotations": [{
-                        "type": "url_citation",
-                        "url_citation": {
-                            "url": source_url,
-                            "title": "官方发布记录",
-                        },
-                    }],
-                }}],
-            })
-
-        provider = OpenRouterScriptProvider(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api",
-            model="test/news-model",
-            transport=httpx.MockTransport(handler),
-        )
-        card_input = NewsTopicInput(topic="TERA FAB").to_source_card_input()
-        card = SourceCard(
-            **card_input.model_dump(mode="json"),
-            id="card-news-missing-time",
-            revision=1,
-            status="verified",
-        )
-
-        brief = await provider.research_recent_news(card)
-
-        self.assertEqual(len(brief.evidence), 1)
-        self.assertTrue(any(
-            "来源未提供明确的事件或发布时间" in item
-            for item in brief.uncertainties
-        ))
-        self.assertIn(
-            "时效性仍需确认",
-            QijiaVideoService._news_research_warning(brief),
-        )
-
-    async def test_recent_news_research_rejects_invalid_time_before_paid_call(self):
-        calls: list[httpx.Request] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            calls.append(request)
-            return httpx.Response(500)
-
-        provider = OpenRouterScriptProvider(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api",
-            model="test/news-model",
-            transport=httpx.MockTransport(handler),
-        )
-        card_input = NewsTopicInput(topic="TERA FAB").to_source_card_input()
-        card = SourceCard(
-            **card_input.model_dump(mode="json"),
-            id="card-news-invalid-as-of",
-            revision=1,
-            status="verified",
-        )
-
-        with self.assertRaisesRegex(
-            ProviderUnavailable,
-            "截止时间无效，未调用模型",
-        ):
-            await provider.research_recent_news(card, as_of="not-an-iso-time")
-
-        self.assertEqual(calls, [])
-
-    async def test_recent_news_research_reports_matched_blank_claim_without_excerpt(self):
-        source_url = "https://cited.example/news"
-
-        def handler(_: httpx.Request) -> httpx.Response:
-            generated = {
-                "summary": "模型返回了空事实描述。",
-                "core_tension": "空事实描述不能进入脚本。",
-                "audience_relevance": ["需要保留事实完整性边界。"],
-                "content_angles": ["解释为什么本次研究被阻断。"],
-                "interaction_opportunity": "",
-                "evidence": [{
-                    "claim": "",
-                    "source_title": "模型标题",
-                    "source_url": source_url,
-                    "source_kind": "official",
-                    "published_at": "2026-08-09",
-                    "event_at": "",
-                }],
-                "uncertainties": [],
-            }
-            return httpx.Response(200, json={
-                "choices": [{"message": {
-                    "content": json.dumps(generated, ensure_ascii=False),
-                    "annotations": [{
-                        "type": "url_citation",
-                        "url_citation": {
-                            "url": source_url,
-                            "title": "实际检索注释",
-                        },
-                    }],
-                }}],
-            })
-
-        provider = OpenRouterScriptProvider(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api",
-            model="test/news-model",
-            transport=httpx.MockTransport(handler),
-        )
-        card_input = NewsTopicInput(topic="TERA LAB").to_source_card_input()
-        card = SourceCard(
-            **card_input.model_dump(mode="json"),
-            id="card-news-blank-claim-unrecoverable",
-            revision=1,
-            status="verified",
-        )
-
-        with self.assertRaisesRegex(
-            ResearchEvidenceUnavailable,
-            "检索证据缺少可用事实描述",
-        ) as raised:
-            await provider.research_recent_news(card)
-
-        diagnostics = raised.exception.diagnostics
-        self.assertIsNone(diagnostics["web_search_requests"])
-        self.assertEqual(diagnostics["citation_count"], 1)
-        self.assertEqual(diagnostics["candidate_evidence_count"], 1)
-        self.assertEqual(diagnostics["matched_citation_count"], 1)
-        self.assertEqual(diagnostics["accepted_evidence_count"], 0)
-        self.assertEqual(diagnostics["rejected_counts"]["missing_claim"], 1)
-        self.assertEqual(
-            diagnostics["citation_identity_samples"],
-            ["cited.example/news"],
-        )
-        self.assertEqual(
-            diagnostics["candidate_identity_samples"],
-            ["cited.example/news"],
-        )
-
-    async def test_recent_news_research_reports_citation_rejection_diagnostics(self):
-        def handler(_: httpx.Request) -> httpx.Response:
-            generated = {
-                "summary": "模型返回了没有 citation 支持的候选事实。",
-                "core_tension": "该事实不能进入脚本。",
-                "audience_relevance": ["需要保留来源边界。"],
-                "content_angles": ["解释为什么没有生成。"],
-                "interaction_opportunity": "",
-                "evidence": [{
-                    "claim": "未被检索注释支持的事实。",
-                    "source_title": "未匹配页面",
-                    "source_url": "https://unmatched.example/news",
-                    "source_kind": "other",
-                    "published_at": "2026-08-09",
-                    "event_at": "",
-                }],
-                "uncertainties": [],
-            }
-            return httpx.Response(200, json={
-                "choices": [{"message": {
-                    "content": json.dumps(generated, ensure_ascii=False),
-                    "annotations": [{
-                        "type": "url_citation",
-                        "url_citation": {
-                            "url": "https://cited.example/news",
-                            "title": "实际检索注释",
-                        },
-                    }],
-                }}],
-                "usage": {"server_tool_use": {"web_search_requests": 1}},
-            })
-
-        provider = OpenRouterScriptProvider(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api",
-            model="test/news-model",
-            transport=httpx.MockTransport(handler),
-        )
-        card_input = NewsTopicInput(topic="TERA LAB").to_source_card_input()
-        card = SourceCard(
-            **card_input.model_dump(mode="json"),
-            id="card-news-diagnostics",
-            revision=1,
-            status="verified",
-        )
-
-        with self.assertRaisesRegex(
-            ResearchEvidenceUnavailable,
-            "检索引用与模型 evidence URL 未匹配",
-        ) as raised:
-            await provider.research_recent_news(card)
-
-        diagnostics = raised.exception.diagnostics
-        self.assertEqual(diagnostics["web_search_requests"], 1)
-        self.assertEqual(diagnostics["citation_count"], 1)
-        self.assertEqual(diagnostics["candidate_evidence_count"], 1)
-        self.assertEqual(diagnostics["matched_citation_count"], 0)
-        self.assertEqual(diagnostics["accepted_evidence_count"], 0)
-        self.assertEqual(
-            diagnostics["rejected_counts"]["citation_not_matched"],
-            1,
-        )
-
-    async def test_recent_news_research_reports_missing_citation_annotations(self):
-        def handler(_: httpx.Request) -> httpx.Response:
-            generated = {
-                "summary": "模型完成了检索，但上游没有返回 citation 注释。",
-                "core_tension": "没有引用注释就不能把候选事实写入脚本。",
-                "audience_relevance": ["需要保留来源边界。"],
-                "content_angles": ["解释为什么需要重新研究。"],
-                "interaction_opportunity": "",
-                "evidence": [{
-                    "claim": "没有注释支持的候选事实。",
-                    "source_title": "候选页面",
-                    "source_url": "https://candidate.example/news",
-                    "source_kind": "other",
-                    "published_at": "2026-08-09",
-                    "event_at": "",
-                }],
-                "uncertainties": [],
-            }
-            return httpx.Response(200, json={
-                "choices": [{"message": {
-                    "content": json.dumps(generated, ensure_ascii=False),
-                }}],
-                "usage": {"server_tool_use": {"web_search_requests": 1}},
-            })
-
-        provider = OpenRouterScriptProvider(
-            api_key="test-key",
-            base_url="https://openrouter.ai/api",
-            model="test/news-model",
-            transport=httpx.MockTransport(handler),
-        )
-        card_input = NewsTopicInput(topic="TERA LAB").to_source_card_input()
-        card = SourceCard(
-            **card_input.model_dump(mode="json"),
-            id="card-news-missing-annotations",
-            revision=1,
-            status="verified",
-        )
-
-        with self.assertRaisesRegex(
-            ResearchEvidenceUnavailable,
-            "已执行联网检索但未返回 citation",
-        ) as raised:
-            await provider.research_recent_news(card)
-
-        diagnostics = raised.exception.diagnostics
-        self.assertEqual(diagnostics["web_search_requests"], 1)
-        self.assertEqual(diagnostics["citation_count"], 0)
-        self.assertEqual(diagnostics["candidate_evidence_count"], 1)
 
     async def test_openrouter_reports_truncated_json_with_the_exact_stage(self):
         def handler(_: httpx.Request) -> httpx.Response:
@@ -3363,7 +2616,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         job = await self.service.create_job(card.id, self.actor)
 
         self.assertEqual(job.skill_snapshot.skill_id, "explain-expert-view")
-        self.assertEqual(job.skill_snapshot.version, "2.2.0")
+        self.assertEqual(job.skill_snapshot.version, "3.0.0")
+        self.assertEqual(job.skill_snapshot.knowledge_mode.value, "model_knowledge")
         self.assertEqual(job.skill_snapshot.research_mode.value, "none")
         self.assertEqual(
             job.generation_settings.skill_id,
@@ -3578,57 +2832,36 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("【唯一视觉负责人】", director.director_instruction)
         self.assertNotIn(initial_thesis, director.director_instruction)
 
-    async def test_person_research_enriches_the_job_without_adding_a_gate(self):
+    async def test_model_knowledge_generation_never_calls_research_provider(self):
         original_request = (
-            "阿尔弗雷德·阿德勒，以及“真正影响孩子的，是孩子如何理解自己在家庭中的位置”"
-            "这个观点。我想核验它的来源并解释真正含义。"
+            "黄宗羲，大丈夫行事，论是非不论利害，论顺逆不论成败，"
+            "论万世不论一生。请解释这段话的思想力量。"
         )
-        brief = PersonResearchBrief.model_validate({
-            "person_name": "阿尔弗雷德·阿德勒",
-            "viewpoint": original_request,
-            "summary": "用家庭位置感解释孩子如何参与真实任务。",
-            "core_tension": "家长的快速帮助可能同时减少孩子的参与空间。",
-            "audience_relevance": ["孩子卡住时，家长容易直接接手。"],
-            "content_angles": ["把帮助拆成观察、提示和接手三个层级。"],
-            "interaction_opportunity": "你最容易在哪类任务里直接接手？",
-            "evidence": [{
-                "claim": "有来源支持的人物与主题背景事实。",
-                "source_title": "大学研究资料",
-                "source_url": "https://example.edu/adler",
-            }],
-            "uncertainties": ["用户观点不是人物逐字引语。"],
-            "model_id": "test/research-model",
-            "prompt_version": PERSON_RESEARCH_PROMPT_VERSION,
-            "generated_at": timestamp(),
-        })
 
-        class ResearchingScriptProvider(TemplateScriptProvider):
+        class ModelKnowledgeProvider(TemplateScriptProvider):
             def __init__(self):
                 self.research_calls = 0
-                self.generated_card: SourceCard | None = None
                 self.generated_prompt = ""
-                self.compiled_research_prompt = ""
 
-            async def research_for_skill(
-                self,
-                card,
-                *,
-                research_mode,
-                research_prompt,
-                research_as_of="",
-                on_usage=None,
-            ):
-                del card, research_mode, research_as_of, on_usage
+            async def research_for_skill(self, *args, **kwargs):
+                del args, kwargs
                 self.research_calls += 1
-                self.compiled_research_prompt = research_prompt
-                return brief
+                raise AssertionError("模型知识任务不得调用研究 Provider")
 
-            async def generate(self, card, prompt=None):
-                self.generated_card = card.model_copy(deep=True)
-                self.generated_prompt = str(prompt or "")
-                return await super().generate(card, prompt)
+            async def research_person_viewpoint(self, *args, **kwargs):
+                del args, kwargs
+                self.research_calls += 1
+                raise AssertionError("模型知识任务不得调用人物搜索")
 
-        provider = ResearchingScriptProvider()
+            async def generate_with_plan(
+                self, card, prompt, *, on_usage=None
+            ):
+                self.generated_prompt = prompt
+                return await super().generate_with_plan(
+                    card, prompt, on_usage=on_usage
+                )
+
+        provider = ModelKnowledgeProvider()
         self.service.script_provider = provider
         card = await self.service.create_source_card(
             CreativeRequestInput(
@@ -3644,72 +2877,53 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         generated = await self.service.generate_script(job.id, self.actor)
 
         self.assertEqual(generated.state, JobState.SCRIPT_REVIEW_REQUIRED)
-        self.assertEqual(provider.research_calls, 1)
-        self.assertEqual(generated.research_brief, brief)
+        self.assertEqual(provider.research_calls, 0)
+        self.assertIsNone(generated.research_prompt_snapshot)
+        self.assertIsNone(generated.research_brief)
         self.assertEqual(generated.research_warning, "")
-        self.assertIsNotNone(generated.research_prompt_snapshot)
+        self.assertEqual(generated.skill_snapshot.research_mode.value, "none")
         self.assertEqual(
-            generated.research_prompt_snapshot.prompt,
-            provider.compiled_research_prompt,
+            generated.skill_snapshot.knowledge_mode.value,
+            "model_knowledge",
         )
-        self.assertIn(brief.viewpoint, provider.compiled_research_prompt)
-        self.assertIn("【EvidencePack 交付原则】", provider.compiled_research_prompt)
-        self.assertIn("研究阶段不设计钩子、内容角度", provider.compiled_research_prompt)
-        self.assertNotIn("H3 CreativeBrief 方法", provider.compiled_research_prompt)
-        self.assertIn("【唯一 EvidencePack】", provider.generated_prompt)
-        self.assertIn("【Script Skill】evidence-led-explainer@1.0.0", provider.generated_prompt)
-        self.assertIn("【冻结的事实、安全与质量政策】", provider.generated_prompt)
-        self.assertNotIn("H3", provider.generated_prompt)
-        self.assertNotIn("【自动研究简报】", provider.generated_prompt)
-        self.assertNotIn(brief.content_angles[0], provider.generated_prompt)
+        self.assertIn(original_request, provider.generated_prompt)
+        self.assertIn("【唯一 ContextPack（用户提供材料）】", provider.generated_prompt)
+        self.assertIn('"external_retrieval": false', provider.generated_prompt)
+        self.assertIn("禁止联网搜索", provider.generated_prompt)
+        self.assertIn(
+            "【Script Skill】evidence-led-explainer@1.1.0",
+            provider.generated_prompt,
+        )
+        self.assertNotIn("openrouter:web_search", provider.generated_prompt)
         self.assertIsNotNone(generated.editorial_plan)
         self.assertIsNone(generated.creative_brief)
-        enriched = SourceCard.model_validate(generated.source_card_snapshot)
-        self.assertEqual(enriched.subject.type, "person")
-        self.assertEqual(enriched.subject.name, brief.person_name)
-        self.assertEqual(
-            [item.id for item in enriched.sources if item.id.startswith("research_source")],
-            ["research_source_01"],
-        )
-        self.assertEqual(
-            [item.text for item in enriched.verified_facts if item.id.startswith("research_fact")],
-            [brief.evidence[0].claim],
-        )
-        boundaries = [item.text for item in enriched.interpretation_boundary]
-        self.assertNotIn(
-            "只围绕用户输入的观点展开，不补造人物经历、逐字引语、研究数据或来源出处。",
-            boundaries,
-        )
-        self.assertTrue(any("有来源支持的事实" in item for item in boundaries))
-        enriched_again = self.service._card_with_person_research(enriched, brief)
-        self.assertEqual(len(enriched_again.sources), len(enriched.sources))
-        self.assertEqual(
-            len(enriched_again.verified_facts), len(enriched.verified_facts)
-        )
 
-    async def test_person_research_failure_continues_and_is_not_retried(self):
+    async def test_script_retry_does_not_add_a_research_call(self):
         class OneTimeScriptFailureProvider(TemplateScriptProvider):
             def __init__(self):
-                self.research_calls = 0
                 self.generate_calls = 0
+                self.research_calls = 0
 
-            async def research_person_viewpoint(self, card, *, on_usage=None):
-                del card, on_usage
+            async def research_for_skill(self, *args, **kwargs):
+                del args, kwargs
                 self.research_calls += 1
-                raise ProviderUnavailable("研究服务暂时不可用")
+                raise AssertionError("脚本重试不得调用研究 Provider")
 
-            async def generate(self, card, prompt=None):
+            async def generate_with_plan(
+                self, card, prompt, *, on_usage=None
+            ):
                 self.generate_calls += 1
                 if self.generate_calls == 1:
                     raise ProviderUnavailable("脚本服务暂时不可用")
-                return await super().generate(card, prompt)
+                return await super().generate_with_plan(
+                    card, prompt, on_usage=on_usage
+                )
 
         provider = OneTimeScriptFailureProvider()
         self.service.script_provider = provider
         card = await self.service.create_source_card(
-            PersonViewpointInput(
-                person_name="阿尔弗雷德·阿德勒",
-                viewpoint="真正影响孩子的，是孩子如何理解自己在家庭中的位置。",
+            CreativeRequestInput(
+                creative_request="黄宗羲的这段话如何理解？请讲清原则、成败与时间尺度。",
             ).to_source_card_input(),
             self.actor,
         )
@@ -3720,49 +2934,15 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(ProviderUnavailable, "脚本服务暂时不可用"):
             await self.service.generate_script(job.id, self.actor)
-        failed = await self.service.get_job(job.id, self.actor)
-        self.assertEqual(failed.state, JobState.FAILED)
-        self.assertIn("已使用原始创作请求继续生成", failed.research_warning)
-
         completed = await self.service.generate_script(job.id, self.actor)
 
         self.assertEqual(completed.state, JobState.SCRIPT_REVIEW_REQUIRED)
-        self.assertEqual(provider.research_calls, 1)
         self.assertEqual(provider.generate_calls, 2)
-        self.assertIn("已使用原始创作请求继续生成", completed.research_warning)
+        self.assertEqual(provider.research_calls, 0)
+        self.assertIsNone(completed.research_prompt_snapshot)
+        self.assertEqual(completed.research_warning, "")
 
-    async def test_recent_news_research_requires_user_authorized_retry_after_failure(self):
-        class FailingNewsProvider(TemplateScriptProvider):
-            def __init__(self):
-                self.research_calls = 0
-                self.generate_calls = 0
-
-            async def research_for_skill(
-                self,
-                card,
-                *,
-                research_mode,
-                research_prompt="",
-                research_as_of="",
-                on_usage=None,
-            ):
-                del card, research_mode, research_prompt, research_as_of
-                self.research_calls += 1
-                if on_usage:
-                    await on_usage(ProviderUsageRecord(
-                        usage_id=f"news-research-{self.research_calls}",
-                        operation="recent_news_research",
-                        provider="test-news",
-                        succeeded=False,
-                    ))
-                raise ProviderUnavailable("新闻研究服务暂时不可用")
-
-            async def generate(self, card, prompt=None):
-                self.generate_calls += 1
-                return await super().generate(card, prompt)
-
-        provider = FailingNewsProvider()
-        self.service.script_provider = provider
+    async def test_recent_news_cards_cannot_create_new_jobs(self):
         card = await self.service.create_source_card(
             NewsTopicInput(topic="TERA LAB").to_source_card_input(),
             self.actor,
@@ -3770,168 +2950,11 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         card = await self.service.verify_source_card(
             card.id, card.revision, self.actor
         )
-        job = await self.service.create_job(
-            card.id,
-            self.actor,
-            GenerationSettings(skill_id="brief-recent-news"),
-        )
 
-        with self.assertRaisesRegex(QualityGateFailed, "未生成无来源脚本"):
-            await self.service.generate_script(job.id, self.actor)
-        with self.assertRaisesRegex(QualityGateFailed, "未生成无来源脚本"):
-            await self.service.generate_script(job.id, self.actor)
+        with self.assertRaisesRegex(QualityGateFailed, "已停用该入口"):
+            await self.service.create_job(card.id, self.actor)
 
-        failed = await self.service.get_job(job.id, self.actor)
-        self.assertEqual(failed.state, JobState.FAILED)
-        self.assertEqual(provider.research_calls, 1)
-        self.assertEqual(provider.generate_calls, 0)
-        self.assertEqual(
-            failed.research_warning,
-            "最新新闻研究失败，未生成无来源脚本：新闻研究服务暂时不可用",
-        )
-        self.assertEqual(failed.research_diagnostics.attempt_count, 1)
-
-        authorized = await self.service.authorize_news_research_retry(
-            failed.id,
-            failed.revision,
-            self.actor,
-        )
-        self.assertEqual(authorized.state, JobState.CARD_VERIFIED)
-        self.assertEqual(authorized.research_retry_authorizations, 1)
-        self.assertEqual(authorized.research_warning, "")
-        with self.assertRaisesRegex(QualityGateFailed, "未生成无来源脚本"):
-            await self.service.generate_script(authorized.id, self.actor)
-        retried = await self.service.get_job(job.id, self.actor)
-        self.assertEqual(provider.research_calls, 2)
-        self.assertEqual(retried.research_diagnostics.attempt_count, 2)
-
-    async def test_recent_news_research_replaces_query_placeholder_before_script(self):
-        as_of = timestamp()
-        brief = NewsResearchBrief(
-            topic="TERA LAB",
-            as_of=as_of,
-            summary="TERA LAB 发布了一个可核验的新版本。",
-            core_tension="发布能力与真实采用效果仍需区分。",
-            audience_relevance=["普通用户需要判断当前是否可用。"],
-            content_angles=["先讲发布，再讲仍待验证的效果。"],
-            interaction_opportunity="你更关注功能还是实际采用效果？",
-            evidence=[
-                {
-                    "claim": "官方在 2026-08-08 发布了新版本说明。",
-                    "source_title": "TERA LAB 官方发布",
-                    "source_url": "https://official.example/releases/tera-lab",
-                    "source_kind": "official",
-                    "published_at": "2026-08-08",
-                    "event_at": "2026-08-08",
-                },
-            ],
-            uncertainties=["长期使用效果尚未确认。"],
-            model_id="test/news-model",
-            prompt_version=NEWS_RESEARCH_PROMPT_VERSION,
-            generated_at=timestamp(),
-        )
-
-        class NewsProvider(TemplateScriptProvider):
-            def __init__(self):
-                self.research_calls = 0
-                self.generated_card = None
-                self.generated_prompt = ""
-                self.system_prompt = ""
-
-            async def research_for_skill(
-                self,
-                card,
-                *,
-                research_mode,
-                research_prompt="",
-                research_as_of="",
-                on_usage=None,
-            ):
-                del card, research_prompt, on_usage
-                self.research_calls += 1
-                if research_mode != "recent_news_required":
-                    raise AssertionError("wrong research mode")
-                return brief.model_copy(update={"as_of": research_as_of})
-
-            async def generate(self, card, prompt=None):
-                self.generated_card = card.model_copy(deep=True)
-                self.generated_prompt = str(prompt or "")
-                return await super().generate(card, prompt)
-
-        provider = NewsProvider()
-        self.service.script_provider = provider
-        card = await self.service.create_source_card(
-            NewsTopicInput(
-                topic="TERA LAB",
-                focus="最近一周的重要公开动态",
-            ).to_source_card_input(),
-            self.actor,
-        )
-        card = await self.service.verify_source_card(
-            card.id, card.revision, self.actor
-        )
-        job = await self.service.create_job(
-            card.id,
-            self.actor,
-            GenerationSettings(skill_id="brief-recent-news"),
-        )
-
-        generated = await self.service.generate_script(job.id, self.actor)
-
-        self.assertEqual(generated.state, JobState.SCRIPT_REVIEW_REQUIRED)
-        self.assertEqual(
-            generated.research_brief.as_of,
-            job.skill_snapshot.frozen_at,
-        )
-        self.assertEqual(provider.research_calls, 1)
-        self.assertNotIn(
-            "request_context_01",
-            {item.id for item in provider.generated_card.verified_facts},
-        )
-        self.assertNotIn(
-            "request_source_01",
-            {item.id for item in provider.generated_card.sources},
-        )
-        self.assertEqual(
-            len([
-                item for item in provider.generated_card.verified_facts
-                if item.id.startswith("research_fact")
-            ]),
-            1,
-        )
-        self.assertIn("只有一个可追溯站点", generated.research_warning)
-        self.assertNotIn("【新闻价值】", generated.generation_settings.script_prompt)
-        self.assertIn("【唯一 EvidencePack】", provider.generated_prompt)
-        self.assertIn('"research_as_of"', provider.generated_prompt)
-        self.assertIn("2026-08-08", provider.generated_prompt)
-        self.assertIn("【Script Skill】evidence-led-explainer@1.0.0", provider.generated_prompt)
-        self.assertIn("news-freshness", provider.generated_prompt)
-        self.assertNotIn("H3", provider.generated_prompt)
-        self.assertNotIn("家长", generated.script.narration_text())
-        self.assertIn("最新动态", generated.script.hashtags)
-
-        approved = await self.service.approve_script(
-            generated.id,
-            generated.revision,
-            generated.script_hash,
-            self.actor,
-        )
-        produced = await self.service.produce(approved.id, self.actor)
-
-        self.assertEqual(produced.state, JobState.FINAL_REVIEW_REQUIRED)
-        visual_text = "\n".join(
-            [
-                shot.visual_intent
-                + shot.first_frame_prompt
-                + shot.motion_prompt
-                for shot in produced.storyboard_plan.shots
-            ]
-            + [request.prompt for request in produced.visual_requests]
-        )
-        self.assertNotIn("家长", visual_text)
-        self.assertNotIn("孩子", visual_text)
-        self.assertEqual(produced.skill_snapshot.visual_policy, "")
-        self.assertNotIn("新闻截图", self.service._storyboard_base_style(produced))
+        self.assertEqual(await self.service.list_jobs(self.actor), [])
 
     async def test_seedance_cost_keeps_submission_price_snapshot(self):
         job = VideoJob.model_validate({
@@ -5754,8 +4777,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         job = await self.service.generate_script(job.id, self.actor)
         self.assertTrue(provider.prompt.startswith("你是任务冻结的唯一 Script Skill"))
         self.assertIn("【不可变原始输入】", provider.prompt)
-        self.assertIn("【唯一 EvidencePack】", provider.prompt)
-        self.assertIn("【Script Skill】evidence-led-explainer@1.0.0", provider.prompt)
+        self.assertIn("【唯一 ContextPack（用户提供材料）】", provider.prompt)
+        self.assertIn("【Script Skill】evidence-led-explainer@1.1.0", provider.prompt)
+        self.assertIn('"external_retrieval": false', provider.prompt)
+        self.assertIn("禁止联网搜索", provider.prompt)
         self.assertIn("【冻结的事实、安全与质量政策】", provider.prompt)
         self.assertNotIn("H3", provider.prompt)
         self.assertIn("245-325 个汉字", provider.prompt)
@@ -6005,13 +5030,14 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         skills = response.json()["data"]["content_skills"]
         self.assertEqual(
             {item["skill_id"] for item in skills},
-            {"brief-recent-news", "explain-expert-view"},
+            {"explain-expert-view"},
         )
+        self.assertTrue(all(item["external_retrieval"] is False for item in skills))
         skill_response = allowed.get("/api/qijia-video/skills")
         self.assertEqual(skill_response.status_code, 200)
         self.assertEqual(
             {item["skill_id"] for item in skill_response.json()["data"]},
-            {"brief-recent-news", "explain-expert-view"},
+            {"explain-expert-view"},
         )
         self.assertNotIn("visual_styles", response.json()["data"])
         self.assertNotIn("prompt_writing_profile", response.json()["data"])

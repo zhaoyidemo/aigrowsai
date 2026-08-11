@@ -6,9 +6,7 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 from pydantic import ValidationError
@@ -16,8 +14,6 @@ from pydantic import ValidationError
 from qijia_video.contracts import (
     CreativeBrief,
     EditorialPlan,
-    NewsResearchBrief,
-    PersonResearchBrief,
     ProviderUsageRecord,
     ScriptDraft,
     ScriptReview,
@@ -29,7 +25,7 @@ from qijia_video.contracts import (
     content_hash,
     timestamp,
 )
-from qijia_video.errors import ProviderUnavailable, ResearchEvidenceUnavailable
+from qijia_video.errors import ProviderUnavailable
 from qijia_video.prompt_orchestration import compile_legacy_h3_script_prompt
 from qijia_video.prompts import (
     SCRIPT_OUTPUT_CONTRACT,
@@ -46,12 +42,8 @@ SCRIPT_PROMPT_VERSION = "qijia_script_v14_single_creative_brief"
 SCRIPT_SKILL_PROMPT_VERSION = 'qijia_script_v15_editorial_plan'
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v12_semantic_adaptive"
 DIRECTOR_PROMPT_VERSION = 'qijia_director_v13_shot_context_ir'
-PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_evidence_v4_unified_request"
-NEWS_RESEARCH_PROMPT_VERSION = "recent_news_evidence_v6"
 OPENROUTER_REASONING_EFFORT = "high"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
-PERSON_RESEARCH_MAX_COMPLETION_TOKENS = 48_000
-NEWS_RESEARCH_MAX_COMPLETION_TOKENS = 48_000
 STORYBOARD_MAX_COMPLETION_TOKENS = 128_000
 UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
 
@@ -240,149 +232,6 @@ _SCRIPT_SKILL_RESPONSE_SCHEMA['required'] = [
 ]
 
 
-_PERSON_RESEARCH_RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "person_name": {"type": "string"},
-        "input_type": {
-            "type": "string",
-            "enum": [
-                "attributed_quote",
-                "paraphrased_viewpoint",
-                "conceptual_claim",
-                "unknown",
-            ],
-        },
-        "research_focus": {"type": "string"},
-        "attribution_status": {
-            "type": "string",
-            "enum": [
-                "verified",
-                "partially_supported",
-                "unverified",
-                "not_applicable",
-            ],
-        },
-        "verified_wording": {"type": "string"},
-        "attribution_note": {"type": "string"},
-        "source_context": {"type": "string"},
-        "summary": {"type": "string"},
-        "evidence": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "claim": {"type": "string"},
-                    "source_title": {"type": "string"},
-                    "source_url": {"type": "string"},
-                    "source_kind": {
-                        "type": "string",
-                        "enum": [
-                            "official",
-                            "primary",
-                            "independent",
-                            "other",
-                        ],
-                    },
-                    "evidence_type": {
-                        "type": "string",
-                        "enum": [
-                            "attribution",
-                            "source_context",
-                            "biography",
-                            "interpretation",
-                            "current_relevance",
-                            "other",
-                        ],
-                    },
-                },
-                "required": [
-                    "claim",
-                    "source_title",
-                    "source_url",
-                    "source_kind",
-                    "evidence_type",
-                ],
-                "additionalProperties": False,
-            },
-        },
-        "uncertainties": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-    },
-    "required": [
-        "person_name",
-        "input_type",
-        "research_focus",
-        "attribution_status",
-        "verified_wording",
-        "attribution_note",
-        "source_context",
-        "summary",
-        "evidence",
-        "uncertainties",
-    ],
-    "additionalProperties": False,
-}
-
-_NEWS_RESEARCH_RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "summary": {"type": "string"},
-        "evidence": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "claim": {
-                        "type": "string",
-                        "description": (
-                            "一条非空、由 source_url 页面直接支持的事实描述；"
-                            "无法确认时不要输出该 evidence"
-                        ),
-                    },
-                    "source_title": {"type": "string"},
-                    "source_url": {
-                        "type": "string",
-                        "description": "必须原样复制本次联网检索结果中的 URL",
-                    },
-                    "source_kind": {
-                        "type": "string",
-                        "enum": [
-                            "official",
-                            "primary",
-                            "independent",
-                            "other",
-                        ],
-                    },
-                    "published_at": {"type": "string"},
-                    "event_at": {"type": "string"},
-                },
-                "required": [
-                    "claim",
-                    "source_title",
-                    "source_url",
-                    "source_kind",
-                    "published_at",
-                    "event_at",
-                ],
-                "additionalProperties": False,
-            },
-        },
-        "uncertainties": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-    },
-    "required": [
-        "summary",
-        "evidence",
-        "uncertainties",
-    ],
-    "additionalProperties": False,
-}
-
 _STORYBOARD_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -545,9 +394,7 @@ _DIRECTOR_RESPONSE_SCHEMA = {
 @dataclass(frozen=True)
 class _OpenRouterJsonResponse:
     data: dict
-    message: dict
     model_id: str
-    web_search_requests: int | None = None
 
 
 _STORYBOARD_FALLBACKS = (
@@ -771,134 +618,11 @@ def _json_object(content: Any) -> dict:
     raise ProviderUnavailable("模型没有返回有效 JSON")
 
 
-def _normalized_citation_url(value: Any) -> str:
-    text = str(value or "").strip()
-    try:
-        parts = urlsplit(text)
-    except ValueError:
-        return ""
-    if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
-        return ""
-    path = parts.path.rstrip("/") or "/"
-    query = urlencode([
-        (key, item)
-        for key, item in parse_qsl(parts.query, keep_blank_values=True)
-        if not key.lower().startswith("utm_")
-        and key.lower() not in {
-            "fbclid",
-            "gclid",
-            "mc_cid",
-            "mc_eid",
-            "msclkid",
-        }
-    ])
-    return urlunsplit((
-        parts.scheme.lower(),
-        parts.netloc.lower(),
-        path,
-        query,
-        "",
-    ))
-
-
-def _citation_identity(value: Any) -> tuple[str, str]:
-    """Match one canonical article when only tracking/query details differ."""
-
-    normalized = _normalized_citation_url(value)
-    if not normalized:
-        return "", ""
-    parts = urlsplit(normalized)
-    host = (parts.hostname or "").lower().removeprefix("www.")
-    try:
-        port = parts.port
-    except ValueError:
-        return "", ""
-    if port:
-        host = f"{host}:{port}"
-    return host, parts.path.rstrip("/") or "/"
-
-
-def _citation_catalog(message: dict) -> dict[str, dict[str, str]]:
-    catalog: dict[str, dict[str, str]] = {}
-    for annotation in message.get("annotations") or []:
-        if not isinstance(annotation, dict):
-            continue
-        citation = annotation.get("url_citation")
-        if not isinstance(citation, dict):
-            citation = annotation
-        url = str(citation.get("url") or "").strip()
-        normalized = _normalized_citation_url(url)
-        if not normalized:
-            continue
-        existing = catalog.get(normalized, {})
-        title = str(citation.get("title") or "").strip()
-        content = _message_text(citation.get("content")).strip()
-        catalog[normalized] = {
-            "url": str(existing.get("url") or url),
-            "title": title or str(existing.get("title") or ""),
-            "content": content or str(existing.get("content") or ""),
-        }
-    return catalog
-
-
-def _matched_citation(
-    catalog: dict[str, dict[str, str]],
-    source_url: Any,
-) -> dict[str, str] | None:
-    normalized = _normalized_citation_url(source_url)
-    exact = catalog.get(normalized)
-    if exact:
-        return exact
-    identity = _citation_identity(source_url)
-    if not all(identity):
-        return None
-    candidates = {
-        item["url"]: item
-        for item in catalog.values()
-        if _citation_identity(item.get("url")) == identity
-    }
-    return next(iter(candidates.values())) if len(candidates) == 1 else None
-
-
-def _citation_excerpt(value: Any) -> str:
-    """Return a bounded source excerpt suitable for an evidence claim."""
-
-    text = _message_text(value).strip()
-    if not text:
-        return ""
-    text = re.sub(r"\[\s*(?:\.\.\.|…)\s*\]", " ", text)
-    text = " ".join(text.split()).strip()
-    if not text or _normalized_citation_url(text):
-        return ""
-    return text[:1200].rstrip()
-
-
-def _citation_identity_label(value: Any) -> str:
-    """Expose only host/path for bounded diagnostics, never query strings."""
-
-    host, path = _citation_identity(value)
-    return f"{host}{path}"[:500] if host and path else ""
-
-
 def _nonnegative_int(value: Any) -> int:
     try:
         return max(0, int(value or 0))
     except (TypeError, ValueError):
         return 0
-
-
-def _web_search_request_count(body: dict | None) -> int | None:
-    payload = body if isinstance(body, dict) else {}
-    usage = payload.get("usage")
-    usage = usage if isinstance(usage, dict) else {}
-    server_tool_use = usage.get("server_tool_use")
-    server_tool_use = (
-        server_tool_use if isinstance(server_tool_use, dict) else {}
-    )
-    value = server_tool_use.get("web_search_requests")
-    if value is None:
-        return None
-    return _nonnegative_int(value)
 
 
 def _openrouter_usage_record(
@@ -921,7 +645,6 @@ def _openrouter_usage_record(
     completion_details = (
         completion_details if isinstance(completion_details, dict) else {}
     )
-    web_search_requests = _web_search_request_count(payload)
     raw_cost = usage.get("cost")
     try:
         reported_cost = max(0.0, float(raw_cost)) if raw_cost is not None else None
@@ -969,11 +692,6 @@ def _openrouter_usage_record(
             item
             for item in (
                 note,
-                (
-                    f"联网检索 {web_search_requests} 次"
-                    if web_search_requests is not None
-                    else ""
-                ),
                 missing_cost_note,
             )
             if item
@@ -1152,9 +870,7 @@ async def _openrouter_json_request(
     try:
         return _OpenRouterJsonResponse(
             data=_json_object(content),
-            message=message if isinstance(message, dict) else {},
             model_id=str(body.get("model") or model),
-            web_search_requests=_web_search_request_count(body),
         )
     except ProviderUnavailable as exc:
         if finish_reason == "length":
@@ -1180,14 +896,12 @@ class OpenRouterScriptProvider:
         api_key: str,
         base_url: str,
         model: str,
-        research_model: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout_seconds: float = 300.0,
     ):
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "https://openrouter.ai/api").strip()
         self.model = str(model or "").strip()
-        self.research_model = str(research_model or self.model).strip()
         self.transport = transport
         self.timeout_seconds = max(10.0, float(timeout_seconds))
 
@@ -1196,602 +910,8 @@ class OpenRouterScriptProvider:
         return bool(
             self.api_key
             and self.model
-            and self.research_model
             and self.base_url.startswith("https://")
         )
-
-    async def research_for_skill(
-        self,
-        card: SourceCard,
-        *,
-        research_mode: str,
-        research_prompt: str,
-        research_as_of: str = "",
-        on_usage: UsageRecorder | None = None,
-    ) -> PersonResearchBrief | NewsResearchBrief:
-        """Dispatch research through the workflow frozen on the job."""
-
-        mode = str(research_mode or "").strip()
-        if mode == "person_viewpoint_optional":
-            return await self.research_person_viewpoint(
-                card,
-                research_prompt=research_prompt,
-                on_usage=on_usage,
-            )
-        if mode == "recent_news_required":
-            return await self.research_recent_news(
-                card,
-                research_prompt=research_prompt,
-                as_of=research_as_of,
-                on_usage=on_usage,
-            )
-        raise ProviderUnavailable(f"脚本 Provider 不支持研究模式：{mode}")
-
-    async def research_person_viewpoint(
-        self,
-        card: SourceCard,
-        *,
-        research_prompt: str = "",
-        on_usage: UsageRecorder | None = None,
-    ) -> PersonResearchBrief:
-        """Build a cited EvidencePack without making creative decisions."""
-
-        if not self.configured:
-            raise ProviderUnavailable(
-                "人物研究未配置：请设置 OPENROUTER_API_KEY"
-            )
-        fallback_subject = card.subject.name
-        original_request = card.core_idea
-        research_date = timestamp()[:10]
-        compiled_prompt = research_prompt.strip() or (
-            "请先根据原始输入形成任务专属研究计划，再完成联网研究。\n"
-            f"研究日期（UTC）：{research_date}\n"
-            f"用户原始创作请求：{original_request}\n"
-            f"目标受众：{card.target_audience}\n"
-            "不得预设学科或应用场景。先识别主要人物与观点，再判断输入类型；若可能是人物原话，"
-            "先核验归属、可靠原文、出处、文字异同与上下文。"
-        )
-        prompt = (
-            compiled_prompt
-            + "\n\n【人物研究 JSON 交付契约】\n"
-            "person_name 填写从完整请求中识别出的主要人物；若请求确实没有人物，填写最明确的"
-            "核心主题，不得猜测或补造。input_type 判断输入是 attributed_quote、paraphrased_viewpoint、"
-            "conceptual_claim 或 unknown。research_focus 用一句话写清本次实际研究问题。"
-            "attribution_status 只能是 verified、partially_supported、unverified 或"
-            " not_applicable；只有可靠来源直接支持人物归属和文字时才可写 verified。"
-            "verified_wording 只填写来源支持的可靠文字，未核验时必须为空。"
-            "attribution_note 说明归属证据、文字差异或未核验原因；source_context 说明"
-            "出处上下文及理解观点所需的时代、著作或专业语境。\n"
-            "summary 只概括来源能够支持的研究结论，不设计钩子、内容角度、"
-            "互动话术、受众应用或视觉方案。"
-            "evidence 写 3-8 条可安全转述的事实，每条只支持一个 claim；source_url 必须"
-            "原样使用本次检索结果 URL，source_title 必须与页面一致。source_kind 根据来源"
-            "填写 official、primary、independent 或 other；evidence_type 根据证据作用填写"
-            " attribution、source_context、biography、interpretation、current_relevance"
-            " 或 other。资料冲突、只能间接支持或无法定位原始出处时写入 uncertainties。"
-            "只返回 schema 要求的中文 JSON。"
-        )
-        response = await _openrouter_json_request(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            model=self.research_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "你是跨学科证据研究员。领域必须由原始输入决定；"
-                        "只核验出处、原文、语境、事实和不确定性，不做内容策划。"
-                        "严格区分来源事实、人物原话与解释，只返回有效 JSON。"
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
-            label="人物主题研究",
-            schema_name="qijia_person_evidence_v3",
-            response_schema=_PERSON_RESEARCH_RESPONSE_SCHEMA,
-            max_completion_tokens=PERSON_RESEARCH_MAX_COMPLETION_TOKENS,
-            timeout_seconds=self.timeout_seconds,
-            transport=self.transport,
-            operation="person_research",
-            on_usage=on_usage,
-            tools=[{
-                "type": "openrouter:web_search",
-                "parameters": {
-                    "engine": "exa",
-                    "mode": "deep-lite",
-                    "max_results": 5,
-                    "max_uses": 4,
-                    "max_total_results": 16,
-                    "max_characters": 6000,
-                    "excluded_domains": [
-                        "douyin.com",
-                        "xiaohongshu.com",
-                        "zhihu.com",
-                    ],
-                },
-            }],
-            tool_choice="required",
-            max_tool_calls=4,
-        )
-        citations = _citation_catalog(response.message)
-        grounded_evidence: list[dict[str, str]] = []
-        allowed_source_kinds = {"official", "primary", "independent", "other"}
-        allowed_evidence_types = {
-            "attribution",
-            "source_context",
-            "biography",
-            "interpretation",
-            "current_relevance",
-            "other",
-        }
-        for raw in response.data.get("evidence") or []:
-            if not isinstance(raw, dict):
-                continue
-            normalized_url = _normalized_citation_url(raw.get("source_url"))
-            citation = citations.get(normalized_url)
-            claim = str(raw.get("claim") or "").strip()
-            if not citation or not claim:
-                continue
-            citation_url = citation["url"]
-            if len(citation_url) > 2000:
-                continue
-            grounded_evidence.append({
-                "claim": claim[:1200],
-                "source_title": (
-                    citation.get("title")
-                    or str(raw.get("source_title") or "").strip()
-                    or citation["url"]
-                )[:500],
-                "source_url": citation_url,
-                "source_kind": (
-                    str(raw.get("source_kind") or "other").strip()
-                    if str(raw.get("source_kind") or "other").strip()
-                    in allowed_source_kinds
-                    else "other"
-                ),
-                "evidence_type": (
-                    str(raw.get("evidence_type") or "other").strip()
-                    if str(raw.get("evidence_type") or "other").strip()
-                    in allowed_evidence_types
-                    else "other"
-                ),
-            })
-        if not grounded_evidence:
-            raise ProviderUnavailable(
-                "人物主题研究没有返回可与检索注释匹配的来源，已降级使用原始观点"
-            )
-        generated = dict(response.data)
-
-        def bounded_text(key: str, maximum: int) -> str:
-            value = generated.get(key)
-            return value.strip()[:maximum] if isinstance(value, str) else ""
-
-        def bounded_list(key: str, maximum: int) -> list[str]:
-            value = generated.get(key)
-            if not isinstance(value, list):
-                return []
-            return [
-                item.strip()[:1200]
-                for item in value
-                if isinstance(item, str) and item.strip()
-            ][:maximum]
-
-        input_type = bounded_text("input_type", 64)
-        if input_type not in {
-            "attributed_quote",
-            "paraphrased_viewpoint",
-            "conceptual_claim",
-            "unknown",
-        }:
-            input_type = "unknown"
-        attribution_status = bounded_text("attribution_status", 64)
-        if attribution_status not in {
-            "verified",
-            "partially_supported",
-            "unverified",
-            "not_applicable",
-        }:
-            attribution_status = "unverified"
-        verified_wording = bounded_text("verified_wording", 1800)
-        uncertainties = bounded_list("uncertainties", 8)
-        has_attribution_evidence = any(
-            item["evidence_type"] == "attribution"
-            for item in grounded_evidence
-        )
-        if attribution_status == "verified" and (
-            not verified_wording or not has_attribution_evidence
-        ):
-            attribution_status = "partially_supported"
-            message = (
-                "模型声称人物归属已经核验，但没有同时返回可靠原文和归属证据；"
-                "系统已自动降级为部分支持。"
-            )
-            if message not in uncertainties:
-                uncertainties.append(message)
-
-        identified_subject = bounded_text("person_name", 120) or fallback_subject
-        generated.update({
-            "schema_version": "1.0",
-            "person_name": identified_subject,
-            "viewpoint": original_request,
-            "input_type": input_type,
-            "research_focus": bounded_text("research_focus", 1200),
-            "attribution_status": attribution_status,
-            "verified_wording": verified_wording,
-            "attribution_note": bounded_text("attribution_note", 1600),
-            "source_context": bounded_text("source_context", 2000),
-            "evidence": grounded_evidence[:8],
-            "uncertainties": uncertainties[:8],
-            "model_id": response.model_id,
-            "prompt_version": PERSON_RESEARCH_PROMPT_VERSION,
-            "generated_at": timestamp(),
-        })
-        try:
-            return PersonResearchBrief.model_validate(generated)
-        except (TypeError, ValidationError) as exc:
-            raise ProviderUnavailable(
-                "人物主题研究返回内容不符合 EvidencePack 契约"
-            ) from exc
-
-    async def research_recent_news(
-        self,
-        card: SourceCard,
-        *,
-        research_prompt: str = "",
-        as_of: str = "",
-        on_usage: UsageRecorder | None = None,
-    ) -> NewsResearchBrief:
-        """Research current news and require at least one cited source."""
-
-        if not self.configured:
-            raise ProviderUnavailable(
-                "最新新闻研究未配置：请设置 OPENROUTER_API_KEY"
-            )
-        topic = card.subject.name
-        frozen_as_of = str(as_of or timestamp()).strip()
-        try:
-            frozen_at = datetime.fromisoformat(frozen_as_of)
-        except ValueError as exc:
-            raise ProviderUnavailable(
-                "最新新闻研究截止时间无效，未调用模型"
-            ) from exc
-        if frozen_at.tzinfo is None or len(frozen_as_of) > 64:
-            raise ProviderUnavailable(
-                "最新新闻研究截止时间无效，未调用模型"
-            )
-        prompt = (
-            "请为一条中文知识短视频完成最新新闻联网研究。必须先检索，再输出中文 JSON。\n\n"
-            f"检索截止时间（Asia/Shanghai）：{frozen_as_of}\n"
-            f"主题：{topic}\n"
-            f"用户关注角度：{card.core_idea}\n"
-            f"目标受众：{card.target_audience}\n\n"
-            + (
-                f"【本 Skill 的研究规则】\n{research_prompt.strip()}\n\n"
-                if research_prompt.strip()
-                else ""
-            )
-            + "至少形成一条与本次检索注释匹配且可追溯的证据。"
-            "能确认页面发布时间或事件发生时间时必须填写；不能确认时留空并写入 uncertainties。"
-            "优先同时检索官方或原始材料与可信独立来源，但不得为了凑站点而采用低质量转载；"
-            "只有一个可追溯站点、缺少官方材料或缺少独立报道时不得猜测，必须写入 uncertainties。"
-            "每条 evidence 只写来源能够直接支持的一个事实；claim 必须是非空事实描述，"
-            "如果无法写出非空 claim 就不要输出该 evidence，绝不能用空字符串占位。"
-            "source_url 必须原样使用本次检索结果中的 URL。published_at 写页面标注的发布时间，"
-            "event_at 写事件发生时间；未知时"
-            "填写空字符串，不得猜测。source_kind 只能是 official、primary、independent 或"
-            " other。summary 只概括来源能够直接支持的最新变化；无法确认、来源冲突或"
-            "可能同名混淆的内容写入 uncertainties。不要设计钩子、内容角度、互动话术、"
-            "受众应用或视觉方案；只返回 schema 要求的字段和 JSON。"
-        )
-        response = await _openrouter_json_request(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            model=self.research_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "你是严谨的新闻证据研究员。区分事件时间、发布时间、"
-                        "既成事实、官方计划、第三方判断和传闻；不做内容策划，只返回有效 JSON。"
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
-            label="最新新闻研究",
-            schema_name="recent_news_evidence_v6",
-            response_schema=_NEWS_RESEARCH_RESPONSE_SCHEMA,
-            max_completion_tokens=NEWS_RESEARCH_MAX_COMPLETION_TOKENS,
-            timeout_seconds=self.timeout_seconds,
-            transport=self.transport,
-            operation="recent_news_research",
-            on_usage=on_usage,
-            tools=[{
-                "type": "openrouter:web_search",
-                "parameters": {
-                    "engine": "exa",
-                    "mode": "deep-lite",
-                    "max_results": 6,
-                    "max_uses": 3,
-                    "max_total_results": 12,
-                    "max_characters": 5000,
-                    "excluded_domains": [
-                        "douyin.com",
-                        "xiaohongshu.com",
-                        "zhihu.com",
-                    ],
-                },
-            }],
-            tool_choice="required",
-            max_tool_calls=3,
-        )
-        citations = _citation_catalog(response.message)
-        grounded_evidence: list[dict[str, str]] = []
-        seen_urls: set[str] = set()
-        source_hosts: set[str] = set()
-        rejected_counts: dict[str, int] = {}
-        matched_citation_count = 0
-        citation_excerpt_claim_count = 0
-
-        def reject(reason: str) -> None:
-            rejected_counts[reason] = rejected_counts.get(reason, 0) + 1
-
-        raw_evidence = response.data.get("evidence") or []
-        raw_evidence = raw_evidence if isinstance(raw_evidence, list) else []
-        for raw in raw_evidence:
-            if not isinstance(raw, dict):
-                reject("invalid_item")
-                continue
-            normalized_url = _normalized_citation_url(raw.get("source_url"))
-            if not normalized_url:
-                reject("invalid_url")
-                continue
-            citation = _matched_citation(citations, raw.get("source_url"))
-            claim = str(raw.get("claim") or "").strip()
-            if not citation:
-                reject("citation_not_matched")
-                continue
-            matched_citation_count += 1
-            claim_from_excerpt = False
-            if not claim:
-                claim = _citation_excerpt(citation.get("content"))
-                claim_from_excerpt = bool(claim)
-            if not claim:
-                reject("missing_claim")
-                continue
-            citation_key = _normalized_citation_url(citation["url"])
-            if citation_key in seen_urls:
-                reject("duplicate_url")
-                continue
-            if len(citation["url"]) > 2000:
-                reject("url_too_long")
-                continue
-            host = (
-                urlsplit(citation["url"]).hostname or ""
-            ).lower().removeprefix("www.")
-            if not host:
-                reject("missing_host")
-                continue
-            source_kind = str(raw.get("source_kind") or "other").strip()
-            if source_kind not in {
-                "official",
-                "primary",
-                "independent",
-                "other",
-            }:
-                source_kind = "other"
-            seen_urls.add(citation_key)
-            source_hosts.add(host)
-            grounded_evidence.append({
-                "claim": claim[:1200],
-                "source_title": (
-                    citation.get("title")
-                    or str(raw.get("source_title") or "").strip()
-                    or citation["url"]
-                )[:500],
-                "source_url": citation["url"],
-                "source_kind": source_kind,
-                "published_at": str(raw.get("published_at") or "").strip()[:64],
-                "event_at": str(raw.get("event_at") or "").strip()[:64],
-            })
-            if claim_from_excerpt:
-                citation_excerpt_claim_count += 1
-        citation_identity_samples = [
-            label
-            for label in (
-                _citation_identity_label(item.get("url"))
-                for item in citations.values()
-            )
-            if label
-        ][:5]
-        candidate_identity_samples = [
-            label
-            for label in (
-                _citation_identity_label(item.get("source_url"))
-                for item in raw_evidence
-                if isinstance(item, dict)
-            )
-            if label
-        ][:5]
-        expected_response_fields = set(
-            _NEWS_RESEARCH_RESPONSE_SCHEMA["properties"]
-        )
-        unexpected_response_fields = sorted(
-            str(key)
-            for key in response.data
-            if key not in expected_response_fields
-        )[:10]
-        accepted_timed_evidence_count = sum(
-            bool(item["published_at"] or item["event_at"])
-            for item in grounded_evidence
-        )
-        diagnostics = {
-            "schema_version": "1.0",
-            "operation": "recent_news_research",
-            "web_search_requests": response.web_search_requests,
-            "citation_count": len(citations),
-            "candidate_evidence_count": len(raw_evidence),
-            "matched_citation_count": matched_citation_count,
-            "accepted_evidence_count": len(grounded_evidence),
-            "accepted_site_count": len(source_hosts),
-            "accepted_timed_evidence_count": accepted_timed_evidence_count,
-            "citation_excerpt_claim_count": citation_excerpt_claim_count,
-            "citation_identity_samples": citation_identity_samples,
-            "candidate_identity_samples": candidate_identity_samples,
-            "unexpected_response_fields": unexpected_response_fields,
-            "rejected_counts": rejected_counts,
-            "generated_at": timestamp(),
-        }
-        if not grounded_evidence:
-            if not citations and (
-                response.web_search_requests is not None
-                and response.web_search_requests > 0
-            ):
-                message = "OpenRouter 已执行联网检索但未返回 citation 注释"
-                detail = (
-                    f"web_search_requests={response.web_search_requests}，"
-                    "citation_count=0"
-                )
-            elif not citations:
-                message = "OpenRouter 未返回可追溯的联网检索引用"
-                request_count = (
-                    "未回传"
-                    if response.web_search_requests is None
-                    else str(response.web_search_requests)
-                )
-                detail = (
-                    f"web_search_requests={request_count}，citation_count=0；"
-                    "上游可能未调用 web_search 或未回传 annotations"
-                )
-            elif (
-                matched_citation_count > 0
-                and rejected_counts.get("missing_claim", 0)
-                == matched_citation_count
-            ):
-                message = "检索证据缺少可用事实描述"
-                detail = (
-                    f"citation_count={len(citations)}，"
-                    f"candidate_evidence_count={len(raw_evidence)}，"
-                    f"matched_citation_count={matched_citation_count}，"
-                    f"rejected_counts={rejected_counts}"
-                )
-            elif (
-                matched_citation_count == 0
-                and rejected_counts.get("citation_not_matched", 0) > 0
-            ):
-                message = "检索引用与模型 evidence URL 未匹配"
-                detail = (
-                    f"citation_count={len(citations)}，"
-                    f"candidate_evidence_count={len(raw_evidence)}，"
-                    f"matched_citation_count=0，"
-                    f"rejected_counts={rejected_counts}"
-                )
-            else:
-                message = "检索证据未通过完整性校验"
-                detail = (
-                    f"citation_count={len(citations)}，"
-                    f"candidate_evidence_count={len(raw_evidence)}，"
-                    f"matched_citation_count={matched_citation_count}，"
-                    f"rejected_counts={rejected_counts}"
-                )
-            diagnostics["detail"] = detail
-            raise ResearchEvidenceUnavailable(
-                message,
-                diagnostics,
-            )
-        def bounded_text(key: str, maximum: int) -> str:
-            value = response.data.get(key)
-            return value.strip()[:maximum] if isinstance(value, str) else ""
-
-        def bounded_strings(
-            key: str,
-            maximum: int,
-            *,
-            item_maximum: int = 1200,
-        ) -> list[str]:
-            value = response.data.get(key)
-            if not isinstance(value, list):
-                return []
-            return [
-                item.strip()[:item_maximum]
-                for item in value
-                if isinstance(item, str) and item.strip()
-            ][:maximum]
-
-        model_uncertainties = bounded_strings(
-            "uncertainties",
-            10,
-            item_maximum=1000,
-        )
-        system_uncertainties: list[str] = []
-
-        def add_system_uncertainty(message: str) -> None:
-            if message not in system_uncertainties:
-                system_uncertainties.append(message)
-
-        source_kinds = {item["source_kind"] for item in grounded_evidence}
-        if accepted_timed_evidence_count == 0:
-            add_system_uncertainty(
-                "来源未提供明确的事件或发布时间，时效性请在脚本审核时确认。"
-            )
-        if len(source_hosts) < 2:
-            add_system_uncertainty(
-                "本次研究只有一个可追溯站点，尚未完成跨站点交叉验证。"
-            )
-        if not source_kinds.intersection({"official", "primary"}):
-            add_system_uncertainty("本次研究尚未找到官方或原始材料。")
-        if "independent" not in source_kinds:
-            add_system_uncertainty("本次研究尚未找到可信独立报道。")
-        if citation_excerpt_claim_count:
-            add_system_uncertainty(
-                "部分证据的事实描述由检索注释原文摘录补全，请在脚本审核时核对。"
-            )
-
-        uncertainties: list[str] = []
-        for item in (*system_uncertainties, *model_uncertainties):
-            if item not in uncertainties:
-                uncertainties.append(item)
-
-        summary = (
-            bounded_text("summary", 2000)
-            or grounded_evidence[0]["claim"]
-        )
-        # Build the final contract from an explicit allowlist. Provider or
-        # response-healing metadata must never leak into the persisted brief.
-        generated = {
-            "schema_version": "1.0",
-            "kind": "recent_news",
-            "topic": topic,
-            "as_of": frozen_as_of,
-            "summary": summary,
-            "evidence": grounded_evidence[:10],
-            "uncertainties": uncertainties[:10],
-            "model_id": response.model_id[:256],
-            "prompt_version": NEWS_RESEARCH_PROMPT_VERSION,
-            "generated_at": timestamp(),
-        }
-        try:
-            return NewsResearchBrief.model_validate(generated)
-        except (TypeError, ValidationError) as exc:
-            if isinstance(exc, ValidationError):
-                validation_errors = []
-                for item in exc.errors()[:10]:
-                    location = ".".join(
-                        str(part) for part in item.get("loc") or ()
-                    )
-                    message = str(item.get("msg") or "字段校验失败")
-                    validation_errors.append(
-                        f"{location}: {message}" if location else message
-                    )
-            else:
-                validation_errors = [str(exc) or "字段校验失败"]
-            diagnostics["validation_errors"] = [
-                item[:500] for item in validation_errors
-            ]
-            diagnostics["detail"] = "；".join(validation_errors)[:1000]
-            raise ResearchEvidenceUnavailable(
-                "研究简报字段校验失败",
-                diagnostics,
-            ) from exc
 
     def _prompt(
         self,

@@ -11,6 +11,7 @@ from qijia_video.contracts import (
     ContentSkillSnapshot,
     GenerationSettings,
     SkillInputMode,
+    SkillKnowledgeMode,
     SkillResearchMode,
     SourceCard,
     content_hash,
@@ -26,6 +27,8 @@ _MANIFEST_KEYS = {
     "input_mode",
     "compatible_formats",
     "default_for_formats",
+    "available_for_new_jobs",
+    "knowledge_mode",
     "research_mode",
     "policy_ids",
     "quality_rules",
@@ -46,6 +49,8 @@ class ContentSkillDefinition:
     input_mode: SkillInputMode
     compatible_formats: tuple[ContentFormat, ...]
     default_for_formats: tuple[ContentFormat, ...]
+    available_for_new_jobs: bool
+    knowledge_mode: SkillKnowledgeMode
     research_mode: SkillResearchMode
     policy_ids: tuple[str, ...]
     quality_rules: tuple[str, ...]
@@ -59,6 +64,7 @@ class ContentSkillDefinition:
             description=self.description,
             input_mode=self.input_mode,
             compatible_formats=list(self.compatible_formats),
+            knowledge_mode=self.knowledge_mode,
             research_mode=self.research_mode,
             research_prompt="",
             script_system_prompt="",
@@ -77,6 +83,8 @@ class ContentSkillDefinition:
             "description": self.description,
             "input_mode": self.input_mode.value,
             "compatible_formats": [item.value for item in self.compatible_formats],
+            "knowledge_mode": self.knowledge_mode.value,
+            "external_retrieval": False,
             "research_mode": self.research_mode.value,
             "policy_ids": list(self.policy_ids),
             "quality_rules": list(self.quality_rules),
@@ -137,6 +145,10 @@ def _load_definition(skill_root: Path) -> ContentSkillDefinition:
         )
     if manifest["schema_version"] != "1.0":
         raise RuntimeError(f"不支持的 Skill manifest 版本：{skill_root}")
+    if not isinstance(manifest["available_for_new_jobs"], bool):
+        raise RuntimeError(
+            f"Skill available_for_new_jobs 必须是布尔值：{skill_root}"
+        )
     hash_payload = {
         "skill_id": skill_id,
         "description": description,
@@ -159,6 +171,8 @@ def _load_definition(skill_root: Path) -> ContentSkillDefinition:
                 ContentFormat(item)
                 for item in manifest["default_for_formats"]
             ),
+            available_for_new_jobs=manifest["available_for_new_jobs"],
+            knowledge_mode=SkillKnowledgeMode(manifest["knowledge_mode"]),
             research_mode=SkillResearchMode(manifest["research_mode"]),
             policy_ids=tuple(str(item) for item in manifest["policy_ids"]),
             quality_rules=tuple(
@@ -174,6 +188,14 @@ def _load_definition(skill_root: Path) -> ContentSkillDefinition:
         set(definition.compatible_formats)
     ):
         raise RuntimeError(f"Skill 默认格式必须包含在兼容格式中：{skill_root}")
+    if definition.available_for_new_jobs and (
+        definition.knowledge_mode != SkillKnowledgeMode.MODEL_KNOWLEDGE
+        or definition.research_mode != SkillResearchMode.NONE
+    ):
+        raise RuntimeError(
+            "新任务 Content Skill 必须使用 model_knowledge 且关闭研究模式："
+            f"{skill_root}"
+        )
     return definition
 
 
@@ -256,6 +278,11 @@ class ContentSkillRegistry:
                 f"Skill {definition.skill_id}@{definition.version} "
                 f"不支持内容格式 {card.content_format.value}"
             )
+        if not definition.available_for_new_jobs:
+            raise SkillRegistryError(
+                f"Content Skill {definition.skill_id}@{definition.version} "
+                "只用于历史任务兼容，不能创建新任务"
+            )
         effective = settings.model_copy(deep=True)
         effective.skill_id = definition.skill_id
         effective.skill_version = definition.version
@@ -276,6 +303,8 @@ class ContentSkillRegistry:
     def public_catalog(self) -> list[dict[str, Any]]:
         latest: dict[str, ContentSkillDefinition] = {}
         for definition in self._definitions.values():
+            if not definition.available_for_new_jobs:
+                continue
             current = latest.get(definition.skill_id)
             if not current or _version_key(definition.version) > _version_key(
                 current.version

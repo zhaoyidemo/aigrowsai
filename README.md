@@ -1,29 +1,29 @@
 # 齐家 AI 家庭教育内容工作台
 
-面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的研究与短视频生产服务。新任务使用 `Pipeline v2`：EvidencePipeline 管事实，Script Skill 管内容，Director Skill 管视觉，Provider Adapter 管模型语法；每个阶段只有一个负责人。Seedream、Seedance、TTS、Remotion、FFmpeg、存储、成本与任务状态机继续共用。
+面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的选题与短视频生产服务。新视频任务使用 `Pipeline v2`：Input Policy 管原始输入与知识边界，Script Skill 管内容，Director Skill 管视觉，Provider Adapter 管模型语法；每个阶段只有一个负责人。视频创作主链不启用联网搜索，脚本模型直接使用用户材料与自身已有知识。Seedream、Seedance、TTS、Remotion、FFmpeg、存储、成本与任务状态机继续共用。
 
 环境变量中的管理员账号可以创建、启停同事账号，授予或收回工作台使用权限，并重置密码。同事可以查看团队创建的全部内容、成本和抖音效果，只能修改和继续执行自己创建的内容；管理员可以管理全部内容。
 
 ## Content Skill 架构
 
-当前内置两套 Skill：
+当前只向新任务公开一套 Content Skill：
 
-- `explain-expert-view@2.2.0`：用一个 `creative_request` 接收人物、引语、观点、问题或主题；原始请求不在入口拆分或改写，由研究阶段识别主体并核验出处与语境。无法形成可靠证据时保留原始请求并明确降级，绝不把用户表述冒充已核验事实或人物原话。
-- `brief-recent-news@2.1.0`：科技、商业或通用最新新闻研究工作流。用户输入仅是检索请求；至少需要一条与检索注释匹配的可追溯事实。时间缺失、单站点或来源类型不完整时会醒目标注并进入人工审核，只有没有可追溯证据时才停止。联网研究通过 OpenRouter 的托管搜索工具完成，不需要新增搜索 API Key，并与脚本模型独立配置。
+- `explain-expert-view@3.0.0`：用一个 `creative_request` 接收人物、引语、观点、问题、资料或表达方向。原始请求不拆分、不改写，直接交给 Script Skill；模型可以使用训练中已有的稳定知识，但不调用搜索、浏览器、OpenRouter Web Search、Exa 或其他外部研究工具。用户给出的候选引语与人物归属不冒充“已核验原话”，精确出处、版本、日期、数据、争议信息和最新动态必须克制表述并由编辑复核。
 
-每个 Skill 位于 `qijia_video/content_skills/<skill-id>/`，只由 `SKILL.md` 与 `manifest.json` 定义工作流预设，不再拥有研究提示词、脚本提示词或视觉策略文件。`skill_registry.py` 按内容格式推荐默认 Skill；创建任务时冻结 `skill_id`、版本、manifest 哈希、研究模式、政策 ID 与质量规则。后续修改 Skill 文件不会改变已创建任务；旧快照中的提示词字段仍可读取，但新任务始终为空且不会进入运行时提示词。
+`brief-recent-news@2.1.0` 只作为历史快照定义保留，不进入公开目录，也不能创建新任务。没有联网检索就无法诚实保证“最新”，因此工作台不再提供实时新闻输入或研究重试入口。需要制作新闻视频时，应在统一创作请求中粘贴编辑已经掌握并愿意负责复核的事实与材料。
 
-扩展新领域时只新增 Skill、对应输入适配和必要的研究 Provider 能力，不复制视频生产基础设施，也不允许 Skill 自由调用工具或改写自身。接口包括：
+每个 Skill 位于 `qijia_video/content_skills/<skill-id>/`，只由 `SKILL.md` 与 `manifest.json` 定义 Input Policy，不拥有研究提示词、脚本提示词或视觉策略文件。`skill_registry.py` 创建任务时冻结 `skill_id`、版本、manifest 哈希、`knowledge_mode`、政策 ID 与质量规则，并硬性要求所有公开 Skill 使用 `model_knowledge + research_mode=none`。后续修改 Skill 文件不会改变已创建任务；旧快照中的研究字段仍可读取，但不能发起新的外部检索。
+
+扩展新领域时只新增 Input Policy 和必要的输入适配，不复制视频生产基础设施，也不允许 Skill 调用搜索工具或改写自身。接口包括：
 
 - `GET /api/qijia-video/skills`：读取可选择的最新 Skill 目录；
-- `POST /api/qijia-video/source-cards/news-topic`：把新闻主题转换为“待研究”的来源卡；
 - `POST /api/qijia-video/jobs`：在 `generation_settings` 中可传 `skill_id` 与 `skill_version`；省略时按来源卡 `content_format` 路由并冻结。
 
 ## 单一职责生成链与多模态提示词
 
-工作台把研究、写作、导演和模型提示词拆成四个不可重叠的职责：
+工作台把输入边界、写作、导演和模型提示词拆成四个不可重叠的职责：
 
-- Content Skill：只决定输入方式、是否研究、事实/安全政策和质量规则，不生成内容角度、脚本结构或逐段画面；
+- Input Policy / Content Skill：只冻结原始输入、用户材料、模型知识边界、事实/安全政策和质量规则，不发起研究，不生成内容角度、脚本结构或逐段画面；
 - Script Skill：唯一负责比较创作角度、论证结构和完整口播，交付 `EditorialPlan + ScriptDraft`，不得设计画面；
 - Director Skill：人工确认脚本后，唯一负责 `VisualBible + ShotContextIR`、媒介选择和连续性，不得改写脚本；
 - Provider Adapter：只把冻结的镜头语义编译为 Seedream/Seedance 可执行提示词，不得新增内容或导演决策。
@@ -32,7 +32,7 @@
 
 Script Skill 位于 `qijia_video/script_skills/`，Director Skill 沿用 `qijia_video/visual_styles/` 的版本化资源，Provider Adapter 位于 `qijia_video/provider_adapters/`。新任务冻结 `script_skill_snapshot`、`director_skill_snapshot` 与 `provider_adapter_snapshot`；`visual_style_snapshot`、`prompt_writing_profile_snapshot` 和 `creative_brief` 只用于 v1 历史任务。接口包括 `GET /script-skills`、`GET /director-skills` 与 `GET /provider-adapter`。
 
-工作台创建区直接展示证据政策、Script Skill、Director Skill 和自动匹配的 Provider Adapter。任务详情可审计 `EvidencePack`、`EditorialPlan`、确认后的脚本、`VisualBible`、每个镜头的 `ShotContextIR` 与只读 Provider Prompt；旧任务明确标记为 v1 兼容模式。
+工作台创建区直接展示知识边界、Script Skill、Director Skill 和自动匹配的 Provider Adapter。任务详情可审计 `ContextPack`、`EditorialPlan`、确认后的脚本、`VisualBible`、每个镜头的 `ShotContextIR` 与只读 Provider Prompt；已经保存过研究简报的旧任务只读展示历史证据，不会再次联网。
 
 成片阶段的单镜头重生成只接受编辑者填写的 `revision_intent`。服务端会把它与冻结的 `VisualBible`、`ShotContextIR`、首帧和参考图角色通过 Provider Adapter 重新编译；前端只读展示最终提示词，不允许直接编辑或提交。局部修改不会反向改写脚本或导演世界，也不会重做旁白、图片章节或其他视频镜头。
 
@@ -43,10 +43,10 @@ Script Skill 位于 `qijia_video/script_skills/`，Director Skill 沿用 `qijia_
 ```text
 入口 A：TikHub 抖音家庭教育数据 → 5 个候选与成本记录 → 人工采用并补充可靠来源
 入口 B：统一自然语言创作请求
-入口 C：最新新闻主题 + 关注角度
-三种入口汇入统一生产链路
-  → 冻结 EvidencePipeline、唯一 Script Skill、唯一 Director Skill 与 Provider Adapter
-  → 按证据政策执行可选或强制研究，只生成 EvidencePack
+两种入口汇入统一生产链路
+  → 冻结 Input Policy、唯一 Script Skill、唯一 Director Skill 与 Provider Adapter
+  → 确定性整理原始输入与用户材料为 ContextPack，不发起外部检索
+  → 唯一 Script Skill 直接使用 ContextPack 与模型已有知识
   → 唯一 Script Skill 比较 2–3 个真实角度并生成 EditorialPlan 与 ScriptDraft
   → 人工修改并确认脚本；确认后的 ScriptDraft 成为内容唯一真相
   → 豆包 TTS 2.0 完整旁白
@@ -136,7 +136,7 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 - `qijia_video/script_skills/`、`qijia_video/script_skill_registry.py`：唯一脚本负责人的版本化方法与冻结快照。
 - `qijia_video/visual_styles/`、`qijia_video/visual_style_registry.py`、`qijia_video/director_prompting.py`：Director Skill、VisualBible 与 ShotContextIR 编排；历史视觉/Profile 读取逻辑仍在原 registry 中隔离保留。
 - `qijia_video/provider_adapters/`、`qijia_video/provider_adapter_registry.py`、`qijia_video/provider_prompting.py`：Seedream/Seedance 末端提示词编译，不参与脚本或导演决策。
-- `qijia_video/prompt_orchestration.py`：编译 EvidencePipeline 的研究任务，以及 Script Skill 的不可变输入、EvidencePack 和硬政策边界。
+- `qijia_video/prompt_orchestration.py`：把不可变输入、用户材料、纯模型知识方式和硬政策边界编译为 Script Skill 的唯一 `ContextPack` 提示词。
 - `qijia_video/infrastructure/postgres_repository.py`：来源卡与视频任务聚合仓储。
 - `qijia_video/accounts.py`、`qijia_video/account_api.py`：同事账号、密码哈希、会话失效与管理员 API。
 - `qijia_video/run_service.py`：后台任务进度、互斥和重启恢复。
@@ -225,7 +225,7 @@ node --test tests/qijia_video_frontend.test.js
 npm.cmd run typecheck --prefix video_renderer
 ```
 
-真实部署验收至少包括：登录、分别用统一创作请求与最新新闻工作流检查 EvidencePack 与 EditorialPlan、人工修改并确认 ScriptDraft、核对 VisualBible 与逐镜头 ShotContextIR、完整旁白、实际媒体提示词、Remotion 成片、发布包下载、抖音效果与成本数据，以及服务重启后的 v2 快照稳定性和 v1 旧任务兼容性。
+真实部署验收至少包括：登录，用统一创作请求检查 `external_retrieval=false`、ContextPack 与 EditorialPlan，确认只产生一次脚本模型调用且请求不含 `tools`，人工修改并确认 ScriptDraft，核对 VisualBible 与逐镜头 ShotContextIR、完整旁白、实际媒体提示词、Remotion 成片、发布包下载、抖音效果与成本数据，以及服务重启后的 v2 快照稳定性和历史任务兼容性。
 
 ## 数据边界
 

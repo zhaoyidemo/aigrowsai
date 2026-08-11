@@ -2,7 +2,6 @@ const API = '/api/qijia-video';
 const PROMPT_STORAGE_KEY = 'qijia-video-generation-settings-v3';
 const LEGACY_PROMPT_STORAGE_KEY = 'qijia-video-generation-settings-v1';
 const DEFAULT_CONTENT_SKILL_ID = 'explain-expert-view';
-const NEWS_CONTENT_SKILL_ID = 'brief-recent-news';
 const DEFAULT_SCRIPT_SKILL_ID = 'evidence-led-explainer';
 const DEFAULT_VISUAL_STYLE_ID = 'content-skill-default';
 const SCRIPT_TARGET_MIN_CHARS = 220;
@@ -214,13 +213,6 @@ function updateScriptApprovalAction() {
     : '确认脚本并生成';
 }
 
-function isNewsResearchFailure(job) {
-  return job?.state === 'failed'
-    && job?.failed_stage === 'script'
-    && job?.skill_snapshot?.research_mode === 'recent_news_required'
-    && !job?.research_brief;
-}
-
 function contentSkills() {
   return Array.isArray(state.capabilities?.content_skills)
     ? state.capabilities.content_skills
@@ -281,17 +273,13 @@ function skillIdForCard(card) {
 
 function updateContentSkillIntake() {
   const skill = selectedContentSkill();
-  const isNews = skill?.input_mode === 'recent_news_topic';
   const handoffOpen = !$('#topic-handoff').hidden;
   $('#content-skill-description').textContent = skill
-    ? `${skill.description} · v${skill.version}`
-    : '选择输入方式、研究模式与事实政策；它不会改写创作提示词。';
+    ? `${skill.description} · 不联网 · v${skill.version}`
+    : '不调用外部检索，只限定模型知识与用户材料的使用边界。';
   $('#manual-intake-intro').hidden = handoffOpen;
-  $('#manual-intake-intro').textContent = isNews
-    ? '输入一个新闻主题和关注角度，系统会以任务创建时间为边界检索公开来源，核对事件时间，再生成可追溯的口播脚本。'
-    : '用一段自然语言说明你想做的内容。系统会原样冻结请求，识别其中的人物、引语、观点和研究目标，再形成可追溯脚本。';
-  $('#source-card-form').hidden = handoffOpen || isNews;
-  $('#news-topic-form').hidden = handoffOpen || !isNews;
+  $('#manual-intake-intro').textContent = '用一段自然语言说明你想做的内容。系统不会联网，脚本模型会直接理解完整输入并结合已有知识完成创作。';
+  $('#source-card-form').hidden = handoffOpen;
   renderOrchestrationSelection();
 }
 
@@ -389,17 +377,14 @@ function renderOrchestrationSelection() {
   const adapterNode = $('#orchestration-adapter-summary');
   const referenceNode = $('#reference-priority-state');
   if (!contentNode || !scriptNode || !directorNode || !adapterNode || !referenceNode) return;
-  contentNode.textContent = selectedContentSkill()?.display_name || '证据政策';
+  contentNode.textContent = selectedContentSkill()?.display_name || '知识边界';
   scriptNode.textContent = selectedScriptSkill()?.display_name || 'Script Skill';
   directorNode.textContent = selectedVisualStyle()?.display_name || 'Director Skill';
   adapterNode.textContent = providerAdapter()?.display_name || 'Provider Adapter';
-  const supportsReference = selectedContentSkill()?.input_mode !== 'recent_news_topic';
-  const hasReference = supportsReference && !!state.referenceImageFile;
-  referenceNode.textContent = !supportsReference
-    ? '参考图属性（当前 Skill 不使用）'
-    : hasReference
-      ? '参考图已上传（角色待导演声明）'
-      : '参考图属性（未上传）';
+  const hasReference = !!state.referenceImageFile;
+  referenceNode.textContent = hasReference
+    ? '参考图已上传（角色待导演声明）'
+    : '参考图属性（未上传）';
   referenceNode.classList.toggle('active', hasReference);
 }
 
@@ -928,9 +913,6 @@ const workflowStages = [
 ];
 const progressStageIndexes = {
   material_confirmed: 0,
-  research_prompt_compilation: 0,
-  person_research: 0,
-  recent_news_research: 0,
   script: 0,
   script_generation: 0,
   confirm_script: 1,
@@ -1362,8 +1344,11 @@ function renderCards() {
       <h3>${escapeHtml(card.title)}</h3>
       <div class="meta"><span>${escapeHtml(domainLabels[card.content_domain] || card.content_domain)}</span><span>v${card.revision}</span><span>${card.status === 'verified' ? '已核验' : '草稿'}</span><span>${escapeHtml(card.created_by || '创建者未知')}</span>${canEditResource(card) ? '' : '<span>团队内容 · 只读</span>'}</div>
       ${card.status === 'verified' && canEditResource(card)
+        && card.content_format !== 'recent_news_briefing'
         ? `<div class="list-actions"><button class="button primary" type="button" data-create-job="${escapeHtml(card.id)}" data-busy-lock ${state.busy ? 'disabled' : ''}>用这份资料再生成一版</button></div>`
-        : `<div class="meta legacy-card-note">${card.status === 'verified' ? '可查看，只有创建者可以继续生成' : '旧版来源草稿，仅保留记录'}</div>`}
+        : `<div class="meta legacy-card-note">${card.content_format === 'recent_news_briefing'
+          ? '历史实时新闻资料，仅保留记录；新任务不再联网检索'
+          : card.status === 'verified' ? '可查看，只有创建者可以继续生成' : '旧版来源草稿，仅保留记录'}</div>`}
     </article>`).join('');
 }
 
@@ -2548,8 +2533,8 @@ function renderScriptDocument(job) {
   updateScriptLengthStatus();
 }
 
-function renderResearchBrief(job) {
-  const node = $('#person-research-brief');
+function renderContentPlanning(job) {
+  const node = $('#content-planning-brief');
   const hasResearch = !!job?.research_brief;
   const brief = job?.research_brief || {};
   const editorial = job?.editorial_plan || null;
@@ -2562,8 +2547,8 @@ function renderResearchBrief(job) {
   }
   if (!hasResearch && !editorial && !creative) {
     node.innerHTML = [
-      '<div class="research-brief-heading"><div><strong>自动研究已降级</strong>',
-      '<span>不阻断本次创作</span></div></div>',
+      '<div class="research-brief-heading"><div><strong>历史研究记录</strong>',
+      '<span>仅用于旧任务兼容，不会再次联网</span></div></div>',
       '<p class="research-warning">' + escapeHtml(warning) + '</p>',
     ].join('');
     return;
@@ -2671,8 +2656,8 @@ function renderResearchBrief(job) {
   ].join('') : '';
   node.innerHTML = [
     hasResearch ? '<div class="research-brief-heading"><div><strong>'
-      + (isNews ? '最新新闻 EvidencePack' : '创作请求 EvidencePack') + '</strong>' : '',
-    hasResearch ? '<span>研究只提供证据、出处与不确定性'
+      + '历史联网 EvidencePack</strong>' : '',
+    hasResearch ? '<span>仅展示任务中已经保存的证据，不会再次联网'
       + (isNews && brief.as_of ? ' · 截至 ' + escapeHtml(formatDateTime(brief.as_of)) : '')
       + '</span></div>' : '',
     hasResearch ? '<small>' + escapeHtml(brief.model_id || '') + '</small></div>' : '',
@@ -2820,7 +2805,6 @@ function applyJobReadOnly(job) {
     '#save-script-button',
     '#approve-script-button',
     '#retry-button',
-    '#retry-research-button',
     '#revise-script-button',
     '#preview-tts-button',
   ].join(',')).forEach((node) => {
@@ -2893,13 +2877,13 @@ function renderJobGenerationMethods(job) {
       '</summary>',
       '<div class="job-generation-methods-body">',
       '<div class="job-orchestration-heading">',
-      '<div><span>Pipeline v2</span><strong>证据、脚本、导演、模型适配互不越权</strong></div>',
+      '<div><span>Pipeline v2</span><strong>输入、脚本、导演、模型适配互不越权</strong></div>',
       '<small>' + escapeHtml(hasReference ? '参考图角色边界已启用' : '本任务未使用参考图') + '</small>',
       '</div>',
       '<div class="job-orchestration-inputs">',
       jobGenerationInputCard(
-        '阶段 01 · EvidencePipeline',
-        '只核验来源、事实、引语归属与不确定性，不决定文风或镜头',
+        '阶段 01 · Input Policy',
+        '冻结原始输入和模型知识边界，不发起搜索，不决定文风或镜头',
         job.skill_snapshot,
         '证据政策',
       ),
@@ -2923,21 +2907,21 @@ function renderJobGenerationMethods(job) {
       ),
       '</div>',
       '<div class="job-orchestration-merge" aria-hidden="true"><span></span>',
-      '<strong>EvidencePack → EditorialPlan + ScriptDraft → 人工确认 → VisualBible + ShotContextIR → Provider Prompt</strong>',
+      '<strong>ContextPack → EditorialPlan + ScriptDraft → 人工确认 → VisualBible + ShotContextIR → Provider Prompt</strong>',
       '<span></span></div>',
       '<article class="job-orchestration-core">',
       '<div><span>唯一冲突裁决</span><strong>后阶段不得反向改写前阶段</strong>',
       '<small>已确认 ScriptDraft 是内容唯一真相</small></div>',
       '<p>Director Skill 只能解释脚本的视觉含义；Provider Adapter 只能翻译已经确定的镜头语义。新增 Skill 时替换对应负责人，不叠加第二套总纲。</p>',
       '<ol aria-label="本任务责任边界">',
-      '<li>EvidencePack 管事实</li><li>Script Skill 管内容</li>',
+      '<li>Input Policy 管知识边界</li><li>Script Skill 管内容</li>',
       '<li>人工确认锁定脚本</li><li>Director Skill 管视觉</li>',
       '<li>Provider Adapter 管模型语法</li>',
       '</ol>',
       '</article>',
       '<div class="job-orchestration-outputs">',
       '<span>可审计产物</span>',
-      '<div><strong>EvidencePack</strong><strong>EditorialPlan</strong><strong>ScriptDraft</strong><strong>VisualBible</strong><strong>ShotContextIR</strong><strong>Provider Prompt</strong></div>',
+      '<div><strong>ContextPack</strong><strong>EditorialPlan</strong><strong>ScriptDraft</strong><strong>VisualBible</strong><strong>ShotContextIR</strong><strong>Provider Prompt</strong></div>',
       '</div>',
       '</div>',
     ].join('');
@@ -3036,67 +3020,18 @@ function renderDetail() {
   error.hidden = !job.error;
   error.textContent = job.error || '任务失败';
   const narrationFailure = isNarrationRevisionFailure(job);
-  const newsResearchFailure = isNewsResearchFailure(job);
   const reviseButton = $('#revise-script-button');
   reviseButton.hidden = !narrationFailure;
   reviseButton.textContent = (job.visual_requests || []).length
     ? '返回修改脚本（复用现有画面）'
     : '返回修改脚本';
-  $('#retry-button').hidden = (
-    job.state !== 'failed' || narrationFailure || newsResearchFailure
-  );
-  const retryResearchButton = $('#retry-research-button');
-  retryResearchButton.hidden = !newsResearchFailure;
-  const researchRetryDetail = $('#research-retry-detail');
-  const diagnostics = job.research_diagnostics || {};
-  const rejectionLabels = {
-    invalid_item: '无效证据结构',
-    invalid_url: '无效 URL',
-    citation_not_matched: '未匹配检索注释',
-    missing_claim: '缺少事实描述',
-    duplicate_url: '重复 URL',
-    url_too_long: 'URL 过长',
-    missing_host: '缺少站点',
-  };
-  const rejected = Object.entries(diagnostics.rejected_counts || {})
-    .filter(([, count]) => Number(count) > 0)
-    .map(([reason, count]) => `${rejectionLabels[reason] || reason} ${count}`)
-    .join('、');
-  const webSearchDetail = diagnostics.web_search_requests == null
-    ? '实际联网检索次数：供应商未回传'
-    : `实际联网检索 ${Number(diagnostics.web_search_requests)} 次`;
-  researchRetryDetail.hidden = !newsResearchFailure;
-  researchRetryDetail.textContent = newsResearchFailure
-    ? [
-      `第 ${Number(diagnostics.attempt_count || 1)} 次研究未形成可用简报`,
-      webSearchDetail,
-      `检索注释 ${Number(diagnostics.citation_count || 0)} 条`,
-      `候选证据 ${Number(diagnostics.candidate_evidence_count || 0)} 条`,
-      `引用 URL 已匹配 ${Number(diagnostics.matched_citation_count || 0)} 条`,
-      `通过完整性校验 ${Number(diagnostics.accepted_evidence_count || 0)} 条`,
-      diagnostics.accepted_timed_evidence_count == null
-        ? ''
-        : `带事件或发布时间 ${Number(diagnostics.accepted_timed_evidence_count)} 条`,
-      Number(diagnostics.citation_excerpt_claim_count || 0) > 0
-        ? `由检索摘录补全事实描述 ${Number(diagnostics.citation_excerpt_claim_count)} 条`
-        : '',
-      `可追溯站点 ${Number(diagnostics.accepted_site_count || 0)} 个`,
-      (diagnostics.unexpected_response_fields || []).length
-        ? `已隔离上游额外字段：${diagnostics.unexpected_response_fields.join('、')}`
-        : '',
-      (diagnostics.validation_errors || []).length
-        ? `字段校验：${diagnostics.validation_errors.join('；')}`
-        : '',
-      rejected ? `被过滤：${rejected}` : '',
-      diagnostics.detail || '',
-    ].filter(Boolean).join(' · ')
-    : '';
+  $('#retry-button').hidden = job.state !== 'failed' || narrationFailure;
 
   const scriptSection = $('#script-review');
   scriptSection.hidden = job.state !== 'script_review_required';
   if (!scriptSection.hidden && job.script) {
     setJobTtsFields(job);
-    renderResearchBrief(job);
+    renderContentPlanning(job);
     renderScriptDocument(job);
     const ttsSettings = job.generation_settings || {
       ...generationDefaults(),
@@ -3368,7 +3303,6 @@ function openTopicHandoff(candidate) {
   $('#topic-handoff').hidden = false;
   $('#manual-intake-intro').hidden = true;
   $('#source-card-form').hidden = true;
-  $('#news-topic-form').hidden = true;
   switchWorkspace('production');
   switchProductionPane('create');
   $('#topic-handoff').scrollIntoView({behavior: 'smooth', block: 'start'});
@@ -3555,41 +3489,6 @@ $('#source-card-form').addEventListener('submit', async (event) => {
   finally { setBusy(false); }
 });
 
-$('#news-topic-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  if (state.busy) return;
-  notify(''); setBusy(true);
-  const form = new FormData(event.currentTarget);
-  try {
-    const generationSettings = generationSettingsPayload(NEWS_CONTENT_SKILL_ID);
-    const card = await api('POST', '/source-cards/news-topic', {
-      schema_version: '1.0',
-      topic: String(form.get('topic') || '').trim(),
-      focus: String(form.get('focus') || '').trim(),
-      content_domain: String(form.get('content_domain') || 'technology'),
-      target_audience: String(form.get('target_audience') || '').trim()
-        || '关注该主题的普通用户',
-    });
-    let result;
-    try {
-      result = await api('POST', '/jobs', {
-        source_card_id: card.id,
-        generation_settings: generationSettings,
-      });
-    } catch (error) {
-      await loadAll();
-      throw new Error(`新闻主题已保存，但视频任务未启动：${error.message}`);
-    }
-    resetSourceForm();
-    clearOneTaskPromptOverride();
-    await loadAll({selectJobId: result.job.id});
-    setBusy(false);
-    await pollTask(result.task_id, result.job.id);
-    notify('最新新闻研究和脚本已完成，请人工确认。');
-  } catch (error) { notify(error.message, true); }
-  finally { setBusy(false); }
-});
-
 $('#source-card-list').addEventListener('click', async (event) => {
   const create = event.target.closest('[data-create-job]');
   if (!create) return;
@@ -3613,7 +3512,6 @@ $('#source-card-list').addEventListener('click', async (event) => {
 
 function resetSourceForm() {
   $('#source-card-form').reset();
-  $('#news-topic-form').reset();
   clearReferenceImage();
   $('#source-submit-button').textContent = '生成脚本';
   updateContentSkillIntake();
@@ -4401,29 +4299,6 @@ $('#retry-button').addEventListener('click', async () => {
     return;
   }
   catch (error) { notify(error.message, true); }
-  finally { setBusy(false); }
-});
-
-$('#retry-research-button').addEventListener('click', async () => {
-  const job = state.selectedJob; if (!job) return;
-  if (!window.confirm('重新研究会产生一次新的 OpenRouter 检索费用，确认继续吗？')) return;
-  setBusy(true); notify('');
-  try {
-    const result = await api(
-      'POST',
-      `/jobs/${encodeURIComponent(job.id)}/actions/retry-news-research`,
-      {expected_revision: job.revision, confirm_cost: true},
-    );
-    if (result.job) updateVisibleJob(result.job);
-    setBusy(false);
-    await pollTask(result.task_id, job.id);
-    notify('最新新闻已重新研究，脚本已更新。');
-    return;
-  }
-  catch (error) {
-    await loadAll({selectJobId: job.id}).catch(() => {});
-    notify(error.message, true);
-  }
   finally { setBusy(false); }
 });
 
