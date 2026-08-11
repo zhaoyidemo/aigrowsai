@@ -143,7 +143,6 @@ function scriptBeats(script) {
     id: segment.id,
     narration: segment.text || '',
     role: segment.segment_type || 'explanation',
-    visual_direction: '',
     on_screen_text: '',
     source_refs: segment.source_refs || [],
     quote_ref: segment.quote_ref ?? null,
@@ -197,10 +196,9 @@ function isNarrationRevisionFailure(job) {
 
 function generationDefaults() {
   return state.capabilities?.generation_defaults || {
-    script_prompt: '', video_resolution: '1080p',
+    video_resolution: '1080p',
     seedance_model: 'doubao-seedance-1-0-pro-fast-251015',
     visual_style_id: DEFAULT_VISUAL_STYLE_ID,
-    image_count: 10, shot_count: 13,
     tts_voice_id: 'zh_female_vv_uranus_bigtts', tts_speed_ratio: 1.2,
   };
 }
@@ -240,13 +238,6 @@ function selectedContentSkill() {
   return contentSkill($('#content-skill')?.value || '');
 }
 
-function skillGenerationDefaults(skillId = '') {
-  return {
-    ...generationDefaults(),
-    ...(contentSkill(skillId)?.generation_defaults || {}),
-  };
-}
-
 function skillIdForCard(card) {
   return contentSkills().find(
     (item) => (item.compatible_formats || []).includes(card?.content_format),
@@ -259,7 +250,7 @@ function updateContentSkillIntake() {
   const handoffOpen = !$('#topic-handoff').hidden;
   $('#content-skill-description').textContent = skill
     ? `${skill.description} · v${skill.version}`
-    : '选择一套有版本、研究规则、提示词和质量边界的内容工作流。';
+    : '选择输入方式、研究模式与事实政策；它不会改写创作提示词。';
   $('#manual-intake-intro').hidden = handoffOpen;
   $('#manual-intake-intro').textContent = isNews
     ? '输入一个新闻主题和关注角度，系统会以任务创建时间为边界检索公开来源，核对事件时间，再生成可追溯的口播脚本。'
@@ -281,13 +272,11 @@ function renderContentSkillSelector(preferredSkillId = '') {
 }
 
 function selectContentSkill(skillId, {resetPrompts = false} = {}) {
+  void resetPrompts;
   const selected = contentSkill(skillId);
   if (!selected) return;
   $('#content-skill').value = selected.skill_id;
   updateContentSkillIntake();
-  if (resetPrompts) {
-    setPromptFields(skillGenerationDefaults(selected.skill_id));
-  }
 }
 
 function visualStyles() {
@@ -382,14 +371,12 @@ function renderPromptWritingProfile() {
     ? '自动启用 · v' + profile.version
     : '自动启用';
   $('#prompt-profile-description').textContent = profile?.description
-    || 'H3 是唯一编排层：从原始输入统一生成研究、脚本、分镜、首帧和首帧驱动视频提示词。';
+    || 'H3 把原始输入与 EvidencePack 收敛成唯一 CreativeBrief，脚本和视觉导演复用同一总纲。';
   renderOrchestrationSelection();
 }
 
 const SEEDANCE_EFFICIENT_MODEL = 'doubao-seedance-1-0-pro-fast-251015';
 const SEEDANCE_FLAGSHIP_MODEL = 'doubao-seedance-2-0-260128';
-const MIN_IMAGE_CHAPTER_COUNT = 2;
-const MAX_IMAGE_CHAPTER_COUNT = 10;
 const DEFAULT_TTS_VOICE_ID = 'zh_female_vv_uranus_bigtts';
 const DEFAULT_TTS_SPEED_RATIO = 1.2;
 const FALLBACK_TTS_VOICES = [
@@ -610,44 +597,13 @@ function taskSeedanceCost(task) {
   return tokens && rate ? tokens * rate / 1000000 : 0;
 }
 
-function customScriptPromptEnabled() {
-  return !!$('#enable-custom-script-prompt')?.checked;
-}
-
-function setCustomScriptPromptMode(enabled, {resetToDefault = false} = {}) {
-  const checkbox = $('#enable-custom-script-prompt');
-  const fields = $('#custom-script-prompt-fields');
-  const textarea = $('#script-generation-prompt');
-  const settings = $('#generation-prompt-settings');
-  const badge = $('#script-prompt-mode-badge');
-  if (!checkbox || !fields || !textarea || !settings || !badge) return;
-  checkbox.checked = !!enabled;
-  fields.hidden = !enabled;
-  textarea.readOnly = !enabled;
-  settings.classList.toggle('custom-active', !!enabled);
-  badge.textContent = enabled ? '自定义 · 仅下一条' : '系统默认';
-  if (resetToDefault) {
-    setPromptFields(skillGenerationDefaults(
-      selectedContentSkill()?.skill_id || '',
-    ));
-  }
-}
-
-function setPromptFields(settings) {
-  const defaults = skillGenerationDefaults(
-    settings?.skill_id || $('#content-skill')?.value,
-  );
-  $('#script-generation-prompt').value = settings?.script_prompt || defaults.script_prompt || '';
-}
-
 function updateProductionSpecSummary() {
   const node = $('#production-spec-summary');
   if (!node) return;
   const resolution = String($('#video-resolution')?.value || '1080p').toUpperCase();
-  const imageCount = normalizedImageCount($('#image-count')?.value || 10);
   const voiceId = normalizedTtsVoiceId($('#tts-voice-id')?.value);
   const speed = normalizedTtsSpeedRatio($('#tts-speed-ratio')?.value).toFixed(1);
-  node.textContent = `${resolution} · 3 段视频 + ${imageCount} 段动态图片 · ${ttsVoiceLabel(voiceId)} ${speed}x`;
+  node.textContent = `${resolution} · 语义自适应分镜 · ${ttsVoiceLabel(voiceId)} ${speed}x`;
 }
 
 function setResolutionField(settings) {
@@ -661,36 +617,6 @@ function setResolutionField(settings) {
   updateProductionSpecSummary();
 }
 
-function normalizedImageCount(value, fallback = 10) {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed)) return fallback;
-  return Math.min(MAX_IMAGE_CHAPTER_COUNT, Math.max(MIN_IMAGE_CHAPTER_COUNT, parsed));
-}
-
-function updateImageCountCost() {
-  const imageCount = normalizedImageCount($('#image-count').value);
-  const totalImages = imageCount + 3;
-  const rate = Math.max(
-    0,
-    Number(state.capabilities?.seedream_pricing?.yuan_per_image) || 0,
-  );
-  $('#image-count-cost').textContent = [
-    imageCount + ' 段动态图片 + 3 张视频首帧 = ' + totalImages + ' 张 Seedream',
-    rate ? '图片刊例价预估约 ¥' + (totalImages * rate).toFixed(2) : '',
-  ].filter(Boolean).join(' · ');
-  updateProductionSpecSummary();
-}
-
-function setImageCountField(settings) {
-  const defaults = generationDefaults();
-  const inferred = settings?.image_count
-    ?? (Number(settings?.shot_count) ? Number(settings.shot_count) - 3 : null)
-    ?? defaults.image_count
-    ?? 10;
-  $('#image-count').value = normalizedImageCount(inferred);
-  updateImageCountCost();
-}
-
 function jobResolution(job) {
   return job?.visual_requests?.[0]?.resolution
     || job?.generation_settings?.video_resolution
@@ -700,9 +626,6 @@ function jobResolution(job) {
 function persistPromptFields() {
   try {
     const settings = generationSettingsPayload();
-    // Custom script prompts are intentionally one-task-only and never survive
-    // a reload or silently affect another Content Skill.
-    delete settings.script_prompt;
     localStorage.setItem(PROMPT_STORAGE_KEY, JSON.stringify(settings));
     localStorage.removeItem(LEGACY_PROMPT_STORAGE_KEY);
   } catch { /* 浏览器禁用本地存储时仍可正常创建任务。 */ }
@@ -730,11 +653,7 @@ function initializePromptFields() {
   renderContentSkillSelector(selectedSkillId);
   renderVisualStyleSelector(selectedStyleId);
   renderPromptWritingProfile();
-  const selectedDefaults = skillGenerationDefaults(selectedSkillId);
-  setPromptFields(selectedDefaults);
-  setCustomScriptPromptMode(false);
   setResolutionField(saved);
-  setImageCountField(saved);
   setTtsSettingsFields(saved);
   if (saved?.script_prompt || migratedVisualStyle) persistPromptFields();
 }
@@ -743,28 +662,11 @@ function generationSettingsPayload(skillOverride = '') {
   const selected = selectedContentSkill();
   const requestedSkill = contentSkill(skillOverride || selected?.skill_id || '');
   const requestedStyle = selectedVisualStyle();
-  const useEditorPrompts = (
-    customScriptPromptEnabled()
-    && (!skillOverride || requestedSkill?.skill_id === selected?.skill_id)
-  );
-  const defaults = skillGenerationDefaults(requestedSkill?.skill_id || '');
-  const scriptPrompt = useEditorPrompts
-    ? $('#script-generation-prompt').value.trim()
-    : String(defaults.script_prompt || '').trim();
   const videoResolution = $('#video-resolution').value;
-  const rawImageCount = Number($('#image-count').value);
   const ttsVoiceId = normalizedTtsVoiceId($('#tts-voice-id').value);
   const ttsSpeedRatio = normalizedTtsSpeedRatio($('#tts-speed-ratio').value);
-  if (!scriptPrompt) throw new Error('脚本生成提示词不能为空');
   if (!['480p', '720p', '1080p'].includes(videoResolution)) {
     throw new Error('请选择有效的视频画质');
-  }
-  if (
-    !Number.isInteger(rawImageCount)
-    || rawImageCount < MIN_IMAGE_CHAPTER_COUNT
-    || rawImageCount > MAX_IMAGE_CHAPTER_COUNT
-  ) {
-    throw new Error('动态图片数量必须是 2–10 之间的整数');
   }
   return {
     ...(requestedSkill ? {
@@ -775,11 +677,8 @@ function generationSettingsPayload(skillOverride = '') {
       visual_style_id: requestedStyle.style_id,
       visual_style_version: requestedStyle.version,
     } : {}),
-    script_prompt: scriptPrompt,
     video_resolution: videoResolution,
     seedance_model: defaultSeedanceModel(),
-    image_count: rawImageCount,
-    shot_count: rawImageCount + 3,
     tts_voice_id: ttsVoiceId,
     tts_speed_ratio: ttsSpeedRatio,
   };
@@ -2299,14 +2198,14 @@ function jobVisualChapterCounts(job) {
       total: job.visual_requests.length,
     };
   }
-  const imageCount = normalizedImageCount(
-    job?.generation_settings?.image_count
-      ?? (Number(job?.generation_settings?.shot_count)
-        ? Number(job.generation_settings.shot_count) - 3
-        : 2),
-    2,
-  );
-  return {videoCount: 3, imageCount, total: imageCount + 3};
+  const total = Math.max(0, scriptBeats(job?.script).length);
+  const videoCount = total ? Math.min(3, Math.max(1, Math.round(total / 3))) : 0;
+  return {
+    videoCount,
+    imageCount: Math.max(0, total - videoCount),
+    total,
+    estimated: true,
+  };
 }
 
 function usageRecordCostCny(record) {
@@ -2375,7 +2274,7 @@ function renderScriptCostEstimate(job) {
       : `${counts.total} 张 Seedream 约 ${formatCny(imageCost)}`,
     reusesVisuals
       ? ''
-      : `${counts.videoCount} 段 Seedance（每段 8–10 秒）约 ${formatCny(videoLow)}–${formatCny(videoHigh)}`,
+      : `最多 ${counts.videoCount} 段 Seedance（每段 8–10 秒）约 ${formatCny(videoLow)}–${formatCny(videoHigh)}`,
   ].filter(Boolean).join(' · ');
   basisNode.textContent = [
     '这是整单刊例价区间，不是新增确认门槛；最终按真实旁白、视频时长和供应商账单核算。',
@@ -2408,9 +2307,11 @@ function workflowCopy(job, current) {
   if (job.state === 'script_review_required') {
     return {
       current: '等待你检查并确认脚本',
-      next: '确认后自动生成旁白、' + chapterCounts.total + ' 张首帧、'
-        + chapterCounts.videoCount + ' 段视频和 '
-        + chapterCounts.imageCount + ' 段动态图片',
+      next: chapterCounts.estimated
+        ? '确认后先按完整旁白生成自适应分镜，再只为必要动作生成视频'
+        : '确认后自动生成旁白、' + chapterCounts.total + ' 张首帧、'
+          + chapterCounts.videoCount + ' 段视频和 '
+          + chapterCounts.imageCount + ' 段动态图片',
     };
   }
   if (job.state === 'media_review_required') {
@@ -2488,7 +2389,6 @@ function parseLegacyScreenplay(value) {
     return {
       header,
       narration: fields['旁白'] || '',
-      visual_direction: fields['画面'] || '',
       on_screen_text: fields['屏幕大字'] || fields['屏幕文字'] || fields['结尾大字'] || '',
     };
   }).filter((item) => item?.narration);
@@ -2516,14 +2416,13 @@ function scriptForEditor(job) {
       id: `n${String(index + 1).padStart(2, '0')}`,
       role: item.role || screenplayRole('', index, rows.length),
       narration,
-      visual_direction: item.visual_direction?.trim() || `用一个具体、自然且无文字的家庭场景表达这段含义：${narration.slice(0, 120)}`,
       on_screen_text: item.on_screen_text?.trim() || '',
       source_refs: sourceRefs,
       quote_ref: quote?.id || item.quote_ref || null,
     };
   });
   delete original.narration_segments;
-  original.schema_version = '2.0';
+  original.schema_version = '3.0';
   original.beats = beats;
   original.hook = beats[0]?.narration || original.hook;
   original.closing = beats.at(-1)?.narration || original.closing;
@@ -2548,7 +2447,6 @@ function renderScriptDocument(job) {
     <article class="script-beat" data-beat-index="${index}">
       <div class="script-beat-marker"><span>${String(index + 1).padStart(2, '0')}</span><small>${escapeHtml(scriptRoleLabels[beat.role] || '展开')}</small></div>
       <div class="script-beat-tracks">
-        <label class="script-track visual-track"><span>画面</span><textarea data-script-field="visual_direction" maxlength="1200" spellcheck="false">${escapeHtml(beat.visual_direction)}</textarea></label>
         <label class="script-track narration-track"><span>旁白</span><textarea data-script-field="narration" maxlength="2000" spellcheck="false">${escapeHtml(beat.narration)}</textarea></label>
         <label class="script-track screen-track"><span>屏幕文字 <em>可留空</em></span><textarea data-script-field="on_screen_text" maxlength="80" spellcheck="false" placeholder="只保留真正值得强调的一句话">${escapeHtml(beat.on_screen_text)}</textarea></label>
       </div>
@@ -2559,14 +2457,16 @@ function renderScriptDocument(job) {
 
 function renderResearchBrief(job) {
   const node = $('#person-research-brief');
-  const brief = job?.research_brief;
+  const hasResearch = !!job?.research_brief;
+  const brief = job?.research_brief || {};
+  const creative = job?.creative_brief || null;
   const warning = String(job?.research_warning || '').trim();
-  node.hidden = !brief && !warning;
+  node.hidden = !hasResearch && !creative && !warning;
   if (node.hidden) {
     node.innerHTML = '';
     return;
   }
-  if (!brief) {
+  if (!hasResearch && !creative) {
     node.innerHTML = [
       '<div class="research-brief-heading"><div><strong>自动研究已降级</strong>',
       '<span>不阻断本次创作</span></div></div>',
@@ -2612,7 +2512,7 @@ function renderResearchBrief(job) {
     conceptual_claim: '观点命题',
     unknown: '待确认输入',
   };
-  const personResearchRows = isNews ? '' : [
+  const personResearchRows = !hasResearch || isNews ? '' : [
     '<article><span>输入判断</span><p>'
       + escapeHtml(inputTypeLabels[brief.input_type] || '待确认输入')
       + (brief.research_focus ? ' · ' + escapeHtml(brief.research_focus) : '')
@@ -2627,24 +2527,33 @@ function renderResearchBrief(job) {
       ? '<article><span>原始语境</span><p>' + escapeHtml(brief.source_context) + '</p></article>'
       : '',
   ].join('');
-  node.innerHTML = [
-    '<div class="research-brief-heading"><div><strong>'
-      + (isNews ? '最新新闻研究简报' : 'H3 输入驱动研究简报') + '</strong>',
-    '<span>原始输入已冻结 · 有可追溯来源 · 已用于本次脚本'
-      + (isNews && brief.as_of ? ' · 截至 ' + escapeHtml(formatDateTime(brief.as_of)) : '')
-      + '</span></div>',
-    '<small>' + escapeHtml(brief.model_id || '') + '</small></div>',
-    '<p class="research-summary">' + escapeHtml(brief.summary || '') + '</p>',
+  const creativeRows = creative ? [
+    '<section class="creative-brief-block">',
+    '<div class="research-brief-heading"><div><strong>H3 CreativeBrief</strong>',
+    '<span>脚本与视觉导演共用的唯一创作总纲</span></div>',
+    '<small>' + escapeHtml(creative.model_id || '') + '</small></div>',
     '<div class="research-brief-grid">',
-    personResearchRows,
-    '<article><span>最值得讲的张力</span><p>' + escapeHtml(brief.core_tension || '') + '</p></article>',
-    '<article><span>受众现实关联</span>' + list(brief.audience_relevance) + '</article>',
-    '<article><span>可展开角度</span>' + list(brief.content_angles) + '</article>',
-    '<article><span>互动切口</span><p>' + escapeHtml(brief.interaction_opportunity || '—') + '</p></article>',
-    '</div>',
-    '<details class="research-evidence"><summary>查看 ' + evidence.length + ' 条研究证据与边界</summary>',
-    '<ol>' + evidenceRows + '</ol>' + uncertainties + '</details>',
+    '<article><span>中心问题</span><p>' + escapeHtml(creative.central_question || '') + '</p></article>',
+    '<article><span>核心判断</span><p>' + escapeHtml(creative.core_thesis || '') + '</p></article>',
+    '<article><span>观看价值</span><p>' + escapeHtml(creative.audience_promise || '') + '</p></article>',
+    '<article><span>语言气质</span><p>' + escapeHtml(creative.tone || '') + '</p></article>',
+    '<article><span>论证路径</span>' + list(creative.narrative_arc) + '</article>',
+    '<article><span>视觉母题</span><p>' + escapeHtml(creative.visual_concept || '') + '</p></article>',
+    '</div></section>',
+  ].join('') : '';
+  node.innerHTML = [
+    hasResearch ? '<div class="research-brief-heading"><div><strong>'
+      + (isNews ? '最新新闻 EvidencePack' : '人物观点 EvidencePack') + '</strong>' : '',
+    hasResearch ? '<span>研究只提供证据、出处与不确定性'
+      + (isNews && brief.as_of ? ' · 截至 ' + escapeHtml(formatDateTime(brief.as_of)) : '')
+      + '</span></div>' : '',
+    hasResearch ? '<small>' + escapeHtml(brief.model_id || '') + '</small></div>' : '',
+    hasResearch ? '<p class="research-summary">' + escapeHtml(brief.summary || '') + '</p>' : '',
+    hasResearch ? '<div class="research-brief-grid">' + personResearchRows + '</div>' : '',
+    hasResearch ? '<details class="research-evidence"><summary>查看 ' + evidence.length + ' 条研究证据与边界</summary>'
+      + '<ol>' + evidenceRows + '</ol>' + uncertainties + '</details>' : '',
     warning ? '<p class="research-warning">' + escapeHtml(warning) + '</p>' : '',
+    creativeRows,
   ].join('');
 }
 
@@ -2862,8 +2771,8 @@ function renderJobGenerationMethods(job) {
     '</div>',
     '<div class="job-orchestration-inputs">',
     jobGenerationInputCard(
-      '输入 01 · 内容约束',
-      '冻结事实依据、叙事目标与视觉禁区',
+      '输入 01 · 任务与证据政策',
+      '只冻结输入方式、研究模式与事实边界',
       job.skill_snapshot,
       '旧版内容流程',
     ),
@@ -2881,14 +2790,14 @@ function renderJobGenerationMethods(job) {
     '<small>' + escapeHtml(profileStatus) + '</small></div>',
     '<p>' + escapeHtml(profileDescription) + '</p>',
     '<ol aria-label="本任务提示词冲突优先级">',
-    '<li>事实与安全</li><li>镜头语义</li>',
+    '<li>事实与安全</li><li>CreativeBrief</li>',
     '<li>' + escapeHtml(hasReference ? '参考图属性' : '无参考图') + '</li>',
     '<li>视觉风格补全</li><li>Provider 语法</li>',
     '</ol>',
     '</article>',
     '<div class="job-orchestration-outputs">',
     '<span>最终产物</span>',
-    '<div><strong>分镜语义</strong><strong>首帧提示词</strong><strong>I2V 动作提示词</strong></div>',
+    '<div><strong>完整脚本</strong><strong>自适应分镜</strong><strong>媒体提示词</strong></div>',
     '</div>',
     '</div>',
   ].join('');
@@ -3516,7 +3425,6 @@ function resetSourceForm() {
 }
 
 function clearOneTaskPromptOverride() {
-  setCustomScriptPromptMode(false, {resetToDefault: true});
   persistPromptFields();
 }
 
@@ -3546,15 +3454,15 @@ $('#job-list').addEventListener('click', async (event) => {
 function editedScript(job) {
   const script = structuredClone(state.scriptEditorDraft || scriptForEditor(job));
   const rows = Array.from(document.querySelectorAll('#script-beat-editor .script-beat'));
-  if (rows.length < 5) throw new Error('完整脚本至少需要五个自然叙事段');
+  if (rows.length < 3) throw new Error('完整脚本至少需要三个自然叙事段');
   rows.forEach((row, index) => {
     const beat = script.beats[index];
-    ['visual_direction', 'narration', 'on_screen_text'].forEach((field) => {
+    ['narration', 'on_screen_text'].forEach((field) => {
       beat[field] = row.querySelector(`[data-script-field="${field}"]`).value.trim();
     });
     if (!beat.narration) throw new Error(`第 ${index + 1} 段旁白不能为空`);
-    if (!beat.visual_direction) throw new Error(`第 ${index + 1} 段画面不能为空`);
   });
+  script.schema_version = '3.0';
   script.video_title = $('#script-video-title').value.trim();
   if (!script.video_title) throw new Error('视频标题不能为空');
   script.hook = script.beats[0].narration;
@@ -4346,14 +4254,8 @@ $('#refresh-button').addEventListener('click', async () => {
     await resumeSelectedTask();
   } catch (error) { notify(error.message, true); }
 });
-$('#enable-custom-script-prompt').addEventListener('change', (event) => {
-  setCustomScriptPromptMode(event.target.checked);
-});
 $('#content-skill').addEventListener('change', () => {
-  const skill = selectedContentSkill();
   updateContentSkillIntake();
-  setPromptFields(skillGenerationDefaults(skill?.skill_id || ''));
-  setCustomScriptPromptMode(false);
   persistPromptFields();
 });
 $('#visual-style').addEventListener('change', () => {
@@ -4378,16 +4280,6 @@ $('#tts-voice-id').addEventListener('change', () => {
 $('#tts-speed-ratio').addEventListener('change', () => {
   updateProductionSpecSummary();
   persistPromptFields();
-});
-$('#image-count').addEventListener('input', updateImageCountCost);
-$('#image-count').addEventListener('change', (event) => {
-  event.target.value = normalizedImageCount(event.target.value);
-  updateImageCountCost();
-  persistPromptFields();
-});
-$('#restore-prompt-defaults').addEventListener('click', () => {
-  setCustomScriptPromptMode(false, {resetToDefault: true});
-  notify('已退出自定义模式，下一条任务使用 Content Skill 默认提示词。');
 });
 $('#reference-image-input').addEventListener('change', (event) => {
   setReferenceImage(event.target.files?.[0]);

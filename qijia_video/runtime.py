@@ -35,10 +35,6 @@ from qijia_video.infrastructure.script_providers import (
 from qijia_video.infrastructure.storage import storage_from_settings
 from qijia_video.infrastructure.tts_providers import VolcengineTtsProvider
 from qijia_video.infrastructure.video_providers import SeedanceVideoProvider
-from qijia_video.prompts import (
-    MAX_IMAGE_CHAPTER_COUNT,
-    MIN_IMAGE_CHAPTER_COUNT,
-)
 from qijia_video.settings import settings
 from qijia_video.service import QijiaVideoService, TTS_PREVIEW_MAX_CHARACTERS
 from qijia_video.tts_options import (
@@ -218,7 +214,13 @@ class QijiaVideoRuntime:
         generation_ready = not missing
         generation_defaults = GenerationSettings()
         public_generation_defaults = generation_defaults.model_dump(mode="json")
-        public_generation_defaults.pop("seedance_prompt", None)
+        for private_field in (
+            "seedance_prompt",
+            "script_prompt",
+            "image_count",
+            "shot_count",
+        ):
+            public_generation_defaults.pop(private_field, None)
         return {
             "module": "qijia_video",
             "mode": "skill-video-platform",
@@ -337,13 +339,12 @@ class QijiaVideoRuntime:
                     float(settings.QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE),
                 ),
                 "candidates_per_shot": 1,
-                "min_image_chapters": MIN_IMAGE_CHAPTER_COUNT,
-                "max_image_chapters": MAX_IMAGE_CHAPTER_COUNT,
-                "default_image_chapters": generation_defaults.image_count,
-                "default_total_images": generation_defaults.shot_count,
+                "chapter_policy": "semantic_adaptive",
+                "max_video_chapters": 3,
                 "model": settings.QIJIA_VIDEO_SEEDREAM_MODEL,
                 "basis": (
-                    "每个视觉章节生成 1 张；3 张作为视频首帧，其余直接动态呈现。"
+                    "每个语义视觉章节生成 1 张；H3 仅在连续动作不可替代时"
+                    "把其中最多 3 张作为视频首帧，其余直接动态呈现。"
                     "按成功生成张数估算，实际账单以火山方舟为准"
                 ),
             },
@@ -384,9 +385,8 @@ class QijiaVideoRuntime:
             "notes": [
                 "生产链路不使用 Mock；收费生成 Provider 失败时不会伪造结果或自动换模型",
                 (
-                    f"新任务默认生成 3 段视频和 {generation_defaults.image_count} 段"
-                    f"动态图片，共 {generation_defaults.shot_count} 张 Seedream；"
-                    "3 张驱动 8-10 秒 Seedance 1.0 Pro Fast 无声视频，"
+                    "新任务按完整脚本中的语义变化规划视觉章节，不再凑固定镜头数；"
+                    "图片为默认媒介，连续动作不可替代时最多安排 3 段 AI 视频，"
                     "复杂镜头可单独升级 Seedance 2.0"
                 ),
                 "参考图约束其中已定义的视觉属性；无参考图时由所选视觉表现完整定义画风",

@@ -28,125 +28,72 @@ class TemplateScriptProvider:
         self, card: SourceCard, prompt: str | None = None
     ) -> ScriptDraft:
         del prompt
-        primary_fact = card.verified_facts[0]
-        source_refs = [primary_fact.id]
         subject = card.subject.name
-        if card.content_format == ContentFormat.RECENT_NEWS:
-            secondary_fact = (
-                card.verified_facts[1]
-                if len(card.verified_facts) > 1
-                else primary_fact
-            )
-            return ScriptDraft(
-                source_card_id=card.id,
-                source_card_revision=card.revision,
-                video_title=card.title,
-                cover_text=f"{subject} 最新变化"[:30],
-                hook=f"{subject} 最近发生了什么？先看截至本次检索已经确认的变化。",
-                beats=[
-                    ScriptBeat(
-                        id="n01",
-                        narration=f"{subject} 最近发生了什么？先看截至本次检索已经确认的变化。",
-                        role="hook",
-                        visual_direction="核心主体处于变化发生前后的交界，关键物件开始运动。",
-                        source_refs=source_refs,
-                    ),
-                    ScriptBeat(
-                        id="n02",
-                        narration=(
-                            f"这次只围绕一个问题：{card.core_idea}"
-                            "先区分已经发生的事实、官方计划和仍待验证的效果。"
-                        ),
-                        role="context",
-                        visual_direction="同一信息空间里，已确认事实与待观察信号形成清楚层次。",
-                        source_refs=source_refs,
-                    ),
-                    ScriptBeat(
-                        id="n03",
-                        narration=primary_fact.text,
-                        role="explanation",
-                        visual_direction="延续同一主体，用具体动作和前后状态呈现第一条证据。",
-                        source_refs=source_refs,
-                    ),
-                    ScriptBeat(
-                        id="n04",
-                        narration=(
-                            secondary_fact.text
-                            + " 两个来源共同确认的部分可以转述，效果判断仍要保留边界。"
-                        ),
-                        role="application",
-                        visual_direction="从官方主体转向独立观察视角，保持相同视觉锚点。",
-                        source_refs=[secondary_fact.id],
-                    ),
-                    ScriptBeat(
-                        id="n05",
-                        narration=(
-                            "对普通关注者来说，接下来最值得看的不是宣传词，"
-                            "而是功能是否真正可用，以及后续是否出现独立证据。"
-                        ),
-                        role="closing",
-                        visual_direction="镜头回到核心主体并拉远，保留一个明确的后续观察信号。",
-                        on_screen_text="继续看可验证的变化",
-                        source_refs=[secondary_fact.id],
-                    ),
-                ],
-                closing="把结论留给下一条可验证的公开信息。",
-                estimated_duration_seconds=48,
-                caption=card.title,
-                hashtags=["最新动态", "科技新闻", "商业观察"],
-            )
         boundaries = "；".join(item.text for item in card.interpretation_boundary[:2])
+        facts = list(card.verified_facts)
+        first_fact = facts[0] if facts else None
+        second_fact = facts[1] if len(facts) > 1 else first_fact
+        is_news = card.content_format == ContentFormat.RECENT_NEWS
+        hook = (
+            f"{subject}最近发生了什么？先把已经确认的变化和仍待验证的判断分开。"
+            if is_news
+            else f"{card.parent_question} 真正需要分辨的，往往不是一句口号，而是它的依据和边界。"
+        )
         script = ScriptDraft(
+            schema_version="3.0",
             source_card_id=card.id,
             source_card_revision=card.revision,
             video_title=card.title,
-            cover_text=card.parent_question[:30],
-            hook=f"{card.parent_question} 这可能不是一句简单的是非题。",
+            cover_text=(f"{subject} 最新变化" if is_news else card.parent_question)[:30],
+            hook=hook,
             beats=[
                 ScriptBeat(
                     id="n01",
-                    narration=f"{card.parent_question} 这可能不是一句简单的是非题。",
+                    narration=hook,
                     role="hook",
-                    visual_direction="家长准备替孩子完成任务，孩子下意识把手收回。",
-                    source_refs=source_refs,
                 ),
                 ScriptBeat(
                     id="n02",
-                    narration=f"我们先从{subject}谈起。这个内容真正想解释的是：{card.core_idea}",
+                    narration=f"这次只围绕一个问题展开：{card.core_idea}",
                     role="context",
-                    visual_direction="亲子隔着餐桌对坐，中间留出一块安静的空间。",
-                    source_refs=source_refs,
                 ),
                 ScriptBeat(
                     id="n03",
-                    narration=primary_fact.text,
+                    narration=(
+                        first_fact.text
+                        if first_fact
+                        else "目前没有可核验材料证明这段表述的逐字归属，因此只能把它作为用户提供的命题来理解。"
+                    ),
                     role="explanation",
-                    visual_direction="孩子独立尝试，家长伸出的手停在半空并慢慢收回。",
-                    source_refs=source_refs,
+                    source_refs=([first_fact.id] if first_fact else []),
                 ),
                 ScriptBeat(
                     id="n04",
-                    narration="放回家庭场景里，重要的不是给父母贴标签，而是看见互动方式怎样影响孩子的参与感，并为下一次沟通留出一点调整空间。",
+                    narration=(
+                        second_fact.text + " 这条材料帮助我们继续限定结论。"
+                        if second_fact
+                        else "理解它时，先区分能够确认的事实、合理解释和仍然未知的部分。"
+                    ),
                     role="application",
-                    visual_direction="孩子自己完成一个具体动作，家长退后半步安静陪伴。",
-                    source_refs=source_refs,
+                    source_refs=([second_fact.id] if second_fact else []),
                 ),
                 ScriptBeat(
                     id="n05",
                     narration=(
-                        "今天可以先问自己：我是在替孩子完成，还是在帮助孩子逐渐学会自己完成？"
-                        + (f" 需要同时记住这个边界：{boundaries}" if boundaries else "")
+                        "所以，比急着接受一句有力量的话更重要的，是看清它在什么证据和语境下成立。"
+                        + (f" 同时保留这条边界：{boundaries}" if boundaries else "")
                     ),
                     role="closing",
-                    visual_direction="亲子一起走向开阔门廊，保持自然的一步距离。",
-                    on_screen_text="陪伴，不是接管",
-                    source_refs=source_refs,
+                    on_screen_text="先看依据，再下结论",
                 ),
             ],
-            closing="把答案留给下一次真实的家庭互动。",
+            closing="先看依据，再下结论。",
             estimated_duration_seconds=48,
             caption=card.title,
-            hashtags=["家庭教育", "教育心理学", "亲子沟通"],
+            hashtags=(
+                ["最新动态", "事实核验", "新闻观察"]
+                if is_news else ["人物观点", "知识解读", "事实核验"]
+            ),
         )
         return script
 
@@ -165,8 +112,6 @@ class TemplateScriptProvider:
         blocking = []
         if unknown:
             blocking.append(f"包含未知引用：{unknown}")
-        if any(not item.source_refs for item in script.narration_segments):
-            blocking.append("存在没有来源引用的旁白段落")
         return ScriptReview(
             passed=not blocking,
             claim_checks=[
@@ -228,16 +173,33 @@ class TemplateStoryboardProvider:
                 and compressed_ids == expected_ids
             )
         )
+        adaptive_media = not visual_types
         if (
-            not 5 <= shot_count <= 13
+            not 3 <= shot_count <= 12
             or any(not group for group in beat_groups)
             or not covers_script
-            or len(visual_types) != shot_count
-            or visual_types.count("video") != 3
-            or visual_types.count("image") != shot_count - 3
+            or (
+                not adaptive_media
+                and (
+                    len(visual_types) != shot_count
+                    or any(item not in {"image", "video"} for item in visual_types)
+                )
+            )
         ):
-            raise ValueError("模板分镜需要 5-13 个有序非空叙事段组")
+            raise ValueError("模板分镜需要 3-12 个有序非空叙事段组")
         segments = {item.id: item for item in script.beats}
+        selected_types = list(visual_types)
+        if adaptive_media:
+            selected_types = []
+            video_count = 0
+            for index, beat_ids in enumerate(beat_groups):
+                role = segments[beat_ids[0]].role
+                moving = index == 0 or role in {"example", "application"}
+                visual_type = (
+                    "video" if moving and video_count < 3 else "image"
+                )
+                selected_types.append(visual_type)
+                video_count += visual_type == "video"
         scenes = [
             (
                 "核心主体处于关键变化的动作起点，中景构图，前后状态形成清楚对比",
@@ -273,27 +235,28 @@ class TemplateStoryboardProvider:
                 segment_id=segment_id,
                 beat_ids=beat_ids,
                 narration_excerpt="\n".join(segments[item].text for item in beat_ids),
-                visual_type=visual_types[index - 1],
+                visual_type=selected_types[index - 1],
                 visual_intent=(
-                    f"用连续视觉叙事的第 {index} 个画面承载语义推进："
-                    f"{segment.visual_direction}"
+                    f"从本段旁白提炼第 {index} 个具体、可观察的语义变化"
                 ),
                 first_frame_prompt=(
-                    f"{segment.visual_direction}。{scene[0]}。"
+                    f"{scene[0]}。"
                     "竖屏构图，底部留出字幕安全区，无文字。"
                 ),
                 motion_prompt=scene[1],
             ))
+        input_payload = {
+            "script_hash": content_hash(script),
+            "base_style": base_style,
+            "beat_groups": beat_groups,
+        }
+        if visual_types:
+            input_payload["visual_types"] = visual_types
         return StoryboardPlan(
             shots=shots,
             model_id=self.name,
             prompt_version="template_storyboard_v1",
-            input_hash=content_hash({
-                "script_hash": content_hash(script),
-                "base_style": base_style,
-                "beat_groups": beat_groups,
-                "visual_types": visual_types,
-            }),
+            input_hash=content_hash(input_payload),
             created_at=timestamp(),
         )
 

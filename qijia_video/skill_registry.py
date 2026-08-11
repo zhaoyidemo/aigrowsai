@@ -1,8 +1,4 @@
-"""Versioned, data-backed content Skill registry.
-
-Skills own research, writing, domain visual policy and quality rules. Visual
-style and prompt composition are deliberately handled by separate registries.
-"""
+"""Versioned workflow presets for input routing and factual policy."""
 from __future__ import annotations
 
 import json
@@ -31,10 +27,6 @@ _MANIFEST_KEYS = {
     "compatible_formats",
     "default_for_formats",
     "research_mode",
-    "script_system_prompt",
-    "script_prompt_file",
-    "visual_policy_file",
-    "research_prompt_file",
     "policy_ids",
     "quality_rules",
 }
@@ -55,10 +47,6 @@ class ContentSkillDefinition:
     compatible_formats: tuple[ContentFormat, ...]
     default_for_formats: tuple[ContentFormat, ...]
     research_mode: SkillResearchMode
-    research_prompt: str
-    script_system_prompt: str
-    script_prompt: str
-    visual_policy: str
     policy_ids: tuple[str, ...]
     quality_rules: tuple[str, ...]
     manifest_hash: str
@@ -72,9 +60,9 @@ class ContentSkillDefinition:
             input_mode=self.input_mode,
             compatible_formats=list(self.compatible_formats),
             research_mode=self.research_mode,
-            research_prompt=self.research_prompt,
-            script_system_prompt=self.script_system_prompt,
-            visual_policy=self.visual_policy,
+            research_prompt="",
+            script_system_prompt="",
+            visual_policy="",
             policy_ids=list(self.policy_ids),
             quality_rules=list(self.quality_rules),
             manifest_hash=self.manifest_hash,
@@ -92,9 +80,6 @@ class ContentSkillDefinition:
             "research_mode": self.research_mode.value,
             "policy_ids": list(self.policy_ids),
             "quality_rules": list(self.quality_rules),
-            "generation_defaults": {
-                "script_prompt": self.script_prompt,
-            },
         }
 
 
@@ -127,22 +112,6 @@ def _skill_metadata(path: Path) -> tuple[str, str, str]:
     return name, description, "\n".join(lines[closing + 1:]).strip()
 
 
-def _read_reference(skill_root: Path, raw_path: Any) -> str:
-    relative = Path(str(raw_path or ""))
-    target = (skill_root / relative).resolve()
-    try:
-        target.relative_to(skill_root.resolve())
-    except ValueError as exc:
-        raise RuntimeError(f"Skill 引用了目录外文件：{raw_path}") from exc
-    try:
-        value = target.read_text(encoding="utf-8").strip()
-    except OSError as exc:
-        raise RuntimeError(f"无法读取 Skill 资源：{target}") from exc
-    if not value:
-        raise RuntimeError(f"Skill 资源不能为空：{target}")
-    return value
-
-
 def _load_definition(skill_root: Path) -> ContentSkillDefinition:
     skill_id, description, instructions = _skill_metadata(
         skill_root / "SKILL.md"
@@ -168,23 +137,11 @@ def _load_definition(skill_root: Path) -> ContentSkillDefinition:
         )
     if manifest["schema_version"] != "1.0":
         raise RuntimeError(f"不支持的 Skill manifest 版本：{skill_root}")
-    script_prompt = _read_reference(
-        skill_root, manifest["script_prompt_file"]
-    )
-    visual_policy = _read_reference(
-        skill_root, manifest["visual_policy_file"]
-    )
-    research_prompt = _read_reference(
-        skill_root, manifest["research_prompt_file"]
-    )
     hash_payload = {
         "skill_id": skill_id,
         "description": description,
         "instructions": instructions,
         "manifest": manifest,
-        "script_prompt": script_prompt,
-        "visual_policy": visual_policy,
-        "research_prompt": research_prompt,
     }
     try:
         definition = ContentSkillDefinition(
@@ -203,10 +160,6 @@ def _load_definition(skill_root: Path) -> ContentSkillDefinition:
                 for item in manifest["default_for_formats"]
             ),
             research_mode=SkillResearchMode(manifest["research_mode"]),
-            research_prompt=research_prompt,
-            script_system_prompt=str(manifest["script_system_prompt"]),
-            script_prompt=script_prompt,
-            visual_policy=visual_policy,
             policy_ids=tuple(str(item) for item in manifest["policy_ids"]),
             quality_rules=tuple(
                 str(item) for item in manifest["quality_rules"]
@@ -303,10 +256,7 @@ class ContentSkillRegistry:
                 f"Skill {definition.skill_id}@{definition.version} "
                 f"不支持内容格式 {card.content_format.value}"
             )
-        explicitly_set = set(settings.model_fields_set)
         effective = settings.model_copy(deep=True)
-        if "script_prompt" not in explicitly_set:
-            effective.script_prompt = definition.script_prompt
         effective.skill_id = definition.skill_id
         effective.skill_version = definition.version
         snapshot = definition.snapshot()
@@ -320,7 +270,6 @@ class ContentSkillRegistry:
             # expert-view writing and visual Skill.
             snapshot = snapshot.model_copy(update={
                 "research_mode": SkillResearchMode.NONE,
-                "research_prompt": "",
             })
         return effective, snapshot
 

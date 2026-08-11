@@ -5,14 +5,14 @@ description: 检索并讲解企业、产品、科技或商业主题的最新公�
 
 # 最新新闻口播
 
-把主题输入视为检索请求，而不是新闻事实。联网研究必须成功并形成可追溯证据，之后才能生成脚本。
+这是工作流预设，不是提示词包。它把主题输入视为检索请求而不是新闻事实，只负责研究模式、时间边界和来源政策；创作判断全部由任务冻结的 H3 CreativeBrief 负责。
 
 执行以下流程：
 
 1. 冻结任务创建时间与检索截止时间。
-2. 按 [research-prompt.md](references/research-prompt.md) 优先检索官方信源和独立信源。
+2. 优先检索官方或原始信源和可信独立信源。
 3. 只把与检索注释匹配且可追溯的证据写入来源卡；没有可追溯证据时停止，时间缺失、只有单一站点或来源类型不完整时醒目标注并进入人工审核。
-4. 使用 [script-prompt.md](references/script-prompt.md) 生成严格的 `ScriptDraft v2`。
-5. 使用 [visual-policy.md](references/visual-policy.md) 约束新闻画面的事实边界，不伪造界面、数字、Logo、人物或结果；画风由 Visual Style 提供，分镜、首帧和 I2V 提示词由固定 H3 编排层统一生成。
+4. 研究阶段只输出 EvidencePack，不设计钩子、内容角度或互动话术。
+5. 由 H3 生成唯一 CreativeBrief，再生成 ScriptDraft v3 与自适应视觉章节。
 
 明确区分已发生事实、官方计划、第三方判断和仍未确认的传闻。

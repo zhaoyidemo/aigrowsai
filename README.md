@@ -1,6 +1,6 @@
 # 齐家 AI 家庭教育内容工作台
 
-面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的研究与短视频生产服务。家庭教育仍是默认业务场景；Content Skill 管理研究边界、写作策略和内容视觉策略，视觉表现独立管理，H3 Prompt Writing 以原始输入为最高优先级，作为联网研究、脚本语义与视觉提示词的唯一内部编排层；Seedream、Seedance、TTS、Remotion、FFmpeg、存储、成本与任务状态机继续共用。
+面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的研究与短视频生产服务。家庭教育仍是默认业务场景；Content Skill 只负责输入路由、研究模式、事实政策和质量规则，Visual Style 只负责艺术语言。H3 Prompt Writing 把不可变原始输入与 EvidencePack 一次收敛为唯一 CreativeBrief，脚本和视觉导演共同复用这份总纲；Seedream、Seedance、TTS、Remotion、FFmpeg、存储、成本与任务状态机继续共用。
 
 环境变量中的管理员账号可以创建、启停同事账号，授予或收回工作台使用权限，并重置密码。同事可以查看团队创建的全部内容、成本和抖音效果，只能修改和继续执行自己创建的内容；管理员可以管理全部内容。
 
@@ -8,10 +8,10 @@
 
 当前内置两套 Skill：
 
-- `explain-expert-view@1.3.0`：思想、历史、教育、心理、科学与商业等领域的人物观点解读。H3 会先按完整输入编排出处、原文与语境研究；无法形成可靠简报时保留原始观点和明确边界继续。
-- `brief-recent-news@1.3.0`：科技、商业或通用最新新闻口播。用户输入仅是检索请求；至少需要一条与检索注释匹配的可追溯事实。时间缺失、单站点或来源类型不完整时会醒目标注并进入人工审核，只有没有可追溯证据时才停止。联网研究默认使用 `x-ai/grok-4.5`，通过 OpenRouter 托管的 Exa 工具完成检索，不需要额外的搜索 API Key，并与脚本模型独立配置。
+- `explain-expert-view@2.0.0`：思想、历史、教育、心理、科学与商业等领域的人物观点输入与出处核验工作流。无法形成可靠证据时保留原始观点并明确降级，绝不把用户表述冒充已核验事实或人物原话。
+- `brief-recent-news@2.0.0`：科技、商业或通用最新新闻研究工作流。用户输入仅是检索请求；至少需要一条与检索注释匹配的可追溯事实。时间缺失、单站点或来源类型不完整时会醒目标注并进入人工审核，只有没有可追溯证据时才停止。联网研究默认使用 `x-ai/grok-4.5`，通过 OpenRouter 托管的 Exa 工具完成检索，不需要额外的搜索 API Key，并与脚本模型独立配置。
 
-每个 Skill 位于 `qijia_video/content_skills/<skill-id>/`，由 `SKILL.md`、`manifest.json` 和 `references/` 中的研究、脚本及内容视觉策略组成。内容视觉策略只约束真实性、领域安全和允许表达的语义，不包含画风、构图或运镜。`skill_registry.py` 只加载符合固定 manifest 契约的目录，按内容格式推荐默认 Skill；创建任务时把 `skill_id`、`version`、manifest 哈希、研究策略、系统提示词、内容视觉策略和质量规则冻结到任务 JSON 中。后续修改 Skill 文件不会改变已创建任务，旧任务没有 `skill_snapshot` 时继续按原语义恢复。
+每个 Skill 位于 `qijia_video/content_skills/<skill-id>/`，只由 `SKILL.md` 与 `manifest.json` 定义工作流预设，不再拥有研究提示词、脚本提示词或视觉策略文件。`skill_registry.py` 按内容格式推荐默认 Skill；创建任务时冻结 `skill_id`、版本、manifest 哈希、研究模式、政策 ID 与质量规则。后续修改 Skill 文件不会改变已创建任务；旧快照中的提示词字段仍可读取，但新任务始终为空且不会进入运行时提示词。
 
 扩展新领域时只新增 Skill、对应输入适配和必要的研究 Provider 能力，不复制视频生产基础设施，也不允许 Skill 自由调用工具或改写自身。接口包括：
 
@@ -23,19 +23,19 @@
 
 工作台把“写什么”“长什么样”“怎样把意图写成生成提示词”拆成三个独立维度：
 
-- Content Skill：决定输入、研究、脚本结构、每段可见语义和内容真实性/安全边界，不决定艺术风格与镜头方法；
+- Content Skill：只决定输入方式、是否研究、事实/安全政策和质量规则，不生成内容角度、脚本结构或逐段画面；
 - Visual Style：只提供艺术语言与材质运动语法，目前提供“现代编辑插画”“编辑纸张拼贴”“纸艺定格讲解”；
-- Prompt Writing Profile：所有新任务固定使用 `h3-prompt-writing@1.1.0`。它从完整原始输入开始，先编译任务专属研究提示词和脚本语义，再统一生成分镜、首帧与 I2V 动作提示词；旧 `structured-multimodal@1.0.0` 仅用于读取历史任务。
+- Prompt Writing Profile：所有新任务固定使用 `h3-prompt-writing@2.0.0`。它先把原始输入与 EvidencePack 收敛为唯一 CreativeBrief，再让脚本、分镜、首帧与 I2V 动作提示词复用同一中心命题、论证路径和视觉母题；旧 `structured-multimodal@1.0.0` 仅用于读取历史任务。
 
 H3 编排和两种纸艺视觉风格是对 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 中提示词组织、纸张拼贴和纸艺定格方法的内部适配，没有复制其长流程门禁，也不引入 MiniMax 模型、API Key 或供应商调用。实际模型仍由现有 Provider 配置决定；今后替换图片或视频模型，只需调整 Provider 编译边界，不需要改写 Content Skill 或视觉风格资源。
 
 视觉风格位于 `qijia_video/visual_styles/`，内部提示词方法位于 `qijia_video/prompt_writing_profiles/`。创建任务时分别冻结 `visual_style_snapshot`、`prompt_writing_profile_snapshot` 及对应版本；旧任务没有这些快照时继续使用原提示词。冲突优先级固定为：事实/安全与领域边界 > 本章可见语义 > 参考素材已经定义的视觉属性 > 视觉风格对未定义属性的补全 > Provider 语法。参考图不是事实来源。只读目录接口为 `GET /api/qijia-video/visual-styles`。
 
-工作台创建区优先展示 Content Skill、带画面预览的 Visual Style 与一行生产规格；H3 架构和详细规格按需展开。Prompt Writing Profile 只读且自动启用，自定义脚本提示词必须为下一条任务显式开启，不写入浏览器，也不会改变 H3 或视觉风格。任务详情先展示当前动作、下一步与五个业务阶段，再按需展开本任务冻结的 Content Skill、Visual Style 与 Prompt Writing Profile；旧任务明确标记为兼容模式。
+工作台创建区优先展示任务类型、带画面预览的 Visual Style 与一行生产规格；H3 架构和详细规格按需展开。Prompt Writing Profile 只读且自动启用，前端不再提供自定义脚本提示词、固定图片数量或固定镜头数量入口。任务详情会把 EvidencePack 与 H3 CreativeBrief 分区展示，并保留当前动作、下一步和五个业务阶段；旧任务明确标记为兼容模式。
 
 成片阶段的单镜头重生成只接受编辑者填写的 `revision_intent`。服务端会把它与冻结的分镜语义、首帧、视觉风格、参考图边界和 H3 Profile 重新编译为 Provider 提示词；前端只读展示编译结果，不允许直接编辑或提交 Provider 提示词，旧请求未包含 `revision_intent` 时仍保持原指纹。这样局部修改不会绕过 H3，也不会重做旁白、图片章节或其他视频镜头。
 
-新任务 API 不再接受可编辑的 `seedance_prompt`，脚本确认页也不再暴露“全片画面导演设定”。调用方只提交 Visual Style；脚本确认前会按已发生调用、旁白字数、Seedream 张数和 3 段 Seedance 的 8–10 秒区间展示整单人民币刊例价预估，自有素材模式会明确说明未生成画面从实际费用扣除。工作台仍保留旧字段和旧 Profile 的读取能力，以便已经冻结的历史任务继续恢复和重试。
+新任务 API 不再接受前端可编辑的 `script_prompt`、`seedance_prompt`、`image_count` 或 `shot_count`，脚本确认页也不再暴露逐段画面导演轨。调用方只提交任务类型、Visual Style、画质与配音设置；成本预估按实际语义章节、首帧与必要的 AI 视频动态计算，自有素材模式会明确说明未生成画面从实际费用扣除。工作台仍保留旧字段和旧 Profile 的读取能力，以便已经冻结的历史任务继续恢复和重试。
 
 ## 当前真实链路
 
@@ -44,14 +44,13 @@ H3 编排和两种纸艺视觉风格是对 [MiniMax-H3](https://github.com/MiniM
 入口 B：人物 + 观点
 入口 C：最新新闻主题 + 关注角度
 三种入口汇入统一生产链路
-  → 选择 Content Skill 与 Visual Style，并冻结固定的 H3 Prompt Writing Profile
-  → 按 Skill 执行可选或强制研究
-  → OpenRouter 脚本
+  → 选择任务类型与 Visual Style，并冻结固定的 H3 Prompt Writing Profile
+  → 按工作流预设执行可选或强制研究，只生成 EvidencePack
+  → OpenRouter 单次生成唯一 H3 CreativeBrief 与 ScriptDraft v3
   → 人工确认脚本
   → 豆包 TTS 2.0 完整旁白
-  → H3 按原始输入编排研究提示词，OpenRouter 联网核验出处、原文与语境
-  → H3 结合研究简报与 Content Skill 编排脚本语义
-  → OpenRouter 按 H3 统一编排混合分镜与最终媒体提示词（固定 3 段视频，动态图片可选 2–10 段）
+  → H3 Visual Director 读取完整旁白与同一 CreativeBrief，按语义变化规划视觉章节
+  → 图片为默认媒介；仅在连续动作不可替代时使用视频，全片最多 3 段但不要求凑满
   → 可选：先按文字分镜连续上传自有图片 / 视频，并一次确认素材安排
   → Seedream 只为未上传素材的视觉章节生成首帧
   → Seedance 1.0 Pro Fast 只生成未被自有素材覆盖的视频镜头（复杂镜头可单独升级 2.0）
@@ -67,13 +66,13 @@ H3 编排和两种纸艺视觉风格是对 [MiniMax-H3](https://github.com/MiniM
 
 抖音趋势只用于解释“为什么值得研究”，不会自动成为来源卡中的已核验事实。生产链路不使用 Mock，也不会自动发布到抖音。Mock Provider 只存在于显式 CLI 演示和测试中。
 
-创建任务时可在前端设置动态图片数量，范围为 2–10，默认 10；视频数量始终为 3。系统不会把 5–8 段自然口播硬拆成同样数量的段落，而是按 TTS 真实时长安排连续视觉章节。每个视觉章节都需要 1 张 Seedream，因此默认任务共生成 13 张图片（10 张直接动态呈现，3 张作为视频首帧）；按默认 `¥0.22/张` 估算，图片部分约 `¥2.86`。数量在任务创建时冻结，可按任务需要选择 2–10 张动态图片，历史任务继续按原规格恢复，不会因升级新增费用。
+新任务不预设图片或视频数量。脚本先按 5–8 个自然语义变化形成连续口播，视觉导演再以语义边界规划章节，不会复制旁白、重复构图或为了达到配额拆镜。每个视觉章节生成一张 Seedream 图；图片默认直接动态呈现，只有连续动作、状态转变或镜头运动对理解不可替代时才继续生成 Seedance，最多 3 段但可以为 0。成本按实际章节与实际视频数计算。历史任务中已经冻结的固定数量仍按原规格恢复，不会因升级新增费用。
 
 混合制作有两个入口。脚本确认时可以勾选“先安排自有素材”：系统只生成正式旁白和文字分镜，暂停在付费图片、视频生成之前；编辑可连续上传多个镜头素材，上传和选择只做校验、转码与保存，不触发 AI 生成或 Remotion 渲染。一次确认素材安排后，Seedream 和 Seedance 只处理没有自有素材的镜头，再由 Remotion 合成和质检首版成片一次。未勾选时仍保持原有全自动首版流程。
 
 成片确认前仍可继续逐镜头混合制作：每个章节都可以保留 AI 素材，也可以上传 JPG、PNG、WebP 图片（最大 20 MB）或 MP4、MOV、WebM 视频（最大 200 MB）。生产环境由服务端签发短期 TOS PUT 地址，浏览器直传并显示进度，再以小型确认请求启动后台处理，避免大文件请求经过 Cloudflare/Railway 后触发 524。上传图片会完成格式校验，上传视频会先由 FFmpeg 转为静音 H.264、从开头截取，并在不足章节时长时冻结最后一帧；这些结果先作为“待应用修改”暂存，不会立即重渲染成片。编辑可以继续替换多个镜头、逐个或全部撤销，最后点击一次批量应用，由 Remotion 只合成和质检一次。上传、历史上传版本和 AI 版本都保留在任务中，可随时选择；任何一次处理、渲染或质检失败都不会覆盖上一版可确认成片，待应用清单也会保留以便重试。
 
-旁白只开放火山引擎公开的 3 个 Seed-TTS 2.0 音色：Vivi 2.0、流畅女声、儒雅逸辰；语速只开放 `1.0x / 1.1x / 1.2x`，新任务默认 `1.2x`，历史任务保持 `1.0x`。脚本确认页可以用真实开场旁白试听，单次最多 60 字、费用写入任务成本账本，同一页面内相同脚本/音色/语速的重复播放不会再次调用。正式配音完成后，字幕时间轴、图片章节和 3 段视频的剪辑位置统一按实际音频时长计算，而不是机械压缩旧时间轴。音色 ID 依据[火山引擎 TTS 更新说明](https://www.volcengine.com/docs/6561/162929?lang=en)，三档产品语速依据[火山引擎语速参数说明](https://www.volcengine.com/docs/6348/1807452?lang=zh)分别映射为 `speech_rate=0/10/20`。
+旁白只开放火山引擎公开的 3 个 Seed-TTS 2.0 音色：Vivi 2.0、流畅女声、儒雅逸辰；语速只开放 `1.0x / 1.1x / 1.2x`，新任务默认 `1.2x`，历史任务保持 `1.0x`。脚本确认页可以用真实开场旁白试听，单次最多 60 字、费用写入任务成本账本，同一页面内相同脚本/音色/语速的重复播放不会再次调用。正式配音完成后，字幕时间轴、图片章节和必要视频的剪辑位置统一按实际音频时长计算，而不是机械压缩旧时间轴。音色 ID 依据[火山引擎 TTS 更新说明](https://www.volcengine.com/docs/6561/162929?lang=en)，三档产品语速依据[火山引擎语速参数说明](https://www.volcengine.com/docs/6348/1807452?lang=zh)分别映射为 `speech_rate=0/10/20`。
 
 ## 抖音效果回流（一期）
 
@@ -135,8 +134,8 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 - `qijia_video/`：领域契约、工作流、Provider、API、鉴权和 Web 页面。
 - `qijia_video/content_skills/`、`qijia_video/skill_registry.py`：版本化内容工作流、兼容格式路由与内容快照冻结。
 - `qijia_video/visual_styles/`、`qijia_video/prompt_writing_profiles/`、`qijia_video/visual_style_registry.py`：模型无关的视觉风格、结构化多模态提示词方法与独立任务快照。
-- `qijia_video/prompt_orchestration.py`：把冻结的原始输入、H3 Profile 与 Content Skill 边界编译成可审计的研究提示词和脚本上游约束。
-- `qijia_video/visual_prompting.py`：按固定优先级把内容视觉策略、参考素材、视觉风格和 H3 方法编译为分镜规格，并把 H3 产出的首帧/I2V 提示词精简后交给媒体 Provider，不负责选择或调用模型。
+- `qijia_video/prompt_orchestration.py`：把冻结的原始输入与研究结果编译成唯一 EvidencePack，并附加 H3 CreativeBrief 方法；Content Skill 不注入写作提示词。
+- `qijia_video/visual_prompting.py`：按固定优先级把 CreativeBrief、参考素材、Visual Style 和 H3 方法编译为分镜规格，并把首帧/I2V 提示词精简后交给媒体 Provider，不负责选择或调用模型。
 - `qijia_video/infrastructure/postgres_repository.py`：来源卡与视频任务聚合仓储。
 - `qijia_video/accounts.py`、`qijia_video/account_api.py`：同事账号、密码哈希、会话失效与管理员 API。
 - `qijia_video/run_service.py`：后台任务进度、互斥和重启恢复。
@@ -225,7 +224,7 @@ node --test tests/qijia_video_frontend.test.js
 npm.cmd run typecheck --prefix video_renderer
 ```
 
-真实部署验收至少包括：登录、分别用人物观点与最新新闻 Skill 生成并确认脚本、完整旁白、按所选数量生成全部章节画面（默认 13 张）、三段视频、Remotion 成片、发布包下载、手填一条真实抖音作品链接并刷新作品数据、核对播放与四项互动指标、单视频与团队看板的 10 倍 ROI、排行和 CSV、与供应商账单抽样核对，以及服务重启后的任务与 Skill 快照可见性。
+真实部署验收至少包括：登录、分别用人物观点与最新新闻工作流检查 EvidencePack 与 CreativeBrief、生成并确认 ScriptDraft v3、完整旁白、按语义生成全部视觉章节与必要视频、Remotion 成片、发布包下载、手填一条真实抖音作品链接并刷新作品数据、核对播放与四项互动指标、单视频与团队看板的 10 倍 ROI、排行和 CSV、与供应商账单抽样核对，以及服务重启后的任务快照与旧任务兼容性。
 
 ## 数据边界
 

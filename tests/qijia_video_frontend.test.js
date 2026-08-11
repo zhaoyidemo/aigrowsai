@@ -80,15 +80,15 @@ test('visual styles are selected and frozen independently from content Skills an
 
 test('H3 is shown as the compiler from original input through research and media prompts', () => {
   assert.match(page, /<details id="generation-orchestration"/);
-  assert.match(page, /原始输入、内容约束、视觉语言与参考素材，由 H3 分阶段编译/);
-  assert.match(page, /先确定讲什么、依据什么/);
+  assert.match(page, /证据只负责事实，H3 CreativeBrief 一次决定全片怎么讲与怎么看/);
+  assert.match(page, /原始输入与 EvidencePack 收敛为唯一 CreativeBrief/);
   assert.match(page, /选择观众实际会看到的画面语言/);
   assert.match(page, /不提供事实，也不覆盖镜头语义/);
   assert.match(page, /id="prompt-profile-name"/);
   assert.match(page, /id="prompt-profile-version">自动启用/);
   assert.match(page, /唯一编排层/);
-  assert.match(page, /事实与安全[\s\S]*镜头语义[\s\S]*参考图属性[\s\S]*视觉风格补全[\s\S]*Provider 语法/);
-  assert.match(page, /研究提示词[\s\S]*脚本语义[\s\S]*分镜语义[\s\S]*首帧提示词[\s\S]*I2V 动作提示词/);
+  assert.match(page, /事实与安全[\s\S]*CreativeBrief[\s\S]*参考图属性[\s\S]*视觉风格补全[\s\S]*Provider 语法/);
+  assert.match(page, /EvidencePack[\s\S]*CreativeBrief[\s\S]*完整脚本[\s\S]*自适应分镜[\s\S]*媒体提示词/);
   assert.match(page, /模型只执行最终提示词，不参与职责分配/);
   assert.match(page, /<details id="job-generation-methods"/);
   assert.match(app, /function promptWritingProfile/);
@@ -207,16 +207,17 @@ test('generated video UI does not expose an automatic publish action', () => {
 
 test('creation intake asks only for one person and one viewpoint', () => {
   const manualStart = page.indexOf('id="source-card-form"');
-  const manualEnd = page.indexOf('id="generation-prompt-settings"');
+  const manualEnd = page.indexOf('id="news-topic-form"');
   const manualForm = page.slice(manualStart, manualEnd);
   assert.match(page, /name="person_name"/);
   assert.match(page, /name="viewpoint"/);
-  assert.match(page, /核验出处与语境，再生成脚本和画面提示词/);
+  assert.match(page, /核验出处与语境形成 EvidencePack/);
+  assert.match(page, /唯一 H3 CreativeBrief 统领完整脚本与后续视觉/);
   assert.doesNotMatch(manualForm, /阿尔弗雷德·阿德勒|真正影响孩子/);
   assert.doesNotMatch(manualForm, /name="source_material"|name="rights_confirmed"|补充出处|专业模式/);
   assert.doesNotMatch(page, /name="parent_question"|name="core_idea"|name="fact_text"|name="subject_name"/);
   assert.match(app, /\/source-cards\/idea/);
-  assert.ok(page.indexOf('id="generation-prompt-settings"') > page.indexOf('id="source-submit-button"'));
+  assert.ok(page.indexOf('id="generation-orchestration"') > page.indexOf('id="source-submit-button"'));
 });
 
 test('person viewpoint research is visible, cited, and non-blocking', () => {
@@ -224,7 +225,10 @@ test('person viewpoint research is visible, cited, and non-blocking', () => {
   assert.match(page, /没有可靠来源时会明确降级/);
   assert.match(page, /id="person-research-brief"/);
   assert.match(app, /function renderResearchBrief\(job\)/);
-  assert.match(app, /H3 输入驱动研究简报/);
+  assert.match(page, /EvidencePack 与 H3 CreativeBrief/);
+  assert.match(app, /人物观点 EvidencePack/);
+  assert.match(app, /H3 CreativeBrief/);
+  assert.match(app, /研究只提供证据、出处与不确定性/);
   assert.match(app, /出处核验/);
   assert.match(app, /可靠原文/);
   assert.match(app, /原始语境/);
@@ -310,8 +314,8 @@ test('workflow exposes five understandable stages with detailed action context',
   assert.match(app, /remotion_normalize: 2/);
   assert.match(styles, /grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/);
   assert.match(page, /id="next-action"/);
-  assert.match(page, /AI 视频始终保持 3 段/);
-  assert.match(page, /可选 2–10 段，默认 10 段/);
+  assert.match(page, /H3 按脚本中的真实语义变化决定章节数量/);
+  assert.match(page, /最多三段但不要求凑满/);
 });
 
 test('video quality is selectable and frozen into each new task', () => {
@@ -367,14 +371,9 @@ test('AI shots are visible storyboard cards with isolated version controls', () 
   assert.match(page, /id="shot-storyboard"/);
   assert.match(page, /id="shot-grid"/);
   assert.match(page, /id="shot-inspector"/);
-  assert.match(page, /3 段视频和 10 段动态图片会在这里逐个出现/);
-  assert.match(page, /id="image-count"[^>]+min="2"[^>]+max="10"[^>]+value="10"/);
-  assert.match(page, /默认 10 段/);
-  assert.match(page, /10 段动态图片 \+ 3 张视频首帧 = 13 张 Seedream/);
-  assert.match(page, /id="image-count-cost"/);
-  assert.match(app, /image_count: rawImageCount/);
-  assert.match(app, /shot_count: rawImageCount \+ 3/);
-  assert.match(app, /updateImageCountCost/);
+  assert.match(page, /H3 会按语义变化规划图片与必要的视频镜头/);
+  assert.doesNotMatch(page, /id="image-count"|默认 10 段|13 张 Seedream/);
+  assert.doesNotMatch(app, /image_count:|shot_count:|updateImageCountCost/);
   assert.match(app, /renderShotStoryboard\(job\)/);
   assert.match(app, /data-regenerate-shot/);
   assert.match(app, /data-frame-candidate/);
@@ -423,7 +422,7 @@ test('final video mixes generated videos and motion images without narration tex
 
 test('storyboard supports editor images and videos without losing AI versions', () => {
   assert.match(page, /混合制作故事板/);
-  assert.match(page, /上传自己的图片或视频，也可随时恢复 AI 素材/);
+  assert.match(page, /上传自己的图片或视频，也可恢复 AI 素材/);
   assert.match(app, /data-shot-upload/);
   assert.match(app, /image\/jpeg,image\/png,image\/webp/);
   assert.match(app, /video\/quicktime,video\/webm/);
@@ -490,26 +489,20 @@ test('person viewpoint flow starts a real job and polling resumes after refresh'
   assert.match(app, /fetchTask\(job\.last_run_task_id\)/);
 });
 
-test('custom script prompting is explicit, one-task-only, and never owns visuals', () => {
-  assert.match(page, /id="script-generation-prompt"/);
-  assert.match(page, /id="enable-custom-script-prompt"/);
-  assert.match(page, /为下一条任务显式启用自定义脚本策略/);
-  assert.match(page, /此内容不会保存到浏览器，也不会静默影响下一条任务/);
+test('H3 owns script prompting and creation payload exposes no competing controls', () => {
+  assert.doesNotMatch(page, /id="script-generation-prompt"|id="enable-custom-script-prompt"/);
   assert.doesNotMatch(page, /id="seedance-generation-prompt"/);
   assert.doesNotMatch(page, /id="job-seedance-prompt"/);
-  assert.match(page, /来源卡和 JSON 输出结构仍由系统自动附加/);
-  assert.match(page, /视觉提示词也始终由 H3 统一编排/);
+  assert.match(page, /证据只负责事实，H3 CreativeBrief 一次决定全片怎么讲与怎么看/);
   assert.match(app, /generation_settings: generationSettings/);
-  assert.doesNotMatch(app, /seedance_prompt: seedancePrompt/);
-  assert.doesNotMatch(app, /job-seedance-prompt/);
   assert.match(app, /video_resolution: videoResolution/);
-  assert.match(app, /restore-prompt-defaults/);
-  assert.match(app, /function customScriptPromptEnabled/);
-  assert.match(app, /customScriptPromptEnabled\(\)/);
-  assert.match(app, /delete settings\.script_prompt/);
+  const settingsSource = app.slice(
+    app.indexOf('function generationSettingsPayload'),
+    app.indexOf('async function api'),
+  );
+  assert.doesNotMatch(settingsSource, /script_prompt|seedance_prompt|image_count|shot_count/);
   assert.match(app, /localStorage\.removeItem\(LEGACY_PROMPT_STORAGE_KEY\)/);
-  assert.match(app, /setCustomScriptPromptMode\(false/);
-  assert.doesNotMatch(app, /legacyFixedStructure|legacyLongScript|legacySingleTrackScript|legacyPreRetentionHook|legacyScriptDirectorLayer/);
+  assert.doesNotMatch(app, /function customScriptPromptEnabled|restore-prompt-defaults|job-seedance-prompt/);
 });
 
 test('production UI prioritizes the current task and stays usable on mobile', () => {
@@ -552,25 +545,28 @@ test('final approval packages in the background task flow', () => {
   assert.match(app, /正在生成发布包/);
 });
 
-test('script review edits one flowing multi-track screenplay', () => {
+test('script review edits narration and screen text without a competing visual track', () => {
   assert.match(page, /id="script-beat-editor"/);
   assert.match(page, /id="script-video-title"/);
   assert.match(page, /id="script-length-status"/);
-  assert.match(page, /每一段都包含画面、旁白和可选的屏幕文字/);
-  assert.match(page, /只有旁白会进入配音/);
-  assert.match(app, /data-script-field="visual_direction"/);
+  assert.match(page, /这里只编辑完整旁白和可选屏幕文字/);
+  assert.match(page, /画面不会在脚本阶段逐段预设/);
+  assert.doesNotMatch(app, /data-script-field="visual_direction"/);
   assert.match(app, /data-script-field="narration"/);
   assert.match(app, /data-script-field="on_screen_text"/);
   assert.match(app, /parseLegacyScreenplay/);
   assert.match(app, /scriptForEditor/);
   assert.match(app, /narrationCharacterCount/);
   assert.match(app, /SCRIPT_HARD_MAX_CHARS/);
+  assert.match(app, /script\.schema_version = '3\.0'/);
+  assert.match(app, /完整脚本至少需要三个自然叙事段/);
+  assert.doesNotMatch(app, /完整脚本至少需要五个自然叙事段/);
   assert.doesNotMatch(page, /完整口播稿|建议 200-240 字|精简至 200-240 字/);
   assert.doesNotMatch(app, /actions\/condense-script/);
   assert.doesNotMatch(app, /splitNarrationText|确认时系统会先整理/);
 });
 
-test('legacy markdown screenplay is separated into visual, narration and screen-text tracks', () => {
+test('legacy markdown screenplay discards the old visual track during v3 migration', () => {
   const start = app.indexOf('function cleanScreenplayValue');
   const end = app.indexOf('const scriptRoleLabels');
   const source = app.slice(start, end);
@@ -585,7 +581,7 @@ test('legacy markdown screenplay is separated into visual, narration and screen-
   vm.runInNewContext(`${source}\nresult = parseLegacyScreenplay(input);`, context);
   assert.equal(context.result.length, 6);
   assert.equal(context.result[0].narration, '一个孩子成绩很好，为什么还可能教育失败？');
-  assert.equal(context.result[0].visual_direction, '孩子推开一只受伤的小鸟。');
+  assert.equal(context.result[0].visual_direction, undefined);
   assert.equal(context.result[0].on_screen_text, '会做题，不等于会感受。');
   assert.equal(context.result[5].role, 'closing');
   assert.equal(context.result[5].on_screen_text, '不忍心伤害世界。');

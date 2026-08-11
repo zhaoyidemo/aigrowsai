@@ -14,6 +14,7 @@ import httpx
 from pydantic import ValidationError
 
 from qijia_video.contracts import (
+    CreativeBrief,
     NewsResearchBrief,
     PersonResearchBrief,
     ProviderUsageRecord,
@@ -26,17 +27,21 @@ from qijia_video.contracts import (
     timestamp,
 )
 from qijia_video.errors import ProviderUnavailable, ResearchEvidenceUnavailable
+from qijia_video.prompt_orchestration import compile_script_prompt
 from qijia_video.prompts import (
-    DEFAULT_SCRIPT_PROMPT,
     SCRIPT_OUTPUT_CONTRACT,
     narration_char_count,
 )
+from qijia_video.tts_options import (
+    DEFAULT_TTS_SPEED_RATIO,
+    TTS_SCRIPT_CHARACTER_TARGETS,
+)
 
 
-SCRIPT_PROMPT_VERSION = "qijia_script_v13_narrative_progression"
-STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v11_h3_orchestrated"
-PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_research_v2_input_driven"
-NEWS_RESEARCH_PROMPT_VERSION = "recent_news_research_v5"
+SCRIPT_PROMPT_VERSION = "qijia_script_v14_single_creative_brief"
+STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v12_semantic_adaptive"
+PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_evidence_v3"
+NEWS_RESEARCH_PROMPT_VERSION = "recent_news_evidence_v6"
 OPENROUTER_REASONING_EFFORT = "high"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 PERSON_RESEARCH_MAX_COMPLETION_TOKENS = 48_000
@@ -45,14 +50,58 @@ STORYBOARD_MAX_COMPLETION_TOKENS = 128_000
 UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
 
 
+_CREATIVE_BRIEF_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "central_question": {"type": "string"},
+        "core_thesis": {"type": "string"},
+        "audience_promise": {"type": "string"},
+        "narrative_arc": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "tone": {"type": "string"},
+        "visual_concept": {"type": "string"},
+        "continuity_anchors": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "must_include": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "must_avoid": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "evidence_refs": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+    },
+    "required": [
+        "central_question",
+        "core_thesis",
+        "audience_promise",
+        "narrative_arc",
+        "tone",
+        "visual_concept",
+        "continuity_anchors",
+        "must_include",
+        "must_avoid",
+        "evidence_refs",
+    ],
+    "additionalProperties": False,
+}
+
+
 _SCRIPT_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
-        "schema_version": {"type": "string", "enum": ["2.0"]},
+        "creative_brief": _CREATIVE_BRIEF_RESPONSE_SCHEMA,
+        "schema_version": {"type": "string", "enum": ["3.0"]},
         "video_title": {"type": "string"},
         "cover_text": {"type": "string"},
-        "hook": {"type": "string"},
-        "closing": {"type": "string"},
         "caption": {"type": "string"},
         "hashtags": {
             "type": "array",
@@ -78,7 +127,6 @@ _SCRIPT_RESPONSE_SCHEMA = {
                         ],
                     },
                     "narration": {"type": "string"},
-                    "visual_direction": {"type": "string"},
                     "on_screen_text": {"type": "string"},
                     "source_refs": {
                         "type": "array",
@@ -95,7 +143,6 @@ _SCRIPT_RESPONSE_SCHEMA = {
                     "id",
                     "role",
                     "narration",
-                    "visual_direction",
                     "on_screen_text",
                     "source_refs",
                     "quote_ref",
@@ -105,11 +152,10 @@ _SCRIPT_RESPONSE_SCHEMA = {
         },
     },
     "required": [
+        "creative_brief",
         "schema_version",
         "video_title",
         "cover_text",
-        "hook",
-        "closing",
         "caption",
         "hashtags",
         "beats",
@@ -143,16 +189,6 @@ _PERSON_RESEARCH_RESPONSE_SCHEMA = {
         "attribution_note": {"type": "string"},
         "source_context": {"type": "string"},
         "summary": {"type": "string"},
-        "core_tension": {"type": "string"},
-        "audience_relevance": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "content_angles": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "interaction_opportunity": {"type": "string"},
         "evidence": {
             "type": "array",
             "items": {
@@ -205,10 +241,6 @@ _PERSON_RESEARCH_RESPONSE_SCHEMA = {
         "attribution_note",
         "source_context",
         "summary",
-        "core_tension",
-        "audience_relevance",
-        "content_angles",
-        "interaction_opportunity",
         "evidence",
         "uncertainties",
     ],
@@ -219,16 +251,6 @@ _NEWS_RESEARCH_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
-        "core_tension": {"type": "string"},
-        "audience_relevance": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "content_angles": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "interaction_opportunity": {"type": "string"},
         "evidence": {
             "type": "array",
             "items": {
@@ -276,10 +298,6 @@ _NEWS_RESEARCH_RESPONSE_SCHEMA = {
     },
     "required": [
         "summary",
-        "core_tension",
-        "audience_relevance",
-        "content_angles",
-        "interaction_opportunity",
         "evidence",
         "uncertainties",
     ],
@@ -298,6 +316,14 @@ _STORYBOARD_RESPONSE_SCHEMA = {
                     "beat_ids": {
                         "type": "array",
                         "items": {"type": "string"},
+                    },
+                    "visual_type": {
+                        "type": "string",
+                        "enum": ["image", "video"],
+                        "description": (
+                            "默认 image；只有连续动作或状态变化对理解不可替代时"
+                            "才选择 video，全片最多三段 video"
+                        ),
                     },
                     "visual_intent": {
                         "type": "string",
@@ -330,6 +356,7 @@ _STORYBOARD_RESPONSE_SCHEMA = {
                 "required": [
                     "segment_id",
                     "beat_ids",
+                    "visual_type",
                     "visual_intent",
                     "first_frame_prompt",
                     "motion_prompt",
@@ -471,29 +498,24 @@ def _normalize_storyboard_rows(
             / max(1, len(target_segments) - 1)
         )
         fallback = _STORYBOARD_FALLBACKS[fallback_index]
-        segment_direction = str(
-            getattr(segment, "visual_direction", "") or ""
-        ).strip()
         semantic_intent = (
-            f"{fallback['role']}："
-            + (
-                segment_direction
-                or "用连续视觉叙事承载本段信息变化"
-            )
+            f"{fallback['role']}：依据本段旁白提炼一个具体、可观察的语义变化"
         )
-        fallback_frame = (
-            f"{segment_direction}；{fallback['first_frame_prompt']}"
-            if segment_direction
-            else fallback["first_frame_prompt"]
+        requested_type = str(raw.get("visual_type") or "").strip()
+        visual_type = (
+            requested_type
+            if requested_type in {"image", "video"}
+            else ("video" if index == 0 else "image")
         )
         normalized.append({
             "segment_id": segment.id,
+            "visual_type": visual_type,
             "visual_intent": _storyboard_text(
                 raw.get("visual_intent"), semantic_intent, 600
             ),
             "first_frame_prompt": _storyboard_text(
                 raw.get("first_frame_prompt"),
-                fallback_frame,
+                fallback["first_frame_prompt"],
                 1800,
             ),
             "motion_prompt": _storyboard_text(
@@ -1040,7 +1062,7 @@ class OpenRouterScriptProvider:
         research_prompt: str = "",
         on_usage: UsageRecorder | None = None,
     ) -> PersonResearchBrief:
-        """Build a cited editorial brief without turning research into a gate."""
+        """Build a cited EvidencePack without making creative decisions."""
 
         if not self.configured:
             raise ProviderUnavailable(
@@ -1056,7 +1078,7 @@ class OpenRouterScriptProvider:
             f"用户原始表述：{viewpoint}\n"
             f"目标受众：{card.target_audience}\n"
             "不得预设学科或应用场景。先判断输入类型；若可能是人物原话，"
-            "先核验归属、可靠原文、出处、文字异同与上下文，再解释含义和现实价值。"
+            "先核验归属、可靠原文、出处、文字异同与上下文。"
         )
         prompt = (
             compiled_prompt
@@ -1068,9 +1090,8 @@ class OpenRouterScriptProvider:
             "verified_wording 只填写来源支持的可靠文字，未核验时必须为空。"
             "attribution_note 说明归属证据、文字差异或未核验原因；source_context 说明"
             "出处上下文及理解观点所需的时代、著作或专业语境。\n"
-            "summary 是可直接交给主编的研究结论；core_tension 只写一个由研究支持的核心张力；"
-            "audience_relevance 和 content_angles 各写 2-4 条，现实转译不得覆盖原意；"
-            "interaction_opportunity 设计具体、低压力、无需暴露隐私的讨论点。"
+            "summary 只概括来源能够支持的研究结论，不设计钩子、内容角度、"
+            "互动话术、受众应用或视觉方案。"
             "evidence 写 3-8 条可安全转述的事实，每条只支持一个 claim；source_url 必须"
             "原样使用本次检索结果 URL，source_title 必须与页面一致。source_kind 根据来源"
             "填写 official、primary、independent 或 other；evidence_type 根据证据作用填写"
@@ -1086,15 +1107,15 @@ class OpenRouterScriptProvider:
                 {
                     "role": "system",
                     "content": (
-                        "你是跨学科的严谨研究编辑。领域必须由原始输入决定；"
-                        "先核验出处和语境，再做解释与受众转译。"
-                        "严格区分来源事实、人物原话、合理解释和编辑角度，只返回有效 JSON。"
+                        "你是跨学科证据研究员。领域必须由原始输入决定；"
+                        "只核验出处、原文、语境、事实和不确定性，不做内容策划。"
+                        "严格区分来源事实、人物原话与解释，只返回有效 JSON。"
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
             label="人物主题研究",
-            schema_name="qijia_person_research_v2",
+            schema_name="qijia_person_evidence_v3",
             response_schema=_PERSON_RESEARCH_RESPONSE_SCHEMA,
             max_completion_tokens=PERSON_RESEARCH_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,
@@ -1226,8 +1247,6 @@ class OpenRouterScriptProvider:
             "verified_wording": verified_wording,
             "attribution_note": bounded_text("attribution_note", 1600),
             "source_context": bounded_text("source_context", 2000),
-            "audience_relevance": bounded_list("audience_relevance", 6),
-            "content_angles": bounded_list("content_angles", 5),
             "evidence": grounded_evidence[:8],
             "uncertainties": uncertainties[:8],
             "model_id": response.model_id,
@@ -1238,7 +1257,7 @@ class OpenRouterScriptProvider:
             return PersonResearchBrief.model_validate(generated)
         except (TypeError, ValidationError) as exc:
             raise ProviderUnavailable(
-                "人物主题研究返回内容不符合研究简报契约，已降级使用原始观点"
+                "人物主题研究返回内容不符合 EvidencePack 契约"
             ) from exc
 
     async def research_recent_news(
@@ -1287,10 +1306,9 @@ class OpenRouterScriptProvider:
             "source_url 必须原样使用本次检索结果中的 URL。published_at 写页面标注的发布时间，"
             "event_at 写事件发生时间；未知时"
             "填写空字符串，不得猜测。source_kind 只能是 official、primary、independent 或"
-            " other。summary 概括最新且最重要的变化；core_tension 写清它为什么值得现在关注；"
-            "audience_relevance、content_angles 各写 2-4 条；无法确认、来源冲突或可能同名混淆"
-            "的内容写入 uncertainties。summary、core_tension、audience_relevance 和"
-            "content_angles 均不得为空；只返回 schema 要求的字段和 JSON。"
+            " other。summary 只概括来源能够直接支持的最新变化；无法确认、来源冲突或"
+            "可能同名混淆的内容写入 uncertainties。不要设计钩子、内容角度、互动话术、"
+            "受众应用或视觉方案；只返回 schema 要求的字段和 JSON。"
         )
         response = await _openrouter_json_request(
             api_key=self.api_key,
@@ -1300,14 +1318,14 @@ class OpenRouterScriptProvider:
                 {
                     "role": "system",
                     "content": (
-                        "你是严谨的科技与商业新闻研究员。区分事件时间、发布时间、"
-                        "既成事实、官方计划、第三方判断和传闻，只返回有效 JSON。"
+                        "你是严谨的新闻证据研究员。区分事件时间、发布时间、"
+                        "既成事实、官方计划、第三方判断和传闻；不做内容策划，只返回有效 JSON。"
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
             label="最新新闻研究",
-            schema_name="recent_news_research_v5",
+            schema_name="recent_news_evidence_v6",
             response_schema=_NEWS_RESEARCH_RESPONSE_SCHEMA,
             max_completion_tokens=NEWS_RESEARCH_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,
@@ -1564,21 +1582,6 @@ class OpenRouterScriptProvider:
             bounded_text("summary", 2000)
             or grounded_evidence[0]["claim"]
         )
-        core_tension = (
-            bounded_text("core_tension", 1200)
-            or "这项变化的已确认信息与后续实际影响仍需区分。"
-        )
-        audience_relevance = bounded_strings("audience_relevance", 6)
-        if not audience_relevance:
-            audience_relevance = [
-                "需要区分已确认事实、官方计划与仍待验证的后续影响。"
-            ]
-        content_angles = bounded_strings("content_angles", 5)
-        if not content_angles:
-            content_angles = [
-                "先说明来源已经确认的变化，再说明仍待验证的部分。"
-            ]
-
         # Build the final contract from an explicit allowlist. Provider or
         # response-healing metadata must never leak into the persisted brief.
         generated = {
@@ -1587,13 +1590,6 @@ class OpenRouterScriptProvider:
             "topic": topic,
             "as_of": frozen_as_of,
             "summary": summary,
-            "core_tension": core_tension,
-            "audience_relevance": audience_relevance,
-            "content_angles": content_angles,
-            "interaction_opportunity": bounded_text(
-                "interaction_opportunity",
-                1000,
-            ),
             "evidence": grounded_evidence[:10],
             "uncertainties": uncertainties[:10],
             "model_id": response.model_id[:256],
@@ -1625,35 +1621,22 @@ class OpenRouterScriptProvider:
             ) from exc
 
     def _prompt(self, card: SourceCard, prompt: str | None = None) -> str:
-        sources = [item.model_dump(mode="json") for item in card.sources]
-        facts = [item.model_dump(mode="json") for item in card.verified_facts]
-        quotes = [item.model_dump(mode="json") for item in card.verified_quotes]
-        script_ref_ids = [
-            item.id for item in (*card.verified_facts, *card.verified_quotes)
-        ]
-        boundaries = [
-            item.model_dump(mode="json") for item in card.interpretation_boundary
-        ]
-        creative_prompt = str(prompt or DEFAULT_SCRIPT_PROMPT).strip()
-        return (
-            f"{creative_prompt}\n\n"
-            f"{SCRIPT_OUTPUT_CONTRACT}\n\n"
-            "【本次来源卡】\n"
-            f"内容领域：{card.content_domain.value}\n"
-            f"内容形式：{card.content_format.value}\n"
-            f"主题对象：{json.dumps(card.subject.model_dump(mode='json'), ensure_ascii=False)}\n"
-            f"选题：{card.title}\n"
-            f"目标受众：{card.target_audience}\n"
-            f"受众问题：{card.parent_question}\n"
-            f"核心材料：{card.core_idea}\n"
-            f"来源信息：{json.dumps(sources, ensure_ascii=False)}\n"
-            f"已核验事实：{json.dumps(facts, ensure_ascii=False)}\n"
-            f"已核验引文：{json.dumps(quotes, ensure_ascii=False)}\n"
-            "可用脚本引用 ID（beats.source_refs 只能从这里选择）："
-            f"{json.dumps(script_ref_ids, ensure_ascii=False)}\n"
-            "来源信息里的 source ID 只用于材料溯源，绝不能填写到 beats.source_refs。\n"
-            f"解释边界：{json.dumps(boundaries, ensure_ascii=False)}"
-        )
+        if prompt is None:
+            minimum, maximum = TTS_SCRIPT_CHARACTER_TARGETS[
+                DEFAULT_TTS_SPEED_RATIO
+            ]
+            creative_prompt = compile_script_prompt(
+                card,
+                profile=None,
+                research_brief=None,
+                minimum_characters=minimum,
+                maximum_characters=maximum,
+            )
+        else:
+            creative_prompt = str(prompt).strip()
+        # compile_script_prompt already contains the immutable input and the
+        # only EvidencePack. Appending the source card again diluted attention.
+        return f"{creative_prompt}\n\n{SCRIPT_OUTPUT_CONTRACT}"
 
     @staticmethod
     def _normalize_generated_source_refs(
@@ -1674,8 +1657,6 @@ class OpenRouterScriptProvider:
                 claims_by_source.setdefault(source_id, []).append(fact.id)
         for quote in card.verified_quotes:
             claims_by_source.setdefault(quote.source_id, []).append(quote.id)
-        sole_claim_id = next(iter(claim_ids)) if len(claim_ids) == 1 else None
-
         for segment in segments:
             if not isinstance(segment, dict):
                 continue
@@ -1700,8 +1681,6 @@ class OpenRouterScriptProvider:
             quote_ref = str(segment.get("quote_ref") or "").strip()
             if quote_ref in claim_ids:
                 normalized.append(quote_ref)
-            if not normalized and sole_claim_id:
-                normalized.append(sole_claim_id)
             segment["source_refs"] = list(dict.fromkeys(normalized))
 
     @staticmethod
@@ -1719,11 +1698,13 @@ class OpenRouterScriptProvider:
         self, card: SourceCard, generated: dict
     ) -> ScriptDraft:
         try:
+            generated = dict(generated)
+            generated.pop("creative_brief", None)
             self._normalize_generated_source_refs(card, generated)
             char_count = narration_char_count(
                 self._generated_narration_text(generated)
             )
-            generated["schema_version"] = "2.0"
+            generated["schema_version"] = "3.0"
             generated["source_card_id"] = card.id
             generated["source_card_revision"] = card.revision
             generated["estimated_duration_seconds"] = max(
@@ -1748,6 +1729,44 @@ class OpenRouterScriptProvider:
             raise ProviderUnavailable(
                 "脚本模型返回内容不符合工作台契约，请重新生成"
             ) from exc
+
+    def _creative_brief_from_generated(
+        self,
+        card: SourceCard,
+        generated: dict,
+        *,
+        model_id: str,
+        prompt: str,
+    ) -> CreativeBrief:
+        raw = generated.get("creative_brief")
+        if not isinstance(raw, dict):
+            raise ProviderUnavailable("脚本模型没有返回 H3 CreativeBrief")
+        payload = dict(raw)
+        payload.update({
+            "schema_version": "1.0",
+            "model_id": model_id,
+            "prompt_version": SCRIPT_PROMPT_VERSION,
+            "input_hash": content_hash({
+                "card": card.model_dump(mode="json"),
+                "prompt": prompt,
+            }),
+            "generated_at": timestamp(),
+        })
+        try:
+            brief = CreativeBrief.model_validate(payload)
+        except (TypeError, ValidationError) as exc:
+            raise ProviderUnavailable(
+                "脚本模型返回的 H3 CreativeBrief 不符合契约"
+            ) from exc
+        allowed_refs = {
+            item.id for item in (*card.verified_facts, *card.verified_quotes)
+        }
+        unknown = sorted(set(brief.evidence_refs) - allowed_refs)
+        if unknown:
+            raise ProviderUnavailable(
+                f"H3 CreativeBrief 引用了未知证据：{unknown}"
+            )
+        return brief
 
     async def generate(
         self, card: SourceCard, prompt: str | None = None
@@ -1777,19 +1796,37 @@ class OpenRouterScriptProvider:
         system_prompt: str | None = None,
         on_usage: UsageRecorder | None = None,
     ) -> ScriptDraft:
+        _, script = await self.generate_with_brief(
+            card,
+            prompt,
+            system_prompt=system_prompt,
+            on_usage=on_usage,
+        )
+        return script
+
+    async def generate_with_brief(
+        self,
+        card: SourceCard,
+        prompt: str | None = None,
+        *,
+        system_prompt: str | None = None,
+        on_usage: UsageRecorder | None = None,
+    ) -> tuple[CreativeBrief, ScriptDraft]:
         if not self.configured:
             raise ProviderUnavailable(
                 "真实脚本生成未配置：请设置 OPENROUTER_API_KEY"
             )
+        user_prompt = self._prompt(card, prompt)
         messages = [
             {
                 "role": "system",
                 "content": system_prompt or (
-                    "你是严谨的知识短视频主编。"
-                    "严格遵守来源边界，只返回有效 JSON。"
+                    "你是本任务唯一的 H3 Creative Director 和知识短视频主编。"
+                    "先收敛唯一 CreativeBrief，再按它写完整脚本；严格遵守证据边界，"
+                    "不要逐段导演画面，只返回有效 JSON。"
                 ),
             },
-            {"role": "user", "content": self._prompt(card, prompt)},
+            {"role": "user", "content": user_prompt},
         ]
         response = await _openrouter_json_request(
             api_key=self.api_key,
@@ -1797,7 +1834,7 @@ class OpenRouterScriptProvider:
             model=self.model,
             messages=messages,
             label="脚本生成",
-            schema_name="qijia_script_draft_v2",
+            schema_name="qijia_script_draft_v3",
             response_schema=_SCRIPT_RESPONSE_SCHEMA,
             max_completion_tokens=SCRIPT_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,
@@ -1806,7 +1843,13 @@ class OpenRouterScriptProvider:
             on_usage=on_usage,
         )
 
-        return self._script_from_generated(card, response.data)
+        brief = self._creative_brief_from_generated(
+            card,
+            response.data,
+            model_id=response.model_id,
+            prompt=user_prompt,
+        )
+        return brief, self._script_from_generated(card, response.data)
 
     async def review(self, card: SourceCard, script: ScriptDraft) -> ScriptReview:
         known_fact_ids = {item.id for item in card.verified_facts}
@@ -1819,8 +1862,6 @@ class OpenRouterScriptProvider:
             unknown = sorted(set(segment.source_refs) - known_ids)
             if unknown:
                 blocking.append(f"段落 {segment.id} 包含未知引用：{unknown}")
-            if not segment.source_refs:
-                blocking.append(f"段落 {segment.id} 没有来源引用")
         missing_boundaries = [
             item.id
             for item in card.interpretation_boundary
@@ -1920,13 +1961,18 @@ class OpenRouterStoryboardProvider:
             )
         expected_beat_ids = [item.id for item in script.beats]
         shot_count = len(beat_groups)
+        adaptive_media = not visual_types
         if (
-            not 5 <= shot_count <= 13
+            not 3 <= shot_count <= 12
             or any(not group for group in beat_groups)
             or not _beat_groups_cover_script(beat_groups, expected_beat_ids)
-            or len(visual_types) != shot_count
-            or visual_types.count("video") != 3
-            or visual_types.count("image") != shot_count - 3
+            or (
+                not adaptive_media
+                and (
+                    len(visual_types) != shot_count
+                    or any(item not in {"image", "video"} for item in visual_types)
+                )
+            )
         ):
             raise ProviderUnavailable(
                 "镜头分组和媒介分配必须按顺序完整覆盖全部叙事段"
@@ -1944,20 +1990,37 @@ class OpenRouterStoryboardProvider:
             "script_hash": content_hash(script),
             "base_style": base_style,
             "beat_groups": beat_groups,
-            "visual_types": visual_types,
         }
+        if visual_types:
+            input_payload["visual_types"] = visual_types
         output_skeleton = json.dumps({
             "shots": [
                 {
                     "segment_id": group[0].id,
                     "beat_ids": [item.id for item in group],
+                    "visual_type": (
+                        visual_types[index] if visual_types else "image"
+                    ),
                     "visual_intent": "",
                     "first_frame_prompt": "",
                     "motion_prompt": "",
                 }
-                for group in grouped_beats
+                for index, group in enumerate(grouped_beats)
             ],
         }, ensure_ascii=False)
+        media_instruction = (
+            "各章媒介已经由历史任务冻结，不得自行更改："
+            + "；".join(
+                f"第 {index} 章为 {visual_type}"
+                for index, visual_type in enumerate(visual_types, 1)
+            )
+            if visual_types
+            else (
+                "请根据每章可见语义选择媒介。image 是默认选择；只有连续动作、"
+                "状态转变或镜头运动对理解不可替代时才选择 video。全片最多三段 "
+                "video，不需要凑满，抽象解释和静态关系优先 image"
+            )
+        )
         prompt = (
             "严格执行下方【统一基础规格】中的唯一提示词编排方法，不引入或叠加"
             "第二套导演方法。\n\n"
@@ -1965,16 +2028,11 @@ class OpenRouterStoryboardProvider:
             "章节，每章可能承载一个或多个相邻叙事段；不得遗漏、合并或重排。先在内部建立"
             "全片主体、空间、关键物件和状态变化，再逐章推进。相邻章节可以承接同一动作的"
             "不同阶段、景别或视角，但不能重复同一构图或重新发明主体。\n\n"
-            "各章媒介已经根据真实旁白时长确定，不得自行更改："
-            + "；".join(
-                f"第 {index} 章为 {visual_type}"
-                for index, visual_type in enumerate(visual_types, 1)
-            )
-            + "。image 章节需要首帧与后期取景方向；video 章节需要首帧和可直接用于"
+            f"{media_instruction}。image 章节需要首帧与后期取景方向；"
+            "video 章节需要首帧和可直接用于"
             "首帧驱动 I2V 的 motion_prompt，具体写法完全服从统一基础规格。\n\n"
             "第一章直接处在冲突、反常识结果或关键选择中，不先用空镜、主体入场或环境介绍；"
-            "动作从第一帧发生，前 2 秒让主体关系和矛盾可见，前 5 秒出现第二层可见信息。"
-            "钩子必须来自内容本身，不能用"
+            "从第一帧就让主体关系和矛盾可见。钩子必须来自内容本身，不能用"
             "夸张惊吓、焦虑表演或虚假危机。\n\n"
             "字段职责必须严格分离：visual_intent 只用一句话写观众必须看懂的主体、关系、"
             "变化或结果，不写画风、色彩、材质、构图、景别、运镜和通用禁用项。"
@@ -1982,22 +2040,23 @@ class OpenRouterStoryboardProvider:
             "完整落实本章画面。motion_prompt 对 video 是可直接发送给 I2V 模型的提示词，"
             "对 image 只写后期取景方向。不要在这些字段里复述方法说明、字段标签或整段"
             "通用限制，系统会在媒体提交前统一附加一次硬边界。\n\n"
-            "每段 visual_direction 只提供内容语义。你负责依据统一基础规格把语义编译成"
-            "完整视觉提示词；on_screen_text 只供后期排版参考，绝不能变成画内文字。"
+            "直接从完整旁白与冻结的 CreativeBrief 提炼本章可见语义；"
+            "on_screen_text 只供后期排版参考，绝不能变成画内文字。"
             "如果基础规格包含参考素材规则，只让参考图约束其中已经定义的视觉属性，不得让"
             "参考图覆盖事实、安全和本章语义。\n\n"
-            "严格复制下面 JSON 骨架，只填写三个空字符串字段；不得新增、删除、合并或"
-            "重排 shots，不得修改 segment_id 或 beat_ids。最终只返回这一个 JSON 对象：\n"
+            "严格复制下面 JSON 骨架；不得新增、删除、合并或重排 shots，不得修改 "
+            "segment_id 或 beat_ids。自适应任务可修改 visual_type，其他字段完整填写。"
+            "最终只返回这一个 JSON 对象：\n"
             f"{output_skeleton}\n\n"
             f"【统一基础规格】{base_style}\n"
             f"【{shot_count} 个视觉章节】\n"
             + "\n".join(
                 (
-                    f"章节 {index}（{visual_types[index - 1]}，"
+                    f"章节 {index}（"
+                    f"{visual_types[index - 1] if visual_types else '媒介待规划'}，"
                     f"{','.join(item.id for item in group)}）\n"
                     + "\n".join(
                         f"- 旁白：{item.narration}\n"
-                        f"  画面意图：{item.visual_direction}\n"
                         f"  后期屏幕文字：{item.on_screen_text or '无'}"
                         for item in group
                     )
@@ -2020,7 +2079,7 @@ class OpenRouterStoryboardProvider:
                 {"role": "user", "content": prompt},
             ],
             label="分镜生成",
-            schema_name="qijia_storyboard_v4",
+            schema_name="qijia_storyboard_v5",
             response_schema=_STORYBOARD_RESPONSE_SCHEMA,
             max_completion_tokens=STORYBOARD_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,
@@ -2031,6 +2090,18 @@ class OpenRouterStoryboardProvider:
         raw_shots = _normalize_storyboard_rows(
             response.data.get("shots"), target_segments
         )
+        selected_types = (
+            list(visual_types)
+            if visual_types
+            else [str(item.get("visual_type") or "image") for item in raw_shots]
+        )
+        if not visual_types:
+            kept_videos = 0
+            for index, value in enumerate(selected_types):
+                if value == "video" and kept_videos < 3:
+                    kept_videos += 1
+                else:
+                    selected_types[index] = "image"
         shots: list[StoryboardShot] = []
         try:
             for index, (raw, group) in enumerate(
@@ -2044,7 +2115,7 @@ class OpenRouterStoryboardProvider:
                     segment_id=segment.id,
                     beat_ids=[item.id for item in group],
                     narration_excerpt="\n".join(item.narration for item in group),
-                    visual_type=visual_types[index - 1],
+                    visual_type=selected_types[index - 1],
                     visual_intent=str(raw.get("visual_intent") or ""),
                     first_frame_prompt=str(raw.get("first_frame_prompt") or ""),
                     motion_prompt=str(raw.get("motion_prompt") or ""),

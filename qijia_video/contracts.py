@@ -13,11 +13,9 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from qijia_video.prompts import (
-    DEFAULT_IMAGE_CHAPTER_COUNT,
     DEFAULT_SCRIPT_PROMPT,
     DEFAULT_SEEDANCE_PROMPT,
     MAX_IMAGE_CHAPTER_COUNT,
-    MIN_IMAGE_CHAPTER_COUNT,
 )
 from qijia_video.tts_options import (
     DEFAULT_TTS_SPEED_RATIO,
@@ -196,8 +194,10 @@ class SourceCardInput(ContractModel):
     title: str = Field(min_length=1, max_length=300)
     core_idea: str = Field(min_length=1, max_length=2000)
     parent_question: str = Field(min_length=1, max_length=500)
-    sources: list[SourceEntry] = Field(min_length=1, max_length=20)
-    verified_facts: list[VerifiedFact] = Field(min_length=1, max_length=50)
+    # Raw creator input is not evidence. Research-backed workflows may start
+    # with an empty evidence set and populate it after retrieval.
+    sources: list[SourceEntry] = Field(default_factory=list, max_length=20)
+    verified_facts: list[VerifiedFact] = Field(default_factory=list, max_length=50)
     verified_quotes: list[VerifiedQuote] = Field(default_factory=list, max_length=30)
     interpretation_boundary: list[InterpretationBoundary] = Field(
         default_factory=list, max_length=30
@@ -260,21 +260,8 @@ class PersonViewpointInput(ContractModel):
             parent_question=(
                 f"这段观点在{person_name}的原始语境中是什么意思，今天为什么值得理解？"
             ),
-            sources=[{
-                "id": "source_01",
-                "type": "other",
-                "title": f"用户输入的创作命题：{person_name}"[:500],
-                "locator": "用户输入的人物与观点",
-                "rights_status": "verified_for_citation",
-            }],
-            verified_facts=[{
-                "id": "fact_01",
-                "text": (
-                    f"用户为本任务提供的原始观点文本是：“{viewpoint}”。"
-                    "这只证明创作输入，不证明人物归属、逐字表述或历史出处。"
-                ),
-                "source_refs": ["source_01"],
-            }],
+            sources=[],
+            verified_facts=[],
             interpretation_boundary=[{
                 "id": "boundary_01",
                 "text": (
@@ -311,7 +298,6 @@ class NewsTopicInput(ContractModel):
     def to_source_card_input(self) -> SourceCardInput:
         topic = re.sub(r"\s+", " ", self.topic).strip()
         focus = re.sub(r"\s+", " ", self.focus).strip()
-        created_at = datetime.now(BEIJING_TZ).isoformat(timespec="seconds")
         return SourceCardInput(
             content_domain=self.content_domain,
             content_format=ContentFormat.RECENT_NEWS,
@@ -320,21 +306,8 @@ class NewsTopicInput(ContractModel):
             title=(focus or f"{topic} 最新公开动态")[:300],
             core_idea=focus or f"检索并解释 {topic} 截至任务创建时刻的最新公开动态。",
             parent_question=f"{topic} 最近发生了什么，为什么值得关注？"[:500],
-            sources=[{
-                "id": "request_source_01",
-                "type": "other",
-                "title": f"用户创作请求：{topic}"[:500],
-                "locator": f"任务创建时间 {created_at}",
-                "rights_status": "verified_for_citation",
-            }],
-            verified_facts=[{
-                "id": "request_context_01",
-                "text": (
-                    f"用户请求检索主题“{topic}”的最新公开动态；"
-                    "这条请求本身不是新闻事实，不得作为新闻结论。"
-                ),
-                "source_refs": ["request_source_01"],
-            }],
+            sources=[],
+            verified_facts=[],
             interpretation_boundary=[{
                 "id": "news_boundary_01",
                 "text": (
@@ -504,13 +477,11 @@ class PersonResearchBrief(ContractModel):
     attribution_note: str = Field(default="", max_length=1600)
     source_context: str = Field(default="", max_length=2000)
     summary: str = Field(min_length=1, max_length=2000)
-    core_tension: str = Field(min_length=1, max_length=1200)
-    audience_relevance: list[str] = Field(
-        default_factory=list, min_length=1, max_length=6
-    )
-    content_angles: list[str] = Field(
-        default_factory=list, min_length=1, max_length=5
-    )
+    # Compatibility-only editorial fields. New research output leaves them
+    # empty; creative judgment belongs to the single H3 creative brief.
+    core_tension: str = Field(default="", max_length=1200)
+    audience_relevance: list[str] = Field(default_factory=list, max_length=6)
+    content_angles: list[str] = Field(default_factory=list, max_length=5)
     interaction_opportunity: str = Field(default="", max_length=1000)
     evidence: list[PersonResearchEvidence] = Field(
         default_factory=list, min_length=1, max_length=8
@@ -529,13 +500,11 @@ class NewsResearchBrief(ContractModel):
     topic: str = Field(min_length=2, max_length=300)
     as_of: str = Field(min_length=1, max_length=64)
     summary: str = Field(min_length=1, max_length=2000)
-    core_tension: str = Field(min_length=1, max_length=1200)
-    audience_relevance: list[str] = Field(
-        default_factory=list, min_length=1, max_length=6
-    )
-    content_angles: list[str] = Field(
-        default_factory=list, min_length=1, max_length=5
-    )
+    # Compatibility-only editorial fields. Research now emits evidence and
+    # uncertainty, not hooks, angles or audience strategy.
+    core_tension: str = Field(default="", max_length=1200)
+    audience_relevance: list[str] = Field(default_factory=list, max_length=6)
+    content_angles: list[str] = Field(default_factory=list, max_length=5)
     interaction_opportunity: str = Field(default="", max_length=1000)
     evidence: list[PersonResearchEvidence] = Field(
         default_factory=list, min_length=1, max_length=10
@@ -604,7 +573,7 @@ class ResearchDiagnostics(ContractModel):
 
 
 class ScriptBeat(ContractModel):
-    """One semantic beat with independent spoken, visual and editorial tracks."""
+    """One semantic script beat; visual_direction is v2 compatibility only."""
 
     id: str = Field(min_length=1, max_length=64)
     narration: str = Field(min_length=1, max_length=2000)
@@ -618,6 +587,8 @@ class ScriptBeat(ContractModel):
         "application",
         "closing",
     ]
+    # Historical ScriptDraft v2 field. H3 v3 assigns visuals only after the
+    # narration and CreativeBrief have been completed.
     visual_direction: str = Field(default="", max_length=1200)
     on_screen_text: str = Field(default="", max_length=80)
     source_refs: list[str] = Field(default_factory=list)
@@ -659,7 +630,7 @@ NarrationSegment = ScriptBeat
 
 
 class ScriptDraft(ContractModel):
-    schema_version: Literal["1.0", "2.0"] = "2.0"
+    schema_version: Literal["1.0", "2.0", "3.0"] = "3.0"
     source_card_id: str
     source_card_revision: int = Field(ge=1)
     video_title: str = Field(min_length=1, max_length=200)
@@ -695,10 +666,11 @@ class ScriptDraft(ContractModel):
                     "ScriptDraft v2 的每个叙事段都必须包含 visual_direction："
                     + "、".join(missing_visuals)
                 )
+        if self.schema_version in {"2.0", "3.0"}:
             if self.beats[0].role != "hook" or self.beats[-1].role != "closing":
-                raise ValueError("ScriptDraft v2 必须以 hook 开始并以 closing 收束")
+                raise ValueError("ScriptDraft 必须以 hook 开始并以 closing 收束")
             # Compatibility fields are derived mirrors, never a second source
-            # of truth in v2.
+            # of truth in v2/v3.
             object.__setattr__(self, "hook", self.beats[0].narration)
             object.__setattr__(self, "closing", self.beats[-1].narration)
         return self
@@ -762,9 +734,9 @@ class ContentSkillSnapshot(ContractModel):
     compatible_formats: list[ContentFormat] = Field(min_length=1)
     research_mode: SkillResearchMode = SkillResearchMode.NONE
     research_prompt: str = Field(default="", max_length=12000)
-    script_system_prompt: str = Field(min_length=1, max_length=4000)
-    # Content Skills define what may be shown, never how it should be styled
-    # or animated. Old frozen jobs omit this field and remain readable.
+    # Compatibility-only prompt fields. Workflow presets created after v2
+    # leave these empty and contribute only routing and factual policy.
+    script_system_prompt: str = Field(default="", max_length=4000)
     visual_policy: str = Field(default="", max_length=3200)
     policy_ids: list[str] = Field(default_factory=list, max_length=30)
     quality_rules: list[str] = Field(default_factory=list, max_length=30)
@@ -814,10 +786,11 @@ class PromptWritingProfileSnapshot(ContractModel):
     )
     display_name: str = Field(min_length=1, max_length=120)
     description: str = Field(min_length=1, max_length=1000)
-    # Added in h3-prompt-writing@1.1.0. Empty defaults preserve historical
-    # frozen snapshots whose prompt method only covered visual generation.
+    # research_framework/script_framework preserve frozen pre-v2 snapshots;
+    # H3 v2 owns writing through one creative_brief_framework instead.
     research_framework: str = Field(default="", max_length=6000)
     script_framework: str = Field(default="", max_length=6000)
+    creative_brief_framework: str = Field(default="", max_length=6000)
     planning_framework: str = Field(min_length=1, max_length=4000)
     image_framework: str = Field(min_length=1, max_length=4000)
     video_framework: str = Field(min_length=1, max_length=4000)
@@ -839,6 +812,26 @@ class ResearchPromptSnapshot(ContractModel):
     prompt_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     prompt: str = Field(min_length=1, max_length=20000)
     compiled_at: str = Field(min_length=1, max_length=64)
+
+
+class CreativeBrief(ContractModel):
+    """The single H3-owned creative decision record for one video."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    central_question: str = Field(min_length=1, max_length=500)
+    core_thesis: str = Field(min_length=1, max_length=1200)
+    audience_promise: str = Field(min_length=1, max_length=800)
+    narrative_arc: list[str] = Field(min_length=3, max_length=8)
+    tone: str = Field(min_length=1, max_length=500)
+    visual_concept: str = Field(min_length=1, max_length=1000)
+    continuity_anchors: list[str] = Field(default_factory=list, max_length=8)
+    must_include: list[str] = Field(default_factory=list, max_length=12)
+    must_avoid: list[str] = Field(default_factory=list, max_length=12)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=50)
+    model_id: str = Field(default="", max_length=256)
+    prompt_version: str = Field(default="", max_length=128)
+    input_hash: str = Field(default="", pattern=r"^$|^[a-f0-9]{64}$")
+    generated_at: str = Field(default="", max_length=64)
 
 
 class GenerationSettings(ContractModel):
@@ -889,17 +882,17 @@ class GenerationSettings(ContractModel):
     video_resolution: Literal["480p", "720p", "1080p"] = "1080p"
     tts_voice_id: TtsVoiceId = DEFAULT_TTS_VOICE_ID
     tts_speed_ratio: TtsSpeedRatio = DEFAULT_TTS_SPEED_RATIO
-    # 1.0 Pro Fast keeps native 1080P while making the default three-shot
-    # workflow materially cheaper. 2.0 remains an explicit per-shot upgrade.
+    # 1.0 Pro Fast remains the efficient default when H3 decides motion is
+    # semantically necessary. 2.0 remains an explicit per-shot upgrade.
     seedance_model: SeedanceModelId = SEEDANCE_EFFICIENT_MODEL
     image_count: int = Field(
-        default=DEFAULT_IMAGE_CHAPTER_COUNT,
-        ge=MIN_IMAGE_CHAPTER_COUNT,
+        default=0,
+        ge=0,
         le=MAX_IMAGE_CHAPTER_COUNT,
     )
     shot_count: int = Field(
-        default=DEFAULT_IMAGE_CHAPTER_COUNT + 3,
-        ge=MIN_IMAGE_CHAPTER_COUNT + 3,
+        default=0,
+        ge=0,
         le=MAX_IMAGE_CHAPTER_COUNT + 3,
     )
 
@@ -915,20 +908,24 @@ class GenerationSettings(ContractModel):
         has_shots = "shot_count" in normalized
         if has_shots and not has_images:
             try:
-                normalized["image_count"] = int(normalized["shot_count"]) - 3
+                count = int(normalized["shot_count"])
+                normalized["image_count"] = count - 3 if count else 0
             except (TypeError, ValueError):
                 pass
         elif has_images and not has_shots:
             try:
-                normalized["shot_count"] = int(normalized["image_count"]) + 3
+                count = int(normalized["image_count"])
+                normalized["shot_count"] = count + 3 if count else 0
             except (TypeError, ValueError):
                 pass
         return normalized
 
     @model_validator(mode="after")
     def validate_chapter_counts(self):
+        if self.shot_count == 0 and self.image_count == 0:
+            return self
         if self.shot_count != self.image_count + 3:
-            raise ValueError("总章节数必须等于 3 段视频加动态图片数量")
+            raise ValueError("历史固定章节设置必须等于 3 段视频加动态图片数量")
         return self
 
 
@@ -967,7 +964,7 @@ class StoryboardShot(ContractModel):
 
 class StoryboardPlan(ContractModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
-    shots: list[StoryboardShot] = Field(min_length=5, max_length=13)
+    shots: list[StoryboardShot] = Field(min_length=3, max_length=13)
     model_id: str = Field(default="", max_length=256)
     prompt_version: str = Field(default="", max_length=128)
     input_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -1408,6 +1405,9 @@ class VideoJob(ContractModel):
     # retries never silently repeat a paid search.
     research_prompt_snapshot: ResearchPromptSnapshot | None = None
     research_brief: PersonResearchBrief | NewsResearchBrief | None = None
+    # ScriptDraft v3 creates this once; the visual director reuses it instead
+    # of reinterpreting a second per-beat visual instruction track.
+    creative_brief: CreativeBrief | None = None
     research_warning: str = Field(default="", max_length=2000)
     research_diagnostics: ResearchDiagnostics | None = None
     # One initial research attempt is implicit. Every additional paid attempt

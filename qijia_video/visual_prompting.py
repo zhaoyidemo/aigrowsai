@@ -1,7 +1,10 @@
 """Compile frozen, provider-neutral visual intent into provider prompt text."""
 from __future__ import annotations
 
+import json
+
 from qijia_video.contracts import (
+    CreativeBrief,
     DEFAULT_VISUAL_STYLE_ID,
     H3_PROMPT_WRITING_PROFILE_ID,
     PromptWritingProfileSnapshot,
@@ -36,7 +39,7 @@ def compile_storyboard_base_style(
     profile: PromptWritingProfileSnapshot | None,
     *,
     has_reference_image: bool,
-    content_policy: str = "",
+    creative_brief: CreativeBrief | None = None,
 ) -> str:
     if _uses_h3(profile):
         reference_scope = (
@@ -58,7 +61,7 @@ def compile_storyboard_base_style(
         return _join_blocks(
             (
                 "【唯一编排层】使用 H3 Prompt Writing 方法完成全部视觉提示词编排。"
-                "Content Skill 只提供内容语义与真实性边界，视觉表现只提供艺术语言；"
+                "冻结的 CreativeBrief 提供内容语义，视觉表现只提供艺术语言；"
                 "不要把方法说明、字段标签或多套导演规则复制进最终媒体提示词。"
             ),
             (
@@ -66,14 +69,17 @@ def compile_storyboard_base_style(
                 "参考素材已经确定的视觉属性 > 所选视觉表现对未定义属性的补全 > "
                 "供应商语法。参考素材不是事实来源，也不能覆盖内容安全边界。"
             ),
+            (
+                "【冻结的唯一 CreativeBrief】"
+                + json.dumps(
+                    creative_brief.model_dump(mode="json"),
+                    ensure_ascii=False,
+                )
+                if creative_brief else ""
+            ),
             f"【H3 编排方法】{profile.planning_framework}",
             f"【首帧输出标准】{profile.image_framework}",
             f"【I2V 输出标准】{profile.video_framework}",
-            (
-                f"【内容视觉策略】{content_policy}"
-                if content_policy.strip()
-                else ""
-            ),
             f"【视觉表现】{style_specification}",
             reference_scope,
             f"【声音边界】{profile.audio_policy}",

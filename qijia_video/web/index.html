@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.22.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.23.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -114,10 +114,10 @@
           </div>
           <section class="creation-direction" aria-label="内容与视觉方向">
             <label class="creation-setting skill-setting" for="content-skill">
-              <span>内容类型</span>
-              <strong>先确定讲什么、依据什么</strong>
+              <span>任务类型</span>
+              <strong>只决定输入方式与证据规则</strong>
               <select id="content-skill" aria-label="内容 Skill"></select>
-              <small id="content-skill-description">决定事实依据、叙事目标与视觉禁区。</small>
+              <small id="content-skill-description">不再注入脚本或视觉提示词。</small>
             </label>
             <section class="creation-setting visual-style-setting" aria-labelledby="visual-style-label">
               <span id="visual-style-label">视觉表现</span>
@@ -129,14 +129,14 @@
           </section>
           <details class="production-specs" aria-labelledby="production-specs-title">
             <summary class="production-specs-heading">
-              <span><strong id="production-specs-title">生产规格</strong><small>画质、镜头数量与旁白</small></span>
-              <span id="production-spec-summary">1080P · 3 段视频 + 10 段动态图片 · 1.2x</span>
+              <span><strong id="production-specs-title">生产规格</strong><small>画质、自适应分镜与旁白</small></span>
+              <span id="production-spec-summary">1080P · 语义自适应分镜 · 1.2x</span>
             </summary>
             <div class="production-specs-body">
           <label class="video-quality-setting" for="video-resolution">
             <span class="video-quality-copy">
               <strong>视频画质</strong>
-              <small>同时用于 3 段 AI 视频和最终竖屏成片；默认使用 Seedance 1.0 Pro Fast 无声模式，复杂镜头可在成片检查时单独升级 2.0。画质越高，Token、耗时和文件体积通常越大。</small>
+              <small>同时用于 H3 选择的 AI 视频镜头和最终竖屏成片；默认使用 Seedance 1.0 Pro Fast 无声模式，复杂镜头可在成片检查时单独升级 2.0。画质越高，Token、耗时和文件体积通常越大。</small>
             </span>
             <select id="video-resolution" aria-label="视频画质">
               <option value="480p">480P · 480×854</option>
@@ -144,14 +144,12 @@
               <option value="1080p" selected>1080P · 1080×1920（默认）</option>
             </select>
           </label>
-          <label class="video-quality-setting image-count-setting" for="image-count">
+          <section class="video-quality-setting">
             <span class="video-quality-copy">
-              <strong>动态图片数量</strong>
-              <small>可选 2–10 段，默认 10 段；AI 视频始终保持 3 段。系统会按真实旁白时长安排镜头节奏。</small>
-              <small id="image-count-cost" class="image-count-cost">10 段动态图片 + 3 张视频首帧 = 13 张 Seedream</small>
+              <strong>镜头规划</strong>
+              <small>H3 按脚本中的真实语义变化决定章节数量。图片是默认媒介；只有连续动作或状态变化不可替代时才使用视频，最多三段但不要求凑满。</small>
             </span>
-            <input id="image-count" type="number" min="2" max="10" step="1" value="10" inputmode="numeric" aria-label="动态图片数量">
-          </label>
+          </section>
           <section class="video-quality-setting tts-creation-setting" aria-label="旁白设置">
             <span class="video-quality-copy">
               <strong>旁白设置</strong>
@@ -200,7 +198,7 @@
               <button id="topic-source-submit" class="button primary" type="submit" data-busy-lock>确认资料并生成脚本</button>
             </form>
           </section>
-          <p id="manual-intake-intro" class="panel-note intake-intro">输入一个人物和他的核心观点。H3 会先根据原始表述编排本次专属研究问题，核验出处与语境，再生成脚本和画面提示词。</p>
+          <p id="manual-intake-intro" class="panel-note intake-intro">输入一个人物和他的核心观点。系统先核验出处与语境形成 EvidencePack，再由唯一 H3 CreativeBrief 统领完整脚本与后续视觉。</p>
           <form id="source-card-form" class="form-stack">
             <label class="primary-field">
               <span class="question-line"><span class="question-number">1</span>你想讲谁？</span>
@@ -271,7 +269,7 @@
               <div class="orchestration-heading">
                 <div>
                   <p class="step">生成架构</p>
-                  <h3>原始输入、内容约束、视觉语言与参考素材，由 H3 分阶段编译</h3>
+                  <h3>证据只负责事实，H3 CreativeBrief 一次决定全片怎么讲与怎么看</h3>
                 </div>
                 <span class="orchestration-lock">编排层固定</span>
               </div>
@@ -283,7 +281,7 @@
                   </div>
                   <small id="prompt-profile-version">自动启用</small>
                 </div>
-                <p id="prompt-profile-description">H3 从原始输入开始，先编排研究和脚本语义，再生成分镜、首帧与首帧驱动视频提示词。</p>
+                <p id="prompt-profile-description">H3 将原始输入与 EvidencePack 收敛为唯一 CreativeBrief，脚本和视觉导演复用同一总纲。</p>
                 <p class="orchestration-selection" aria-live="polite">
                   <span id="orchestration-content-name">正在读取内容 Skill</span>
                   <b>+</b>
@@ -293,41 +291,23 @@
                 </p>
                 <ol class="orchestration-priority" aria-label="提示词冲突优先级">
                   <li>事实与安全</li>
-                  <li>镜头语义</li>
+                  <li>CreativeBrief</li>
                   <li id="reference-priority-state">参考图属性（未上传）</li>
                   <li>视觉风格补全</li>
                   <li>Provider 语法</li>
                 </ol>
               </section>
               <div class="orchestration-output">
-                <span class="orchestration-output-label">H3 分阶段编译输出</span>
+                <span class="orchestration-output-label">单一总纲链路</span>
                 <div class="orchestration-output-grid">
-                  <article><span>01</span><strong>研究提示词</strong><small>从原始输入生成专属检索问题</small></article>
-                  <article><span>02</span><strong>脚本语义</strong><small>保留出处、语境和证据边界</small></article>
-                  <article><span>03</span><strong>分镜语义</strong><small>每个镜头表达什么</small></article>
-                  <article><span>04</span><strong>首帧提示词</strong><small>交给 Seedream 执行</small></article>
-                  <article><span>05</span><strong>I2V 动作提示词</strong><small>锚定首帧驱动 Seedance</small></article>
+                  <article><span>01</span><strong>EvidencePack</strong><small>只保留证据、出处与不确定性</small></article>
+                  <article><span>02</span><strong>CreativeBrief</strong><small>唯一中心命题、论证路径和视觉母题</small></article>
+                  <article><span>03</span><strong>完整脚本</strong><small>不再夹带逐镜头画面指令</small></article>
+                  <article><span>04</span><strong>自适应分镜</strong><small>按语义变化决定章节与媒介</small></article>
+                  <article><span>05</span><strong>媒体提示词</strong><small>首帧与 I2V 共用同一视觉总纲</small></article>
                 </div>
               </div>
               <p class="orchestration-boundary">参考图只接管已经定义的视觉属性，不提供事实，也不覆盖镜头语义。Seedream、Seedance 等模型只执行最终提示词，不参与职责分配。</p>
-            </div>
-          </details>
-          <details id="generation-prompt-settings" class="advanced-settings prompt-settings global-prompt-settings">
-            <summary><span>脚本提示词高级设置</span><span id="script-prompt-mode-badge">系统默认</span></summary>
-            <p class="field-hint">默认由 H3 以原始输入为上游约束，再结合当前 Content Skill 编译；不会继承浏览器里的旧自定义内容。视觉提示词也始终由 H3 统一编排。</p>
-            <label class="confirmation-check custom-prompt-toggle">
-              <input id="enable-custom-script-prompt" type="checkbox">
-              <span><strong>为下一条任务显式启用自定义脚本策略</strong><small>仍受 H3 的原始输入、研究证据、视觉表现与 Provider 边界约束。</small></span>
-            </label>
-            <div id="custom-script-prompt-fields" hidden>
-              <p id="custom-script-prompt-warning" class="prompt-mode-warning">自定义模式已启用。当前任务将不再使用 Content Skill 的标准脚本提示词。</p>
-              <label>自定义脚本提示词
-                <textarea id="script-generation-prompt" rows="11" maxlength="8000" spellcheck="false" readonly></textarea>
-                <span class="field-hint">来源卡和 JSON 输出结构仍由系统自动附加；此内容不会保存到浏览器，也不会静默影响下一条任务。</span>
-              </label>
-              <div class="prompt-actions">
-                <button id="restore-prompt-defaults" class="button secondary" type="button">退出自定义并恢复默认</button>
-              </div>
             </div>
           </details>
         </section>
@@ -399,7 +379,7 @@
           <div id="job-error" class="error-box" hidden></div>
           <section id="script-review" class="review-section" hidden>
             <div class="section-title"><h3>脚本确认</h3><span id="script-review-spec">确认后开始配音与画面生成</span></div>
-            <section id="person-research-brief" class="person-research-brief" aria-label="H3 输入驱动研究简报" hidden></section>
+            <section id="person-research-brief" class="person-research-brief" aria-label="EvidencePack 与 H3 CreativeBrief" hidden></section>
             <section class="tts-review-settings" aria-label="本任务配音设置">
               <div class="tts-review-heading">
                 <div><strong>配音试听</strong><span>试听当前开场，确认后用于整条视频</span></div>
@@ -436,14 +416,14 @@
                 <span id="script-length-status" class="field-hint" aria-live="polite">只统计会被念出的旁白</span>
               </div>
               <div id="script-beat-editor" class="script-beat-editor"></div>
-              <p class="field-hint script-document-hint">每一段都包含画面、旁白和可选的屏幕文字。只有旁白会进入配音；屏幕文字由 Remotion 后期排版，不会让 AI 直接画字。</p>
+              <p class="field-hint script-document-hint">这里只编辑完整旁白和可选屏幕文字。画面不会在脚本阶段逐段预设，而是在确认后由 H3 根据 CreativeBrief 与完整旁白统一规划。</p>
             </section>
             <section id="script-cost-estimate" class="script-cost-estimate" aria-live="polite">
               <div>
                 <span>整单成本预估</span>
                 <strong id="script-cost-total">正在按本任务规格计算…</strong>
               </div>
-              <p id="script-cost-breakdown">包含已发生调用、完整旁白、全部首帧和 3 段默认 AI 视频。</p>
+              <p id="script-cost-breakdown">包含已发生调用、完整旁白，以及按语义自适应规划的首帧和 AI 视频。</p>
               <small id="script-cost-basis">刊例价估算，最终以供应商账单和实际生成时长为准。</small>
             </section>
             <label class="pre-generation-media-choice" for="prepare-media-first">
@@ -460,8 +440,8 @@
           </section>
           <section id="shot-storyboard" class="review-section storyboard-section" hidden>
             <div class="section-title storyboard-heading">
-              <div><h3>混合制作故事板</h3><span id="storyboard-summary">3 段视频和 10 段动态图片会在这里逐个出现</span></div>
-              <span class="storyboard-hint">选中镜头，可上传自己的图片或视频，也可随时恢复 AI 素材</span>
+              <div><h3>混合制作故事板</h3><span id="storyboard-summary">H3 会按语义变化规划图片与必要的视频镜头</span></div>
+              <span class="storyboard-hint">选中镜头，可上传自己的图片或视频，也可恢复 AI 素材；屏幕文字由 Remotion 后期排版，不会让 AI 直接画字</span>
             </div>
             <p id="frame-selection-warning" class="frame-selection-warning" hidden></p>
             <div class="storyboard-layout">
@@ -571,6 +551,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.22.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.23.0"></script>
 </body>
 </html>

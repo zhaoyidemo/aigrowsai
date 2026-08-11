@@ -24,6 +24,7 @@ from qijia_video.contracts import (
     Artifact,
     AssetRef,
     ContentFormat,
+    CreativeBrief,
     DouyinPerformance,
     DouyinPlaybackSnapshot,
     FirstFrameCandidate,
@@ -416,6 +417,15 @@ class QijiaVideoService:
     def _validate_verified_card(card: SourceCard):
         if card.risk_level.value == "high":
             raise QualityGateFailed("当前工作流不处理高风险或危机主题")
+        research_first_formats = {
+            ContentFormat.PERSON_IDEA,
+            ContentFormat.RECENT_NEWS,
+        }
+        if card.content_format not in research_first_formats:
+            if not card.sources:
+                raise QualityGateFailed("来源卡至少需要一条真实来源才能核验")
+            if not (card.verified_facts or card.verified_quotes):
+                raise QualityGateFailed("来源卡至少需要一条可引用事实或引文才能核验")
         serialized = json.dumps(card.model_dump(mode="json"), ensure_ascii=False)
         placeholder = next((item for item in FORBIDDEN_PLACEHOLDERS if item in serialized), "")
         if placeholder:
@@ -447,10 +457,6 @@ class QijiaVideoService:
     @staticmethod
     def _validate_generated_script_length(script: ScriptDraft):
         char_count = narration_char_count(script.narration_text())
-        if len(script.beats) < LEGACY_STORYBOARD_SHOT_COUNT:
-            raise QualityGateFailed(
-                "脚本生成结果少于五个自然叙事段，本次结果未进入人工审核"
-            )
         if char_count > SCRIPT_HARD_MAX_CHARS:
             raise QualityGateFailed(
                 f"脚本口播共 {char_count} 字，超过技术安全上限 "
@@ -616,56 +622,67 @@ class QijiaVideoService:
         minimum, maximum = TTS_SCRIPT_CHARACTER_TARGETS[
             settings.tts_speed_ratio
         ]
-        prompt = (
-            compile_script_prompt(card, settings.script_prompt, profile).rstrip()
-            + "\n\n【本任务配音节奏】"
-            + f"已选 Seed-TTS 2.0 语速 {settings.tts_speed_ratio:.1f}x。"
-            + f"所有 narration 的纯旁白合计建议 {minimum}-{maximum} 个汉字，"
-            + "以此范围覆盖上文任何不同的字数建议；"
-            + "目标仍为 45-75 秒，表达完整和自然优先。"
+        return compile_script_prompt(
+            card,
+            profile=profile,
+            research_brief=research_brief,
+            minimum_characters=minimum,
+            maximum_characters=maximum,
         )
-        if not research_brief:
-            return prompt
-        editorial_context = {
-            "summary": research_brief.summary,
-            "core_tension": research_brief.core_tension,
-            "audience_relevance": research_brief.audience_relevance,
-            "content_angles": research_brief.content_angles,
-            "interaction_opportunity": research_brief.interaction_opportunity,
-            "uncertainties": research_brief.uncertainties,
+
+    @staticmethod
+    def _fallback_creative_brief(
+        card: SourceCard,
+        research_brief: PersonResearchBrief | NewsResearchBrief | None,
+    ) -> CreativeBrief:
+        """Compatibility brief for deterministic or legacy ScriptProviders."""
+
+        evidence_refs = [
+            item.id for item in (*card.verified_facts, *card.verified_quotes)
+        ]
+        uncertainties = (
+            list(research_brief.uncertainties) if research_brief else []
+        )
+        thesis = (
+            research_brief.summary
+            if research_brief and research_brief.summary
+            else card.core_idea
+        )
+        payload = {
+            "central_question": card.parent_question,
+            "core_thesis": thesis,
+            "audience_promise": (
+                f"帮助{card.target_audience}准确理解这项命题的依据、含义与边界。"
+            ),
+            "narrative_arc": [
+                "直接呈现原始命题中最值得辨析的判断",
+                "交代理解它所必需的出处、事实或语境",
+                "沿一条连续论证路径解释核心含义",
+                "回到中心问题并给出克制结论",
+            ],
+            "tone": "准确、克制、具体、有思考感，不说教、不制造焦虑",
+            "visual_concept": (
+                "围绕主题对象、关键关系和状态变化建立一条连续视觉母题，"
+                "不伪造史料、人物肖像、界面或抽象文字证据。"
+            ),
+            "continuity_anchors": [card.subject.name],
+            "must_include": [
+                item.text for item in card.interpretation_boundary[:6]
+            ],
+            "must_avoid": uncertainties[:6],
+            "evidence_refs": evidence_refs,
+            "model_id": "deterministic-compatibility",
+            "prompt_version": "h3_creative_brief_compat_v1",
+            "input_hash": content_hash({
+                "card": card.model_dump(mode="json"),
+                "research": (
+                    research_brief.model_dump(mode="json")
+                    if research_brief else None
+                ),
+            }),
+            "generated_at": timestamp(),
         }
-        if isinstance(research_brief, PersonResearchBrief):
-            editorial_context.update({
-                "input_type": research_brief.input_type,
-                "research_focus": research_brief.research_focus,
-                "attribution_status": research_brief.attribution_status,
-                "verified_wording": research_brief.verified_wording,
-                "attribution_note": research_brief.attribution_note,
-                "source_context": research_brief.source_context,
-            })
-        else:
-            editorial_context.update({
-                "topic": research_brief.topic,
-                "research_as_of": research_brief.as_of,
-                "evidence_time_context": [
-                    {
-                        "claim": item.claim,
-                        "source_title": item.source_title,
-                        "source_kind": item.source_kind,
-                        "published_at": item.published_at,
-                        "event_at": item.event_at,
-                    }
-                    for item in research_brief.evidence
-                ],
-            })
-        return (
-            prompt
-            + "\n\n【自动研究简报】\n"
-            + json.dumps(editorial_context, ensure_ascii=False)
-            + "\n研究证据已经作为 research_fact 加入本次来源卡。"
-            + "简报中的内容角度只用于编辑构思，不可冒充证据或逐字引语；"
-            + "遇到 uncertainties 必须保留限定语，不要为了钩子抹掉边界。"
-        )
+        return CreativeBrief.model_validate(payload)
 
     @staticmethod
     def _validate_script(script: ScriptDraft, card: SourceCard):
@@ -686,8 +703,6 @@ class QijiaVideoService:
                 raise QualityGateFailed(
                     f"脚本段落 {segment.id} 引用了未知事实：{sorted(unknown)}"
                 )
-            if not segment.source_refs:
-                raise QualityGateFailed(f"脚本段落 {segment.id} 缺少来源引用")
             if segment.quote_ref:
                 quote = next(
                     (item for item in card.verified_quotes if item.id == segment.quote_ref),
@@ -868,8 +883,14 @@ class QijiaVideoService:
         if card.status != SourceCardStatus.VERIFIED:
             raise QualityGateFailed("来源卡必须先核验")
         requested_settings = generation_settings or GenerationSettings()
+        script_prompt_explicit = (
+            "script_prompt" in requested_settings.model_fields_set
+        )
         seedance_prompt_explicit = (
             "seedance_prompt" in requested_settings.model_fields_set
+        )
+        fixed_chapter_count_requested = bool(
+            requested_settings.image_count or requested_settings.shot_count
         )
         try:
             frozen_settings, skill_snapshot = self.skill_registry.freeze(
@@ -895,6 +916,24 @@ class QijiaVideoService:
             raise QualityGateFailed(
                 "H3 提示词编排已统一接管视觉导演设置；"
                 "请选择视觉表现，不要再提交 seedance_prompt"
+            )
+        if (
+            script_prompt_explicit
+            and prompt_writing_profile_snapshot.profile_id
+            == H3_PROMPT_WRITING_PROFILE_ID
+        ):
+            raise QualityGateFailed(
+                "H3 CreativeBrief 已统一接管脚本方法；"
+                "不要再提交 script_prompt"
+            )
+        if (
+            fixed_chapter_count_requested
+            and prompt_writing_profile_snapshot.profile_id
+            == H3_PROMPT_WRITING_PROFILE_ID
+        ):
+            raise QualityGateFailed(
+                "H3 已按真实语义变化规划视觉章节；"
+                "不要再提交 image_count 或 shot_count"
             )
         now = timestamp()
         draft = VideoJob(
@@ -1404,17 +1443,16 @@ class QijiaVideoService:
                 job.research_brief,
             )
 
-            generate_for_skill = getattr(
-                self.script_provider, "generate_for_skill", None
+            generate_with_brief = getattr(
+                self.script_provider, "generate_with_brief", None
             )
             generate_with_usage = getattr(
                 self.script_provider, "generate_with_usage", None
             )
-            if callable(generate_for_skill) and job.skill_snapshot:
-                script = await generate_for_skill(
+            if callable(generate_with_brief):
+                creative_brief, script = await generate_with_brief(
                     card,
                     script_prompt,
-                    system_prompt=job.skill_snapshot.script_system_prompt,
                     on_usage=persist_script_usage,
                 )
             elif callable(generate_with_usage):
@@ -1426,6 +1464,10 @@ class QijiaVideoService:
             else:
                 script = await self.script_provider.generate(
                     card, script_prompt
+                )
+            if not callable(generate_with_brief):
+                creative_brief = self._fallback_creative_brief(
+                    card, job.research_brief
                 )
             script.estimated_duration_seconds = max(
                 45,
@@ -1451,6 +1493,7 @@ class QijiaVideoService:
             if review.input_hash != content_hash(script):
                 raise QualityGateFailed("脚本审核结果没有绑定当前脚本")
             job.script = script
+            job.creative_brief = creative_brief
             job.script_hash = content_hash(script)
             job.script_review = review
             job.approvals = []
@@ -1804,6 +1847,8 @@ class QijiaVideoService:
             return []
         segment_count = len(job.script.beats)
         if job.generation_settings:
+            if job.generation_settings.shot_count <= 0:
+                return list(range(segment_count))
             return QijiaVideoService._visual_target_indices(
                 segment_count, job.generation_settings.shot_count
             )
@@ -1898,33 +1943,6 @@ class QijiaVideoService:
             for index in range(shot_count)
         )
 
-    @staticmethod
-    def _expanded_storyboard_groups(
-        beats: list[ScriptBeat],
-        weights: list[float],
-        shot_count: int,
-    ) -> list[list[ScriptBeat]]:
-        """Allocate extra image chapters inside longer semantic beats."""
-
-        counts = [1 for _ in beats]
-        # Keep the opening hook as one uninterrupted moving chapter so the
-        # first five seconds are not cut into a video/image hand-off.
-        eligible_indices = list(range(1, len(beats))) or [0]
-        for _ in range(shot_count - len(beats)):
-            index = max(
-                eligible_indices,
-                key=lambda item: (
-                    max(0.001, float(weights[item])) / counts[item],
-                    -item,
-                ),
-            )
-            counts[index] += 1
-        return [
-            [beat]
-            for beat, count in zip(beats, counts)
-            for _ in range(count)
-        ]
-
     @classmethod
     def _duration_aware_groups(
         cls,
@@ -1978,15 +1996,11 @@ class QijiaVideoService:
         settings = cls._generation_settings(job)
         beats = job.script.beats
         durations = cls._narration_durations(job)
-        if settings.shot_count >= len(beats):
-            weights = (
-                [durations[item.id] for item in beats]
-                if durations
-                else [max(1, len(item.narration)) for item in beats]
-            )
-            return cls._expanded_storyboard_groups(
-                beats, weights, settings.shot_count
-            )
+        # Semantic mode and oversized legacy requests both map one meaningful
+        # script beat to one visual chapter. Never duplicate a beat to hit a
+        # quota.
+        if settings.shot_count <= 0 or settings.shot_count >= len(beats):
+            return [[item] for item in beats]
         if durations:
             return cls._duration_aware_groups(
                 beats, durations, settings.shot_count
@@ -2010,6 +2024,13 @@ class QijiaVideoService:
         if persisted and job.storyboard_plan:
             return tuple(item.visual_type for item in job.storyboard_plan.shots)
         groups = groups or cls._storyboard_beat_groups(job)
+        settings = cls._generation_settings(job)
+        if (
+            settings.shot_count <= 0
+            or (job.script and job.script.schema_version == "3.0")
+        ):
+            # Empty means the H3 visual director chooses per chapter.
+            return ()
         durations = cls._narration_durations(job)
         if not durations:
             return cls._visual_types_for_durations([0.0] * len(groups))
@@ -2069,11 +2090,7 @@ class QijiaVideoService:
             job.visual_style_snapshot,
             job.prompt_writing_profile_snapshot,
             has_reference_image=cls._has_reference_image(job),
-            content_policy=(
-                job.skill_snapshot.visual_policy
-                if job.skill_snapshot
-                else ""
-            ),
+            creative_brief=job.creative_brief,
         )
 
     @staticmethod
@@ -2100,9 +2117,11 @@ class QijiaVideoService:
         }
         if include_visual_types:
             groups = QijiaVideoService._storyboard_beat_groups(job)
-            payload["visual_types"] = list(
+            visual_types = list(
                 QijiaVideoService._storyboard_visual_types(job, groups)
             )
+            if visual_types:
+                payload["visual_types"] = visual_types
         return content_hash(payload)
 
     @classmethod
@@ -2183,8 +2202,10 @@ class QijiaVideoService:
             raise ProviderUnavailable("分镜 Provider 返回了错误的输入指纹")
         if [item.beat_ids for item in plan.shots] != beat_groups:
             raise ProviderUnavailable("分镜 Provider 返回了错误的段落映射")
-        if [item.visual_type for item in plan.shots] != visual_types:
+        if visual_types and [item.visual_type for item in plan.shots] != visual_types:
             raise ProviderUnavailable("分镜 Provider 返回了错误的图像/视频分配")
+        if sum(item.visual_type == "video" for item in plan.shots) > 3:
+            raise ProviderUnavailable("H3 分镜最多允许三段 AI 视频")
         job.storyboard_plan = plan
         job = await self._save_job(job, actor)
         self._report(

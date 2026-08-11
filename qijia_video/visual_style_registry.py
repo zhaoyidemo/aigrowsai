@@ -48,6 +48,7 @@ _PROFILE_KEYS = {
     "negative_rules",
 }
 _PROFILE_OPTIONAL_KEYS = {
+    "creative_brief_framework_file",
     "research_framework_file",
     "script_framework_file",
 }
@@ -161,6 +162,7 @@ class PromptWritingProfileDefinition:
     default: bool
     research_framework: str
     script_framework: str
+    creative_brief_framework: str
     planning_framework: str
     image_framework: str
     video_framework: str
@@ -177,6 +179,7 @@ class PromptWritingProfileDefinition:
             description=self.description,
             research_framework=self.research_framework,
             script_framework=self.script_framework,
+            creative_brief_framework=self.creative_brief_framework,
             planning_framework=self.planning_framework,
             image_framework=self.image_framework,
             video_framework=self.video_framework,
@@ -196,8 +199,7 @@ class PromptWritingProfileDefinition:
             "stages": [
                 stage
                 for stage, enabled in (
-                    ("research", bool(self.research_framework)),
-                    ("script", bool(self.script_framework)),
+                    ("creative_brief", bool(self.creative_brief_framework)),
                     ("storyboard", True),
                     ("image", True),
                     ("video", True),
@@ -263,6 +265,11 @@ def _load_profile(root: Path) -> PromptWritingProfileDefinition:
             manifest.get("script_framework_file"),
             required=False,
         ),
+        "creative_brief_framework": _read_resource(
+            root,
+            manifest.get("creative_brief_framework_file"),
+            required=False,
+        ),
         "planning_framework": _read_resource(
             root, manifest["planning_framework_file"]
         ),
@@ -282,6 +289,7 @@ def _load_profile(root: Path) -> PromptWritingProfileDefinition:
             default=bool(manifest["default"]),
             research_framework=resources["research_framework"],
             script_framework=resources["script_framework"],
+            creative_brief_framework=resources["creative_brief_framework"],
             planning_framework=resources["planning_framework"],
             image_framework=resources["image_framework"],
             video_framework=resources["video_framework"],

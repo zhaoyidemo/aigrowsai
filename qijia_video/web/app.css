@@ -223,8 +223,6 @@ button:focus-visible { outline: 3px solid rgba(49,95,86,.2); outline-offset: 2px
 .tts-creation-setting { grid-template-columns: minmax(0, 1fr) minmax(190px, 220px); }
 .tts-creation-controls { display: grid; gap: 7px; }
 .tts-creation-controls label { display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 6px; color: var(--muted); font-size: 9px; font-weight: 720; }
-.image-count-setting { margin-top: 0; }
-.video-quality-copy .image-count-cost { color: #8b4a2f; font-weight: 700; }
 .form-stack { display: grid; gap: 13px; }
 .form-stack label { display: grid; gap: 6px; font-size: 12px; color: #525c67; font-weight: 650; }
 #source-card-form { gap: 18px; }
@@ -275,11 +273,6 @@ button:focus-visible { outline: 3px solid rgba(49,95,86,.2); outline-offset: 2px
 .global-prompt-settings > summary span:last-child { border-radius: 999px; padding: 4px 7px; color: #49635c; background: #e8f0ed; font-size: 10px; }
 .global-prompt-settings.custom-active { border-color: #d4a14a; background: #fff9eb; }
 .global-prompt-settings.custom-active > summary span:last-child { color: #74541c; background: #f8e9bd; }
-.custom-prompt-toggle { margin-top: 2px; border: 1px solid #ded9cf; border-radius: 8px; padding: 10px; background: white; }
-.custom-prompt-toggle span { display: grid; gap: 2px; }
-.custom-prompt-toggle strong { color: #3d4946; font-size: 11px; }
-.custom-prompt-toggle small { color: var(--muted); font-size: 10px; font-weight: 450; line-height: 1.5; }
-.prompt-mode-warning { margin: 0 0 9px; border-left: 3px solid #c98d2e; padding: 8px 10px; color: #74541c; background: #fff3d8; font-size: 11px; line-height: 1.5; }
 input, select, textarea { width: 100%; border: 1px solid #d7d4cc; background: white; border-radius: 8px; color: var(--ink); padding: 10px 11px; outline: none; font-weight: 450; }
 textarea { resize: vertical; line-height: 1.55; }
 input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(49,95,86,.12); }

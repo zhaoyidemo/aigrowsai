@@ -20,6 +20,7 @@ from qijia_video import runtime as qijia_runtime
 from qijia_video.contracts import (
     Actor,
     AssetRef,
+    CreativeBrief,
     GenerationSettings,
     JobState,
     NewsResearchBrief,
@@ -35,6 +36,7 @@ from qijia_video.contracts import (
     SkillResearchMode,
     SourceCard,
     SourceCardInput,
+    StoryboardPlan,
     StoryboardShot,
     ProviderTaskState,
     ProviderTask,
@@ -141,6 +143,26 @@ def valid_card(**updates) -> SourceCardInput:
     return SourceCardInput.model_validate(value)
 
 
+def valid_creative_brief(*, evidence_refs=None) -> dict:
+    return {
+        "central_question": "这项观点究竟在什么依据和边界下成立？",
+        "core_thesis": "先核验依据与语境，再理解观点本身。",
+        "audience_promise": "帮助普通观众形成一条可复用的判断路径。",
+        "narrative_arc": [
+            "直接呈现需要辨析的判断",
+            "交代必要证据与语境",
+            "解释核心逻辑",
+            "回到问题并克制收束",
+        ],
+        "tone": "准确、克制、具体",
+        "visual_concept": "用同一主体和关键物件的状态变化贯穿全片",
+        "continuity_anchors": ["同一核心主体", "同一关键物件"],
+        "must_include": ["保留证据强度"],
+        "must_avoid": ["不制造焦虑"],
+        "evidence_refs": list(evidence_refs or []),
+    }
+
+
 class FakeRenderer:
     name = "fake-remotion"
 
@@ -227,7 +249,7 @@ class RecordingImageProvider(MockImageProvider):
 
 
 class QijiaVideoContractTests(unittest.TestCase):
-    def test_content_skills_are_versioned_and_own_their_prompt_defaults(self):
+    def test_content_skills_are_versioned_workflow_presets_without_prompts(self):
         catalog = default_skill_registry.public_catalog()
         self.assertEqual(
             {item["skill_id"] for item in catalog},
@@ -235,19 +257,17 @@ class QijiaVideoContractTests(unittest.TestCase):
         )
         expert = default_skill_registry.resolve("explain-expert-view")
         news = default_skill_registry.resolve("brief-recent-news")
-        self.assertEqual(expert.version, "1.3.0")
-        self.assertEqual(news.version, "1.3.0")
-        self.assertIn("来源卡目标受众", expert.script_prompt)
+        self.assertEqual(expert.version, "2.0.0")
+        self.assertEqual(news.version, "2.0.0")
         self.assertEqual(news.research_mode.value, "recent_news_required")
         self.assertNotEqual(expert.manifest_hash, news.manifest_hash)
-        self.assertIn("不要逐段独立创作后拼接", expert.script_prompt)
-        self.assertIn("事实、分析、预测和价值判断", news.script_prompt)
-        self.assertIn("不要逐段独立创作后拼接", news.script_prompt)
-        self.assertIn("医疗诊断", expert.visual_policy)
-        self.assertIn("新闻截图", news.visual_policy)
-        self.assertNotIn("2.5D", expert.visual_policy)
+        self.assertIn("quote-integrity", expert.policy_ids)
+        self.assertIn("news-freshness", news.policy_ids)
+        self.assertEqual(expert.snapshot().research_prompt, "")
+        self.assertEqual(expert.snapshot().script_system_prompt, "")
+        self.assertEqual(expert.snapshot().visual_policy, "")
         self.assertTrue(all(
-            "seedance_prompt" not in item["generation_defaults"]
+            "generation_defaults" not in item
             for item in catalog
         ))
 
@@ -279,8 +299,10 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertIn("纸偶关节", papercraft.storyboard_rules)
         self.assertIn("先判断输入模式", profile.planning_framework)
         self.assertIn("I2V", profile.planning_framework)
-        self.assertIn("原始输入是任务范围的最高优先级", profile.research_framework)
-        self.assertIn("原始输入 → 已核验研究", profile.script_framework)
+        self.assertIn("一次且仅一次创作决策", profile.creative_brief_framework)
+        self.assertIn("CreativeBrief 是下游唯一创作总纲", profile.creative_brief_framework)
+        self.assertEqual(profile.research_framework, "")
+        self.assertEqual(profile.script_framework, "")
         self.assertIn("主体定义", legacy_profile.planning_framework)
         self.assertNotIn("MiniMax", profile.planning_framework)
         self.assertNotIn("Seedance", profile.planning_framework)
@@ -355,37 +377,38 @@ class QijiaVideoContractTests(unittest.TestCase):
                 prompt="不得再接受前端直接传 Provider 提示词",
             )
 
-    def test_h3_keeps_content_style_and_reference_responsibilities_separate(self):
+    def test_h3_keeps_brief_style_and_reference_responsibilities_separate(self):
         style = default_visual_style_registry.resolve(
             "paper-collage-explainer"
         ).snapshot()
         profile = default_prompt_writing_profile_registry.resolve(
             "h3-prompt-writing"
         ).snapshot()
-        expert_policy = default_skill_registry.resolve(
-            "explain-expert-view"
-        ).visual_policy
-        news_policy = default_skill_registry.resolve(
-            "brief-recent-news"
-        ).visual_policy
+        expert_brief = CreativeBrief.model_validate(valid_creative_brief())
+        news_brief = CreativeBrief.model_validate({
+            **valid_creative_brief(),
+            "central_question": "这次发布真正确认了什么？",
+            "core_thesis": "只讲已经确认的变化，并保留仍待验证的影响。",
+        })
 
         expert_base = compile_storyboard_base_style(
             style.director_prompt,
             style,
             profile,
             has_reference_image=False,
-            content_policy=expert_policy,
+            creative_brief=expert_brief,
         )
         news_base = compile_storyboard_base_style(
             style.director_prompt,
             style,
             profile,
             has_reference_image=False,
-            content_policy=news_policy,
+            creative_brief=news_brief,
         )
         self.assertNotEqual(expert_base, news_base)
-        self.assertIn("医疗诊断", expert_base)
-        self.assertIn("新闻截图", news_base)
+        self.assertIn(expert_brief.core_thesis, expert_base)
+        self.assertIn(news_brief.core_thesis, news_base)
+        self.assertNotIn("内容视觉策略", expert_base + news_base)
         self.assertIn("高级编辑纸张拼贴", expert_base)
         self.assertIn("高级编辑纸张拼贴", news_base)
 
@@ -394,10 +417,10 @@ class QijiaVideoContractTests(unittest.TestCase):
             style,
             profile,
             has_reference_image=True,
-            content_policy=news_policy,
+            creative_brief=news_brief,
         )
         self.assertIn("参考图只约束", referenced)
-        self.assertIn("新闻截图", referenced)
+        self.assertIn(news_brief.core_thesis, referenced)
         self.assertIn("高级编辑纸张拼贴", referenced)
         self.assertIn("参考素材已经确定的视觉属性", referenced)
 
@@ -443,8 +466,8 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(card.subject.name, "TERA LAB")
         self.assertEqual(card.content_format.value, "recent_news_briefing")
         self.assertEqual(card.content_domain.value, "technology")
-        self.assertEqual(card.verified_facts[0].id, "request_context_01")
-        self.assertIn("不是新闻事实", card.verified_facts[0].text)
+        self.assertEqual(card.sources, [])
+        self.assertEqual(card.verified_facts, [])
         self.assertIn("必须先完成联网研究", card.interpretation_boundary[0].text)
 
     def test_recent_news_brief_accepts_one_timed_traceable_source(self):
@@ -494,8 +517,8 @@ class QijiaVideoContractTests(unittest.TestCase):
             "关注该人物与观点的普通中文受众",
         )
         self.assertEqual(card.core_idea, idea.viewpoint)
-        self.assertIn(idea.viewpoint, card.verified_facts[0].text)
-        self.assertIn("不证明人物归属", card.verified_facts[0].text)
+        self.assertEqual(card.sources, [])
+        self.assertEqual(card.verified_facts, [])
         self.assertIn("联网核验前", card.interpretation_boundary[0].text)
 
     def test_h3_compiles_person_research_from_the_complete_original_input(self):
@@ -527,7 +550,7 @@ class QijiaVideoContractTests(unittest.TestCase):
             research_as_of="2026-08-11T10:00:00+08:00",
         )
 
-        self.assertEqual(compiled.profile_version, "1.1.0")
+        self.assertEqual(compiled.profile_version, "2.0.0")
         self.assertIn(idea.viewpoint, compiled.prompt)
         self.assertIn('"论万世不论一生"', compiled.prompt)
         self.assertIn("人物归属、可靠原文、出处位置、文字异同与上下文", compiled.prompt)
@@ -581,13 +604,13 @@ class QijiaVideoContractTests(unittest.TestCase):
             for item in enriched.interpretation_boundary
         ))
 
-    def test_generation_settings_default_to_ten_images_and_preserve_legacy(self):
+    def test_generation_settings_default_to_semantic_storyboard_and_preserve_legacy(self):
         settings = GenerationSettings(
             script_prompt="测试脚本写法",
             seedance_prompt="测试镜头风格",
         )
-        self.assertEqual(settings.image_count, 10)
-        self.assertEqual(settings.shot_count, 13)
+        self.assertEqual(settings.image_count, 0)
+        self.assertEqual(settings.shot_count, 0)
         self.assertEqual(settings.video_resolution, "1080p")
         self.assertEqual(settings.seedance_model, SEEDANCE_EFFICIENT_MODEL)
         self.assertEqual(
@@ -637,8 +660,9 @@ class QijiaVideoContractTests(unittest.TestCase):
             GenerationSettings(video_resolution="2160p")
         with self.assertRaises(ValidationError):
             GenerationSettings(seedance_model="unknown-seedance")
-        with self.assertRaises(ValidationError):
-            GenerationSettings(image_count=1)
+        one_image_legacy = GenerationSettings(image_count=1)
+        self.assertEqual(one_image_legacy.image_count, 1)
+        self.assertEqual(one_image_legacy.shot_count, 4)
         with self.assertRaises(ValidationError):
             GenerationSettings(image_count=11)
         with self.assertRaises(ValidationError):
@@ -748,19 +772,17 @@ class QijiaVideoContractTests(unittest.TestCase):
             "父母先停一下，让孩子把自己的想法完整说出来，再一起讨论下一步。",
         )
 
-    def test_default_script_prompt_preserves_input_context_and_retention(self):
+    def test_default_script_prompt_uses_one_brief_without_visual_direction(self):
         prompt = GenerationSettings().script_prompt
-        self.assertIn("降低 2 秒流失率、提高 5 秒完播率", prompt)
-        self.assertIn("反常识翻转", prompt)
-        self.assertIn("具体场景冲突", prompt)
-        self.assertIn("不得为了适配平台、目标受众或熟悉的内容模板", prompt)
-        self.assertIn("只有来源卡中的 verified_quote", prompt)
-        self.assertIn("先交代必要出处或语境", prompt)
-        self.assertIn("visual_direction 只写观众必须看懂", prompt)
-        self.assertIn("不写画风、色彩、材质、构图、景别、运镜", prompt)
-        self.assertIn("先写完一版连贯口播", prompt)
-        self.assertIn("每段只承担一个主要信息任务", prompt)
-        self.assertIn("最后回收开场问题", prompt)
+        self.assertIn("唯一的 H3 CreativeBrief", prompt)
+        self.assertIn("一个中心问题、一个核心判断、一条完整论证路径", prompt)
+        self.assertIn("不得套用预设领域、受众焦虑或平台话术", prompt)
+        self.assertIn("只有 verified_quote 可以作为人物逐字原话", prompt)
+        self.assertIn("先写完整口播", prompt)
+        self.assertIn("脚本不设计逐镜头画面", prompt)
+        self.assertIn("后续 H3 Visual Director", prompt)
+        self.assertNotIn("降低 2 秒流失率", prompt)
+        self.assertNotIn("visual_direction 只写", prompt)
         self.assertNotIn("写成一版面向家长", prompt)
 
     def test_longest_later_chapters_become_images(self):
@@ -936,6 +958,54 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertIn("beats", current.model_dump(mode="json"))
         self.assertEqual(current.hook, "旁白 1")
         self.assertEqual(current.closing, "旁白 5")
+
+    def test_h3_v3_accepts_three_semantic_beats_and_storyboard_chapters(self):
+        roles = ["hook", "explanation", "closing"]
+        script = ScriptDraft.model_validate({
+            "schema_version": "3.0",
+            "source_card_id": "card-semantic",
+            "source_card_revision": 1,
+            "video_title": "只需要三次语义推进的脚本",
+            "cover_text": "不为凑数切段",
+            "hook": "兼容字段",
+            "beats": [
+                {
+                    "id": f"n{index:02d}",
+                    "role": role,
+                    "narration": f"第 {index} 段完成一次真实的语义推进。",
+                    "on_screen_text": "",
+                    "source_refs": [],
+                    "quote_ref": None,
+                }
+                for index, role in enumerate(roles, 1)
+            ],
+            "closing": "兼容字段",
+            "estimated_duration_seconds": 45,
+            "caption": "三段已经完整，不额外拆分。",
+            "hashtags": ["语义结构"],
+        })
+
+        QijiaVideoService._validate_generated_script_length(script)
+        plan = StoryboardPlan(
+            shots=[
+                StoryboardShot(
+                    shot_id=f"shot_{index:02d}",
+                    segment_id=beat.id,
+                    beat_ids=[beat.id],
+                    narration_excerpt=beat.narration,
+                    visual_type="image",
+                    visual_intent=f"承载第 {index} 次语义推进",
+                    first_frame_prompt="主体关系清楚的竖屏编辑插画，画面无文字",
+                    motion_prompt="后期缓慢推进取景",
+                )
+                for index, beat in enumerate(script.beats, 1)
+            ],
+            input_hash="a" * 64,
+            created_at=timestamp(),
+        )
+
+        self.assertEqual(len(script.beats), 3)
+        self.assertEqual(len(plan.shots), 3)
 
 
 class SeedanceProviderContractTests(unittest.IsolatedAsyncioTestCase):
@@ -1506,21 +1576,26 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             calls.append(request)
             generated = {
-                "schema_version": "2.0",
+                "creative_brief": valid_creative_brief(
+                    evidence_refs=["fact_01"]
+                ),
+                "schema_version": "3.0",
                 "video_title": "帮助之前，先给孩子一点尝试空间",
                 "cover_text": "别急着替孩子完成",
-                "hook": "孩子卡住时，父母越快出手就越好吗？",
                 "beats": [
                     {
                         "id": f"n{index:02d}",
                         "narration": text.ljust(40, "。"),
                         "role": kind,
-                        "visual_direction": f"第 {index} 段具体家庭动作，无文字",
                         "on_screen_text": "" if index > 1 else "先别急着出手",
                         # Models sometimes confuse the source record with its
                         # single supported fact. The provider must repair this
                         # deterministic metadata without another model call.
-                        "source_refs": ["source_01"],
+                        "source_refs": (
+                            ["source_01"] if index == 3
+                            else ["fact_01"] if index == 4
+                            else []
+                        ),
                         "quote_ref": None,
                     }
                     for index, (kind, text) in enumerate([
@@ -1531,7 +1606,6 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                         ("closing", "今天先少替孩子完成一步，多观察一步。"),
                     ], 1)
                 ],
-                "closing": "把答案留给下一次真实的家庭互动。",
                 "caption": "帮助孩子，不等于替孩子完成。",
                 "hashtags": ["家庭教育", "家长成长", "亲子沟通"],
             }
@@ -1568,7 +1642,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         async def record_usage(usage: ProviderUsageRecord) -> None:
             usage_records.append(usage)
 
-        script = await provider.generate_with_usage(
+        brief, script = await provider.generate_with_brief(
             card, on_usage=record_usage
         )
         review = await provider.review(card, script)
@@ -1578,7 +1652,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response_format["type"], "json_schema")
         self.assertEqual(
             response_format["json_schema"]["name"],
-            "qijia_script_draft_v2",
+            "qijia_script_draft_v3",
         )
         self.assertTrue(response_format["json_schema"]["strict"])
         self.assertFalse(
@@ -1600,29 +1674,22 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("max_completion_tokens", request_body)
         self.assertNotIn("temperature", request_body)
         prompt = request_body["messages"][1]["content"]
-        self.assertIn("一条视频只讲清一个核心观点", prompt)
-        self.assertIn("语言自然、具体、有思考感但不说教", prompt)
-        self.assertIn("真实存在的张力", prompt)
-        self.assertIn("不要逐段独立创作后拼接", prompt)
-        self.assertIn("降低 2 秒流失率、提高 5 秒完播率", prompt)
-        self.assertIn("前 2 秒直接呈现观点中最有力量的矛盾", prompt)
-        self.assertNotIn("【导演思维】", prompt)
-        self.assertIn("visual_direction 只写观众必须看懂", prompt)
-        self.assertIn("可复用的判断框架", prompt)
-        self.assertIn("具体、低压力、无需暴露隐私", prompt)
-        self.assertIn("5-8 段", prompt)
-        self.assertIn("narration 是唯一会送入 TTS 的口播", prompt)
-        self.assertIn(
-            'beats.source_refs 只能从这里选择）：["fact_01"]', prompt
-        )
-        self.assertIn(
-            "source ID 只用于材料溯源，绝不能填写到 beats.source_refs", prompt
-        )
+        self.assertIn("唯一的 H3 Creative Director", prompt)
+        self.assertIn("【不可变原始输入】", prompt)
+        self.assertIn("【唯一 EvidencePack】", prompt)
+        self.assertIn("【H3 CreativeBrief 方法】", prompt)
+        self.assertIn("不为凑数量切碎论证", prompt)
+        self.assertIn("最少 3 段、最多 12 段", prompt)
+        self.assertIn("脚本阶段不写 visual_direction", prompt)
+        self.assertIn("事实主张或直接引语", prompt)
         self.assertIn('"title": "测试资料"', prompt)
+        self.assertEqual(brief.core_thesis, "先核验依据与语境，再理解观点本身。")
+        self.assertEqual(brief.evidence_refs, ["fact_01"])
+        self.assertEqual(script.schema_version, "3.0")
         self.assertEqual(script.source_card_id, card.id)
-        self.assertTrue(all(
-            beat.source_refs == ["fact_01"] for beat in script.beats
-        ))
+        self.assertEqual(script.beats[0].source_refs, [])
+        self.assertEqual(script.beats[2].source_refs, ["fact_01"])
+        self.assertEqual(script.beats[3].source_refs, ["fact_01"])
         self.assertEqual(script.hook, script.narration_segments[0].text)
         self.assertEqual(script.closing, script.narration_segments[-1].text)
         self.assertEqual(narration_char_count(script.narration_text()), 200)
@@ -1641,7 +1708,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         custom_prompt = provider._prompt(card, "只用短句，语气平静。")
         self.assertTrue(custom_prompt.startswith("只用短句，语气平静。"))
         self.assertIn("【系统输出格式】", custom_prompt)
-        self.assertIn("【本次来源卡】", custom_prompt)
+        self.assertNotIn("【本次来源卡】", custom_prompt)
 
     async def test_person_research_uses_bounded_web_search_and_cited_evidence(self):
         calls: list[httpx.Request] = []
@@ -1808,10 +1875,6 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             calls.append(request)
             generated = {
                 "summary": "TERA LAB 发布了一个可核验的新版本。",
-                "core_tension": "官方能力描述与真实采用效果仍需区分。",
-                "audience_relevance": ["普通用户需要判断当前是否可用。"],
-                "content_angles": ["先讲发布内容，再讲仍待验证的效果。"],
-                "interaction_opportunity": "你更关注功能还是实际采用效果？",
                 "evidence": [
                     {
                         "claim": "官方在 2026-08-08 发布了新版本说明。",
@@ -1904,7 +1967,14 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request_body["tool_choice"], "required")
         self.assertEqual(
             request_body["response_format"]["json_schema"]["name"],
-            "recent_news_research_v5",
+            "recent_news_evidence_v6",
+        )
+        research_properties = request_body["response_format"]["json_schema"][
+            "schema"
+        ]["properties"]
+        self.assertEqual(
+            set(research_properties),
+            {"summary", "evidence", "uncertainties"},
         )
         self.assertEqual(
             request_body["tools"][0]["parameters"]["max_total_results"],
@@ -2063,7 +2133,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             for item in brief.uncertainties
         ))
 
-    async def test_recent_news_research_whitelists_provider_fields_and_fills_editorial_gaps(self):
+    async def test_recent_news_research_whitelists_fields_without_editorial_fill(self):
         source_url = "https://official.example/releases/tera-fab"
         claim = "官方在 2026-08-09 公布了 TERA FAB 项目计划。"
 
@@ -2115,9 +2185,10 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         brief = await provider.research_recent_news(card)
 
         self.assertEqual(brief.summary, claim)
-        self.assertIn("后续实际影响仍需区分", brief.core_tension)
-        self.assertEqual(len(brief.audience_relevance), 1)
-        self.assertEqual(len(brief.content_angles), 1)
+        self.assertEqual(brief.core_tension, "")
+        self.assertEqual(brief.audience_relevance, [])
+        self.assertEqual(brief.content_angles, [])
+        self.assertEqual(brief.interaction_opportunity, "")
         self.assertNotIn(
             "provider_extra",
             brief.model_dump(mode="json"),
@@ -2433,23 +2504,23 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         def generated(segment_text: str) -> dict:
             kinds = ["hook", "context", "explanation", "application", "closing"]
             return {
-                "schema_version": "2.0",
+                "creative_brief": valid_creative_brief(
+                    evidence_refs=["fact_01"]
+                ),
+                "schema_version": "3.0",
                 "video_title": "给孩子留出尝试空间",
                 "cover_text": "帮助不等于替代",
-                "hook": segment_text,
                 "beats": [
                     {
                         "id": f"n{index:02d}",
                         "narration": segment_text,
                         "role": kind,
-                        "visual_direction": f"第 {index} 段家庭动作，无文字",
                         "on_screen_text": "",
                         "source_refs": ["fact_01"],
                         "quote_ref": None,
                     }
                     for index, kind in enumerate(kinds, 1)
                 ],
-                "closing": segment_text,
                 "caption": "给孩子留出尝试空间。",
                 "hashtags": ["家庭教育", "亲子沟通", "家长成长"],
             }
@@ -2493,23 +2564,23 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         def generated(segment_text: str) -> dict:
             kinds = ["hook", "context", "explanation", "application", "closing"]
             return {
-                "schema_version": "2.0",
+                "creative_brief": valid_creative_brief(
+                    evidence_refs=["fact_01"]
+                ),
+                "schema_version": "3.0",
                 "video_title": "给孩子留出尝试空间",
                 "cover_text": "帮助不等于替代",
-                "hook": segment_text,
                 "beats": [
                     {
                         "id": f"n{index:02d}",
                         "narration": segment_text,
                         "role": kind,
-                        "visual_direction": f"第 {index} 段家庭动作，无文字",
                         "on_screen_text": "",
                         "source_refs": ["fact_01"],
                         "quote_ref": None,
                     }
                     for index, kind in enumerate(kinds, 1)
                 ],
-                "closing": segment_text,
                 "caption": "给孩子留出尝试空间。",
                 "hashtags": ["家庭教育", "亲子沟通", "家长成长"],
             }
@@ -2560,10 +2631,11 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             prompt = payload["messages"][1]["content"]
             self.assertIn("first_frame_prompt", prompt)
             self.assertIn("motion_prompt", prompt)
-            self.assertIn("前 2 秒", prompt)
-            self.assertIn("前 5 秒", prompt)
             self.assertIn("不先用空镜", prompt)
             self.assertIn("连续的竖屏视觉叙事", prompt)
+            self.assertIn("完整旁白与冻结的 CreativeBrief", prompt)
+            self.assertNotIn("前 2 秒", prompt)
+            self.assertNotIn("前 5 秒", prompt)
             self.assertNotIn("竖屏家庭微故事", prompt)
             self.assertNotIn("所有章节使用同一组虚构东亚家庭成员", prompt)
             return httpx.Response(200, json={
@@ -2571,6 +2643,9 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                     "shots": [
                         {
                             "segment_id": segment_id,
+                            "visual_type": [
+                                "video", "image", "image", "video", "video"
+                            ][index - 1],
                             "visual_intent": f"意图 {index}",
                             "first_frame_prompt": f"首帧 {index}",
                             "motion_prompt": f"动作 {index}",
@@ -3226,6 +3301,19 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.temporary.cleanup()
 
+    async def test_generic_source_card_requires_evidence_before_verification(self):
+        card = await self.service.create_source_card(
+            valid_card(sources=[], verified_facts=[]),
+            self.actor,
+        )
+
+        with self.assertRaisesRegex(QualityGateFailed, "至少需要一条真实来源"):
+            await self.service.verify_source_card(
+                card.id,
+                card.revision,
+                self.actor,
+            )
+
     async def test_job_freezes_recommended_skill_and_rejects_incompatible_skill(self):
         card = await self.service.create_source_card(valid_card(), self.actor)
         card = await self.service.verify_source_card(
@@ -3235,7 +3323,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         job = await self.service.create_job(card.id, self.actor)
 
         self.assertEqual(job.skill_snapshot.skill_id, "explain-expert-view")
-        self.assertEqual(job.skill_snapshot.version, "1.3.0")
+        self.assertEqual(job.skill_snapshot.version, "2.0.0")
         self.assertEqual(job.skill_snapshot.research_mode.value, "none")
         self.assertEqual(
             job.generation_settings.skill_id,
@@ -3246,10 +3334,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.skill_snapshot.version,
         )
         self.assertEqual(len(job.skill_snapshot.manifest_hash), 64)
-        self.assertIn(
-            "降低 2 秒流失率",
-            job.generation_settings.script_prompt,
-        )
+        self.assertEqual(job.skill_snapshot.script_system_prompt, "")
+        self.assertEqual(job.skill_snapshot.visual_policy, "")
+        self.assertIn("唯一的 H3 CreativeBrief", job.generation_settings.script_prompt)
 
         with self.assertRaisesRegex(QualityGateFailed, "不支持内容格式"):
             await self.service.create_job(
@@ -3289,13 +3376,17 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "高级编辑纸张拼贴",
             job.generation_settings.seedance_prompt,
         )
+        job = await self.service.generate_script(job.id, self.actor)
+        self.assertIsNotNone(job.creative_brief)
         compiled = self.service._storyboard_base_style(job)
         self.assertIn("唯一编排层", compiled)
         self.assertIn("H3 编排方法", compiled)
-        self.assertIn("内容视觉策略", compiled)
-        self.assertIn("医疗诊断", compiled)
+        self.assertIn("冻结的唯一 CreativeBrief", compiled)
+        self.assertIn(job.creative_brief.core_thesis, compiled)
+        self.assertNotIn("内容视觉策略", compiled)
         self.assertIn("视觉表现", compiled)
-        self.assertIn("3–6", compiled)
+        self.assertIn("不为凑数量复制旁白", compiled)
+        self.assertIn("最多安排三段 AI 视频", compiled)
         shot = StoryboardShot(
             shot_id="shot_01",
             segment_id="n01",
@@ -3333,6 +3424,26 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
                     visual_style_id="paper-collage-explainer",
                     seedance_prompt="自定义低饱和纸张拼贴导演设定。",
                 ),
+            )
+
+        with self.assertRaisesRegex(
+            QualityGateFailed,
+            "不要再提交 script_prompt",
+        ):
+            await self.service.create_job(
+                card.id,
+                self.actor,
+                GenerationSettings(script_prompt="另一套脚本方法。"),
+            )
+
+        with self.assertRaisesRegex(
+            QualityGateFailed,
+            "不要再提交 image_count 或 shot_count",
+        ):
+            await self.service.create_job(
+                card.id,
+                self.actor,
+                GenerationSettings(image_count=2),
             )
 
         with self.assertRaisesRegex(
@@ -3426,13 +3537,14 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             provider.compiled_research_prompt,
         )
         self.assertIn(brief.viewpoint, provider.compiled_research_prompt)
-        self.assertIn(
-            "H3 输入驱动研究方法",
-            provider.compiled_research_prompt,
-        )
-        self.assertIn("【自动研究简报】", provider.generated_prompt)
-        self.assertIn("【唯一上游编排层】", provider.generated_prompt)
-        self.assertIn(brief.content_angles[0], provider.generated_prompt)
+        self.assertIn("【EvidencePack 交付原则】", provider.compiled_research_prompt)
+        self.assertIn("研究阶段不设计钩子、内容角度", provider.compiled_research_prompt)
+        self.assertNotIn("H3 CreativeBrief 方法", provider.compiled_research_prompt)
+        self.assertIn("【唯一 EvidencePack】", provider.generated_prompt)
+        self.assertIn("【H3 CreativeBrief 方法】", provider.generated_prompt)
+        self.assertNotIn("【自动研究简报】", provider.generated_prompt)
+        self.assertNotIn(brief.content_angles[0], provider.generated_prompt)
+        self.assertIsNotNone(generated.creative_brief)
         enriched = SourceCard.model_validate(generated.source_card_snapshot)
         self.assertEqual(
             [item.id for item in enriched.sources if item.id.startswith("research_source")],
@@ -3620,18 +3732,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
                     raise AssertionError("wrong research mode")
                 return brief.model_copy(update={"as_of": research_as_of})
 
-            async def generate_for_skill(
-                self,
-                card,
-                prompt,
-                *,
-                system_prompt,
-                on_usage=None,
-            ):
-                del on_usage
+            async def generate(self, card, prompt=None):
                 self.generated_card = card.model_copy(deep=True)
-                self.generated_prompt = prompt
-                self.system_prompt = system_prompt
+                self.generated_prompt = str(prompt or "")
                 return await super().generate(card, prompt)
 
         provider = NewsProvider()
@@ -3676,12 +3779,13 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             1,
         )
         self.assertIn("只有一个可追溯站点", generated.research_warning)
-        self.assertIn("【新闻价值】", generated.generation_settings.script_prompt)
+        self.assertNotIn("【新闻价值】", generated.generation_settings.script_prompt)
+        self.assertIn("【唯一 EvidencePack】", provider.generated_prompt)
         self.assertIn('"research_as_of"', provider.generated_prompt)
         self.assertIn("2026-08-08", provider.generated_prompt)
-        self.assertIn("科技与商业新闻短视频主编", provider.system_prompt)
+        self.assertIn("【H3 CreativeBrief 方法】", provider.generated_prompt)
         self.assertNotIn("家长", generated.script.narration_text())
-        self.assertIn("科技新闻", generated.script.hashtags)
+        self.assertIn("最新动态", generated.script.hashtags)
 
         approved = await self.service.approve_script(
             generated.id,
@@ -3703,11 +3807,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("家长", visual_text)
         self.assertNotIn("孩子", visual_text)
-        self.assertIn("新闻截图", produced.skill_snapshot.visual_policy)
-        self.assertIn(
-            "新闻截图",
-            self.service._storyboard_base_style(produced),
-        )
+        self.assertEqual(produced.skill_snapshot.visual_policy, "")
+        self.assertNotIn("新闻截图", self.service._storyboard_base_style(produced))
 
     async def test_seedance_cost_keeps_submission_price_snapshot(self):
         job = VideoJob.model_validate({
@@ -3749,10 +3850,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         card = await self.service.verify_source_card(
             card.id, card.revision, self.actor
         )
-        job = await self.service.create_job(
-            card.id, self.actor, GenerationSettings(image_count=2)
-        )
+        job = await self.service.create_job(card.id, self.actor)
         job = await self.service.generate_script(job.id, self.actor)
+        job.generation_settings = GenerationSettings(image_count=2)
         extra = job.script.beats[1].model_copy(deep=True)
         extra.id = "n01b"
         extra.role = "suspense"
@@ -3768,38 +3868,22 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             [beat.id for beat in job.script.beats],
         )
 
-    async def test_ten_image_visual_plan_allocates_inside_script_beats(self):
+    async def test_legacy_fixed_count_never_duplicates_script_beats(self):
         card = await self.service.create_source_card(valid_card(), self.actor)
         card = await self.service.verify_source_card(
             card.id, card.revision, self.actor
         )
-        job = await self.service.create_job(
-            card.id, self.actor, GenerationSettings(image_count=10)
-        )
+        job = await self.service.create_job(card.id, self.actor)
         job = await self.service.generate_script(job.id, self.actor)
+        job.generation_settings = GenerationSettings(image_count=10)
 
         groups = self.service._storyboard_beat_groups(job)
         visual_types = self.service._storyboard_visual_types(job, groups)
         flat_ids = [beat.id for group in groups for beat in group]
-        compressed_ids = [
-            beat_id
-            for index, beat_id in enumerate(flat_ids)
-            if index == 0 or beat_id != flat_ids[index - 1]
-        ]
-
-        self.assertEqual(len(groups), 13)
-        self.assertEqual(compressed_ids, [beat.id for beat in job.script.beats])
-        self.assertEqual(visual_types.count("video"), 3)
-        self.assertEqual(visual_types.count("image"), 10)
-        self.assertEqual(visual_types[0], "video")
-        self.assertEqual(
-            sum(
-                beat.id == job.script.beats[0].id
-                for group in groups
-                for beat in group
-            ),
-            1,
-        )
+        self.assertEqual(len(groups), len(job.script.beats))
+        self.assertEqual(flat_ids, [beat.id for beat in job.script.beats])
+        self.assertEqual(visual_types, ())
+        self.assertEqual(len(flat_ids), len(set(flat_ids)))
 
     async def test_true_overlong_narration_is_rejected_without_hidden_rewrite(self):
         card = await self.service.create_source_card(valid_card(), self.actor)
@@ -4019,7 +4103,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(reopened.storyboard_plan)
         self.assertIsNotNone(reopened.render_manifest)
-        self.assertEqual(len(reopened.visual_requests), 3)
+        self.assertEqual(len(reopened.visual_requests), 2)
         self.assertEqual(
             narration_char_count(reopened.script.narration_text()), 739
         )
@@ -4191,7 +4275,6 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.actor,
             GenerationSettings(
                 visual_style_id="paper-collage-explainer",
-                image_count=10,
             ),
         )
         job = await self.service.generate_script(job.id, self.actor)
@@ -4200,14 +4283,15 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         job = await self.service.produce(job.id, self.actor)
 
-        self.assertEqual(len(provider.reference_image_urls), 13)
+        self.assertEqual(len(provider.reference_image_urls), 5)
         self.assertEqual(
             set(provider.reference_image_urls),
             {"local://qijia-video/reference-images/test.png"},
         )
         self.assertIn("【参考素材】", storyboard_provider.base_style)
         self.assertIn("参考图只约束", storyboard_provider.base_style)
-        self.assertIn("【内容视觉策略】", storyboard_provider.base_style)
+        self.assertIn("【冻结的唯一 CreativeBrief】", storyboard_provider.base_style)
+        self.assertNotIn("【内容视觉策略】", storyboard_provider.base_style)
         self.assertIn("【视觉表现】", storyboard_provider.base_style)
         self.assertIn("高级编辑纸张拼贴", storyboard_provider.base_style)
         self.assertTrue(all(
@@ -4286,20 +4370,20 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             side_effect=lambda bits: seed_widths.append(bits) or len(seed_widths),
         ):
             job = await self.service.produce(job.id, self.actor)
-        self.assertEqual(seed_widths, [31] * 13)
+        self.assertEqual(seed_widths, [31] * 5)
         self.assertEqual(
             call_order,
-            ["image"] * 3 + ["video_submit"] * 3 + ["image"] * 10,
+            ["image"] * 2 + ["video_submit"] * 2 + ["image"] * 3,
         )
         self.assertEqual(job.state, JobState.FINAL_REVIEW_REQUIRED)
         self.assertEqual(len(job.review_bundle_hash), 64)
         self.assertTrue(job.render_manifest.subtitle_cues)
         self.assertEqual(
             [cue.text for cue in job.render_manifest.screen_text_cues],
-            ["陪伴，不是接管"],
+            ["先看依据，再下结论"],
         )
         self.assertNotIn(
-            "陪伴，不是接管",
+            "先看依据，再下结论",
             "".join(item.text for item in job.narration_manifest.segments),
         )
         self.assertEqual(
@@ -4312,9 +4396,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(
             cue.text == cue.text.strip() for cue in job.render_manifest.subtitle_cues
         ))
-        self.assertEqual(job.generation_settings.image_count, 10)
-        self.assertEqual(job.generation_settings.shot_count, 13)
-        self.assertEqual(len(job.visual_requests), 3)
+        self.assertEqual(job.generation_settings.image_count, 0)
+        self.assertEqual(job.generation_settings.shot_count, 0)
+        self.assertEqual(len(job.visual_requests), 2)
         self.assertTrue(all(
             request.resolution == "1080p"
             and 8 <= request.duration_seconds <= 10
@@ -4340,8 +4424,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("【抖音开场执行】", job.visual_requests[0].prompt)
         self.assertNotIn("视频提示词结构", job.visual_requests[0].prompt)
-        self.assertEqual(len(job.video_tasks), 3)
-        self.assertEqual(len(job.visual_versions), 3)
+        self.assertEqual(len(job.video_tasks), 2)
+        self.assertEqual(len(job.visual_versions), 2)
         self.assertTrue(all(
             version.version == 1
             and version.asset is not None
@@ -4356,7 +4440,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             task.state == ProviderTaskState.SUCCEEDED for task in job.video_tasks
         ))
         self.assertIsNotNone(job.storyboard_plan)
-        self.assertEqual(len(job.storyboard_plan.shots), 13)
+        self.assertEqual(len(job.storyboard_plan.shots), len(job.script.beats))
         planned_beat_ids = [
             beat_id
             for shot in job.storyboard_plan.shots
@@ -4372,14 +4456,16 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [shot.visual_type for shot in job.storyboard_plan.shots].count("video"),
-            3,
+            2,
         )
         self.assertEqual(
             [shot.visual_type for shot in job.storyboard_plan.shots].count("image"),
-            10,
+            3,
         )
         self.assertEqual(job.storyboard_plan.shots[0].visual_type, "video")
-        self.assertEqual(len(job.first_frame_candidates), 13)
+        self.assertEqual(
+            len(job.first_frame_candidates), len(job.storyboard_plan.shots)
+        )
         self.assertTrue(all(
             0 <= candidate.seed <= SEEDREAM_MAX_SEED
             for candidate in job.first_frame_candidates
@@ -4393,7 +4479,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             shot.selected_candidate_id == f"frame_{shot.shot_id}_01"
             for shot in job.storyboard_plan.shots
         ))
-        self.assertEqual(len(job.render_manifest.visual_blocks), 13)
+        self.assertEqual(
+            len(job.render_manifest.visual_blocks), len(job.storyboard_plan.shots)
+        )
         self.assertEqual(
             sum(
                 block.duration_in_frames
@@ -4407,7 +4495,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "role": "member",
             "permissions": ["qijia_video"],
         })
-        self.assertEqual(public_payload["script"]["schema_version"], "2.0")
+        self.assertEqual(public_payload["script"]["schema_version"], "3.0")
         self.assertIn("beats", public_payload["script"])
         self.assertNotIn("narration_segments", public_payload["script"])
         self.assertTrue(all(
@@ -4423,7 +4511,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 for shot in job.storyboard_plan.shots
             )
         }
-        self.assertEqual(len(selected_assets), 13)
+        self.assertEqual(len(selected_assets), len(job.storyboard_plan.shots))
         self.assertEqual(
             {request.first_frame_asset_id for request in job.visual_requests},
             {
@@ -4451,7 +4539,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             for request in job.visual_requests
         ))
         blocks = job.render_manifest.visual_blocks
-        self.assertEqual(len(blocks), 13)
+        self.assertEqual(len(blocks), len(job.storyboard_plan.shots))
         self.assertEqual(
             [block.type for block in blocks],
             [
@@ -4474,7 +4562,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertEqual(
             [block.shot_id for block in blocks],
-            [f"shot_{index:02d}" for index in range(1, 14)],
+            [f"shot_{index:02d}" for index in range(1, len(blocks) + 1)],
         )
         self.assertEqual(job.render_manifest.video_title, job.script.video_title)
         self.assertEqual(job.render_manifest.cover_text, job.script.cover_text)
@@ -4588,7 +4676,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             storyboard_shot.selected_candidate_id,
             frame_candidate.candidate_id,
         )
-        self.assertEqual(len(self.service._all_video_tasks(job)), 4)
+        self.assertEqual(len(self.service._all_video_tasks(job)), 3)
         self.assertEqual(
             {
                 item.request_id: item.fingerprint()
@@ -4635,7 +4723,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len([
             item for item in job.visual_versions if item.shot_id == shot_id
         ]), 2)
-        self.assertEqual(len(self.service._all_video_tasks(job)), 4)
+        self.assertEqual(len(self.service._all_video_tasks(job)), 3)
 
         legacy_prompt = "历史后台任务已经冻结的完整镜头提示词。"
         job = await self.service.regenerate_shot(
@@ -4654,7 +4742,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len([
             item for item in job.visual_versions if item.shot_id == shot_id
         ]), 3)
-        self.assertEqual(len(self.service._all_video_tasks(job)), 5)
+        self.assertEqual(len(self.service._all_video_tasks(job)), 4)
 
     async def test_editor_media_can_mix_images_and_videos_and_restore_ai(self):
         card = await self.service.create_source_card(valid_card(), self.actor)
@@ -5504,7 +5592,6 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             card.id, card.revision, self.actor
         )
         settings = GenerationSettings(
-            script_prompt="用更像真实对话的方式写脚本。",
             visual_style_id="papercraft-stop-motion",
             video_resolution="1080p",
             tts_voice_id="zh_male_ruyayichen_saturn_bigtts",
@@ -5514,10 +5601,12 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             card.id, self.actor, settings
         )
         job = await self.service.generate_script(job.id, self.actor)
-        self.assertTrue(provider.prompt.startswith("【唯一上游编排层】"))
-        self.assertIn(settings.script_prompt, provider.prompt)
-        self.assertIn("语速 1.1x", provider.prompt)
+        self.assertTrue(provider.prompt.startswith("你是本任务唯一的 H3 Creative Director"))
+        self.assertIn("【不可变原始输入】", provider.prompt)
+        self.assertIn("【唯一 EvidencePack】", provider.prompt)
+        self.assertIn("【H3 CreativeBrief 方法】", provider.prompt)
         self.assertIn("245-325 个汉字", provider.prompt)
+        self.assertIsNotNone(job.creative_brief)
 
         job = await self.service.approve_script(
             job.id, job.revision, job.script_hash, self.actor
@@ -5531,9 +5620,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job.narration_manifest.speed_ratio, 1.1)
         self.assertIn("H3 编排方法", storyboard_provider.base_style)
         self.assertIn("精致手工纸艺定格", storyboard_provider.base_style)
-        self.assertIn("内容视觉策略", storyboard_provider.base_style)
+        self.assertIn("冻结的唯一 CreativeBrief", storyboard_provider.base_style)
+        self.assertNotIn("内容视觉策略", storyboard_provider.base_style)
         requests = job.visual_requests
-        self.assertEqual(len(requests), 3)
+        self.assertEqual(len(requests), 2)
         self.assertTrue(all(
             request.resolution == "1080p"
             and request.model_id == SEEDANCE_EFFICIENT_MODEL
@@ -5595,7 +5685,6 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "first_frames",
             "seedance_shot_1",
             "seedance_shot_2",
-            "seedance_shot_3",
             "seedance_parallel",
             "visual_assets",
             "remotion_render",
@@ -5605,6 +5694,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "confirm_final",
             "package",
         }.issubset(stages))
+        self.assertNotIn("seedance_shot_3", stages)
         self.assertNotIn("frame_selection", stages)
 
     async def test_legacy_frozen_video_requests_resume_without_seedream_cost(self):
@@ -5700,12 +5790,9 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         self.assertNotIn("mock", response.json()["data"]["script_provider"])
         self.assertNotIn("mock", response.json()["data"]["tts_provider"])
         self.assertNotIn("mock", response.json()["data"]["video_provider"])
-        self.assertEqual(
-            response.json()["data"]["generation_defaults"]["image_count"], 10
-        )
-        self.assertEqual(
-            response.json()["data"]["generation_defaults"]["shot_count"], 13
-        )
+        defaults = response.json()["data"]["generation_defaults"]
+        self.assertNotIn("image_count", defaults)
+        self.assertNotIn("shot_count", defaults)
         self.assertEqual(
             response.json()["data"]["generation_defaults"]["video_resolution"],
             "1080p",
@@ -5718,6 +5805,9 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             "seedance_prompt",
             response.json()["data"]["generation_defaults"],
         )
+        seedream_pricing = response.json()["data"]["seedream_pricing"]
+        self.assertEqual(seedream_pricing["chapter_policy"], "semantic_adaptive")
+        self.assertEqual(seedream_pricing["max_video_chapters"], 3)
         skills = response.json()["data"]["content_skills"]
         self.assertEqual(
             {item["skill_id"] for item in skills},
