@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.23.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.24.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -198,17 +198,12 @@
               <button id="topic-source-submit" class="button primary" type="submit" data-busy-lock>确认资料并生成脚本</button>
             </form>
           </section>
-          <p id="manual-intake-intro" class="panel-note intake-intro">输入一个人物和他的核心观点。系统先核验出处与语境形成 EvidencePack，再由唯一 H3 CreativeBrief 统领完整脚本与后续视觉。</p>
+          <p id="manual-intake-intro" class="panel-note intake-intro">用一段自然语言说明你想做的内容。系统原样冻结请求，由研究阶段识别人物、引语、观点与目标，再形成 EvidencePack 和唯一 H3 CreativeBrief。</p>
           <form id="source-card-form" class="form-stack">
             <label class="primary-field">
-              <span class="question-line"><span class="question-number">1</span>你想讲谁？</span>
-              <input name="person_name" required maxlength="120" autocomplete="off" placeholder="例如：黄宗羲">
-              <span class="field-hint">可以输入思想、历史、教育、心理学、科学、商业等领域的人物。</span>
-            </label>
-            <label class="primary-field">
-              <span class="question-line"><span class="question-number">2</span>这个人物最值得展开的观点是什么？</span>
-              <textarea name="viewpoint" required minlength="10" maxlength="1800" rows="7" placeholder="直接粘贴原话、流传表述或你的观点概括，系统会先核验归属与语境。"></textarea>
-              <span class="field-hint">直接写完整原始表述。系统会先判断它是引语、转述还是观点命题，并优先核验人物归属、可靠原文、出处和语境；没有可靠来源时会明确降级，不会虚构人物经历或引语。</span>
+              <span class="question-line"><span class="question-number">1</span>你想做什么内容？</span>
+              <textarea name="creative_request" required minlength="10" maxlength="1800" rows="9" placeholder="例如：黄宗羲，以及“大丈夫行事，论是非不论利害……”这段话。我想解释它的出处、真正含义和今天的价值。"></textarea>
+              <span class="field-hint">可以直接写人物、原话、观点、问题、资料或表达方向。请求会原样冻结；系统先判断它是引语、转述还是观点命题，再核验人物归属、可靠原文、出处和语境。没有可靠来源时会明确降级，不会虚构人物经历或引语。</span>
             </label>
             <section class="reference-input" aria-labelledby="reference-input-title">
               <div class="reference-input-heading">
@@ -232,7 +227,7 @@
               <p class="field-hint">上传后，它会成为全部视觉章节的最高优先级视觉基准，但不作为观点依据。JPG、PNG 或 WebP，最大 10 MB。</p>
             </section>
             <div class="actions source-form-actions">
-              <button id="source-submit-button" class="button primary" type="submit" data-busy-lock>生成脚本</button>
+              <button id="source-submit-button" class="button primary" type="submit" data-busy-lock>研究并生成脚本</button>
             </div>
           </form>
           <form id="news-topic-form" class="form-stack" hidden>
@@ -551,6 +546,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.23.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.24.0"></script>
 </body>
 </html>

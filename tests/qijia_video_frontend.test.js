@@ -205,28 +205,31 @@ test('generated video UI does not expose an automatic publish action', () => {
   assert.match(page, /生成发布版本/);
 });
 
-test('creation intake asks only for one person and one viewpoint', () => {
+test('creation intake freezes one unified natural-language creative request', () => {
   const manualStart = page.indexOf('id="source-card-form"');
   const manualEnd = page.indexOf('id="news-topic-form"');
   const manualForm = page.slice(manualStart, manualEnd);
-  assert.match(page, /name="person_name"/);
-  assert.match(page, /name="viewpoint"/);
-  assert.match(page, /核验出处与语境形成 EvidencePack/);
-  assert.match(page, /唯一 H3 CreativeBrief 统领完整脚本与后续视觉/);
+  assert.match(manualForm, /name="creative_request"/);
+  assert.equal((manualForm.match(/name="creative_request"/g) || []).length, 1);
+  assert.doesNotMatch(manualForm, /name="person_name"|name="viewpoint"/);
+  assert.match(page, /请求会原样冻结/);
+  assert.match(page, /研究阶段识别人物、引语、观点与目标/);
   assert.doesNotMatch(manualForm, /阿尔弗雷德·阿德勒|真正影响孩子/);
   assert.doesNotMatch(manualForm, /name="source_material"|name="rights_confirmed"|补充出处|专业模式/);
   assert.doesNotMatch(page, /name="parent_question"|name="core_idea"|name="fact_text"|name="subject_name"/);
-  assert.match(app, /\/source-cards\/idea/);
+  assert.match(app, /\/source-cards\/creative-request/);
+  assert.match(app, /\/source-cards\/creative-request-with-reference/);
+  assert.match(app, /upload\.append\('creative_request'/);
   assert.ok(page.indexOf('id="generation-orchestration"') > page.indexOf('id="source-submit-button"'));
 });
 
-test('person viewpoint research is visible, cited, and non-blocking', () => {
+test('creative request research is visible, cited, and non-blocking', () => {
   assert.match(page, /先判断它是引语、转述还是观点命题/);
   assert.match(page, /没有可靠来源时会明确降级/);
   assert.match(page, /id="person-research-brief"/);
   assert.match(app, /function renderResearchBrief\(job\)/);
   assert.match(page, /EvidencePack 与 H3 CreativeBrief/);
-  assert.match(app, /人物观点 EvidencePack/);
+  assert.match(app, /创作请求 EvidencePack/);
   assert.match(app, /H3 CreativeBrief/);
   assert.match(app, /研究只提供证据、出处与不确定性/);
   assert.match(app, /出处核验/);
@@ -295,7 +298,7 @@ test('creation intake offers one optional global reference image without extra f
   assert.match(page, /优先统一全部视觉章节的画风、色彩与人物造型/);
   assert.doesNotMatch(page, /id="reference-image-input"[^>]*multiple/);
   assert.match(app, /referenceImageFile/);
-  assert.match(app, /\/source-cards\/idea-with-reference/);
+  assert.match(app, /\/source-cards\/creative-request-with-reference/);
   assert.match(app, /apiMultipart/);
   assert.match(page, /id="job-reference-image"/);
 });
@@ -481,8 +484,8 @@ test('script approval can arrange owned media before paid visual generation', ()
   assert.doesNotMatch(researchSource, /media_review_required/);
 });
 
-test('person viewpoint flow starts a real job and polling resumes after refresh', () => {
-  assert.match(app, /card = await api\('POST', '\/source-cards\/idea', body\)/);
+test('unified creative request starts a real job and polling resumes after refresh', () => {
+  assert.match(app, /card = await api\('POST', '\/source-cards\/creative-request', body\)/);
   assert.match(app, /source_card_id: card\.id, generation_settings: generationSettings/);
   assert.match(app, /job\?\.last_run_task_id/);
   assert.match(app, /resumeSelectedTask/);

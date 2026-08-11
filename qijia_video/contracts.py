@@ -69,6 +69,7 @@ class ContentFormat(StrEnum):
 
 
 class SkillInputMode(StrEnum):
+    CREATIVE_REQUEST = "creative_request"
     PERSON_VIEWPOINT = "person_viewpoint"
     RECENT_NEWS_TOPIC = "recent_news_topic"
 
@@ -240,8 +241,47 @@ class SourceCardInput(ContractModel):
         return self
 
 
+class CreativeRequestInput(ContractModel):
+    """One immutable natural-language request for H3 to understand and research."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    creative_request: str = Field(min_length=10, max_length=1800)
+
+    @model_validator(mode="after")
+    def normalize_request(self):
+        normalized = self.creative_request.strip()
+        if len(normalized) < 10:
+            raise ValueError("请用至少 10 个字说明你想做的内容")
+        object.__setattr__(self, "creative_request", normalized)
+        return self
+
+    def to_source_card_input(self) -> SourceCardInput:
+        request = self.creative_request
+        compact = re.sub(r"\s+", " ", request).strip()
+        return SourceCardInput(
+            content_domain=ContentDomain.GENERAL_KNOWLEDGE,
+            content_format=ContentFormat.PERSON_IDEA,
+            target_audience="希望理解这项人物、观点或主题的普通中文受众",
+            # topic marks a request whose primary subject must be identified by
+            # evidence research instead of guessed by the intake form.
+            subject={"type": "topic", "name": compact[:120]},
+            title=compact[:300],
+            core_idea=request,
+            parent_question="这项创作请求中最值得核验和解释的中心问题是什么？",
+            sources=[],
+            verified_facts=[],
+            interpretation_boundary=[{
+                "id": "boundary_01",
+                "text": (
+                    "原始创作请求只是待研究的主题与意图。涉及的人物、引语、观点归属、"
+                    "出处和语境在联网核验前均不得作为事实，也不得由系统猜测或补造。"
+                ),
+            }],
+        )
+
+
 class PersonViewpointInput(ContractModel):
-    """面向创作者的最小输入：一个人物和一个值得展开的观点。"""
+    """Compatibility input for clients that still submit separate legacy fields."""
 
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     person_name: str = Field(min_length=1, max_length=120)

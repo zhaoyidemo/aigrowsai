@@ -254,7 +254,7 @@ function updateContentSkillIntake() {
   $('#manual-intake-intro').hidden = handoffOpen;
   $('#manual-intake-intro').textContent = isNews
     ? '输入一个新闻主题和关注角度，系统会以任务创建时间为边界检索公开来源，核对事件时间，再生成可追溯的口播脚本。'
-    : '输入一个人物和他的核心观点，系统会先自动研究可追溯资料，再把观点中的冲突、反直觉与现实意义展开成完整视频脚本。';
+    : '用一段自然语言说明你想做的内容。系统会原样冻结请求，识别其中的人物、引语、观点和研究目标，再形成可追溯脚本。';
   $('#source-card-form').hidden = handoffOpen || isNews;
   $('#news-topic-form').hidden = handoffOpen || !isNews;
   renderOrchestrationSelection();
@@ -2543,7 +2543,7 @@ function renderResearchBrief(job) {
   ].join('') : '';
   node.innerHTML = [
     hasResearch ? '<div class="research-brief-heading"><div><strong>'
-      + (isNews ? '最新新闻 EvidencePack' : '人物观点 EvidencePack') + '</strong>' : '',
+      + (isNews ? '最新新闻 EvidencePack' : '创作请求 EvidencePack') + '</strong>' : '',
     hasResearch ? '<span>研究只提供证据、出处与不确定性'
       + (isNews && brief.as_of ? ' · 截至 ' + escapeHtml(formatDateTime(brief.as_of)) : '')
       + '</span></div>' : '',
@@ -3322,24 +3322,22 @@ $('#source-card-form').addEventListener('submit', async (event) => {
   const form = new FormData(event.currentTarget);
   const body = {
     schema_version: '1.0',
-    person_name: form.get('person_name'),
-    viewpoint: form.get('viewpoint'),
+    creative_request: form.get('creative_request'),
   };
   try {
     const generationSettings = generationSettingsPayload(DEFAULT_CONTENT_SKILL_ID);
     let card;
     if (state.referenceImageFile) {
       const upload = new FormData();
-      upload.append('person_name', String(body.person_name || ''));
-      upload.append('viewpoint', String(body.viewpoint || ''));
+      upload.append('creative_request', String(body.creative_request || ''));
       upload.append(
         'reference_image',
         state.referenceImageFile,
         state.referenceImageFile.name || 'reference-image',
       );
-      card = await apiMultipart('/source-cards/idea-with-reference', upload);
+      card = await apiMultipart('/source-cards/creative-request-with-reference', upload);
     } else {
-      card = await api('POST', '/source-cards/idea', body);
+      card = await api('POST', '/source-cards/creative-request', body);
     }
     resetSourceForm();
     let result;
@@ -3347,7 +3345,7 @@ $('#source-card-form').addEventListener('submit', async (event) => {
       result = await api('POST', '/jobs', {source_card_id: card.id, generation_settings: generationSettings});
     } catch (error) {
       await loadAll();
-      throw new Error(`观点已保存，但视频任务未启动：${error.message}`);
+      throw new Error(`创作请求已保存，但视频任务未启动：${error.message}`);
     }
     clearOneTaskPromptOverride();
     await loadAll({selectJobId: result.job.id});

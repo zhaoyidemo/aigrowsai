@@ -538,6 +538,12 @@ class QijiaVideoService:
             ]
             return SourceCard.model_validate(enriched)
 
+        if enriched.subject.type == "topic" and brief.person_name.strip():
+            enriched.subject = enriched.subject.model_copy(update={
+                "type": "person",
+                "name": brief.person_name.strip(),
+            })
+
         attribution_source_id = next(
             (
                 source_id
@@ -1297,7 +1303,7 @@ class QijiaVideoService:
                         if research_required
                         else (
                             "上次自动研究调用未形成完整简报；为避免重复计费，"
-                            "本次直接使用原始人物观点继续生成。"
+                            "本次直接使用原始创作请求继续生成。"
                         )
                     )
                     job = await self._save_job(job, actor)
@@ -1393,7 +1399,7 @@ class QijiaVideoService:
                         if research_required
                         else (
                             "自动研究暂未形成可追溯简报，"
-                            "已使用原始人物观点继续生成：" + detail
+                            "已使用原始创作请求继续生成：" + detail
                         )
                     )[:2000]
                     if research_required:

@@ -40,7 +40,7 @@ from qijia_video.tts_options import (
 
 SCRIPT_PROMPT_VERSION = "qijia_script_v14_single_creative_brief"
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v12_semantic_adaptive"
-PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_evidence_v3"
+PERSON_RESEARCH_PROMPT_VERSION = "qijia_person_evidence_v4_unified_request"
 NEWS_RESEARCH_PROMPT_VERSION = "recent_news_evidence_v6"
 OPENROUTER_REASONING_EFFORT = "high"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
@@ -166,6 +166,7 @@ _SCRIPT_RESPONSE_SCHEMA = {
 _PERSON_RESEARCH_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
+        "person_name": {"type": "string"},
         "input_type": {
             "type": "string",
             "enum": [
@@ -234,6 +235,7 @@ _PERSON_RESEARCH_RESPONSE_SCHEMA = {
         },
     },
     "required": [
+        "person_name",
         "input_type",
         "research_focus",
         "attribution_status",
@@ -1068,22 +1070,22 @@ class OpenRouterScriptProvider:
             raise ProviderUnavailable(
                 "人物研究未配置：请设置 OPENROUTER_API_KEY"
             )
-        person_name = card.subject.name
-        viewpoint = card.core_idea
+        fallback_subject = card.subject.name
+        original_request = card.core_idea
         research_date = timestamp()[:10]
         compiled_prompt = research_prompt.strip() or (
             "请先根据原始输入形成任务专属研究计划，再完成联网研究。\n"
             f"研究日期（UTC）：{research_date}\n"
-            f"人物：{person_name}\n"
-            f"用户原始表述：{viewpoint}\n"
+            f"用户原始创作请求：{original_request}\n"
             f"目标受众：{card.target_audience}\n"
-            "不得预设学科或应用场景。先判断输入类型；若可能是人物原话，"
+            "不得预设学科或应用场景。先识别主要人物与观点，再判断输入类型；若可能是人物原话，"
             "先核验归属、可靠原文、出处、文字异同与上下文。"
         )
         prompt = (
             compiled_prompt
             + "\n\n【人物研究 JSON 交付契约】\n"
-            "input_type 判断输入是 attributed_quote、paraphrased_viewpoint、"
+            "person_name 填写从完整请求中识别出的主要人物；若请求确实没有人物，填写最明确的"
+            "核心主题，不得猜测或补造。input_type 判断输入是 attributed_quote、paraphrased_viewpoint、"
             "conceptual_claim 或 unknown。research_focus 用一句话写清本次实际研究问题。"
             "attribution_status 只能是 verified、partially_supported、unverified 或"
             " not_applicable；只有可靠来源直接支持人物归属和文字时才可写 verified。"
@@ -1237,10 +1239,11 @@ class OpenRouterScriptProvider:
             if message not in uncertainties:
                 uncertainties.append(message)
 
+        identified_subject = bounded_text("person_name", 120) or fallback_subject
         generated.update({
             "schema_version": "1.0",
-            "person_name": person_name,
-            "viewpoint": viewpoint,
+            "person_name": identified_subject,
+            "viewpoint": original_request,
             "input_type": input_type,
             "research_focus": bounded_text("research_focus", 1200),
             "attribution_status": attribution_status,

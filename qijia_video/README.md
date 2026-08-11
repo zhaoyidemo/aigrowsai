@@ -1,6 +1,6 @@
 # 模块边界
 
-`qijia_video` 是以家庭教育为默认场景、通过工作流预设扩展内容领域的短视频生产模块。Content Skill 只负责输入路由、研究模式、事实政策和质量规则；Visual Style 只负责艺术语言；固定的 H3 Prompt Writing Profile 把原始输入与 EvidencePack 收敛为唯一 CreativeBrief，再统一约束脚本和视觉提示词。TTS、Seedream、Seedance、Remotion、FFmpeg、存储、成本账本与状态机保持统一。
+`qijia_video` 是以家庭教育为默认场景、通过工作流预设扩展内容领域的短视频生产模块。普通创作入口只冻结一个自然语言 `creative_request`，不再要求用户预先拆分人物和观点；Content Skill 只负责输入路由、研究模式、事实政策和质量规则；Visual Style 只负责艺术语言；固定的 H3 Prompt Writing Profile 把原始输入与 EvidencePack 收敛为唯一 CreativeBrief，再统一约束脚本和视觉提示词。TTS、Seedream、Seedance、Remotion、FFmpeg、存储、成本账本与状态机保持统一。
 
 - `contracts.py`：来源卡、脚本、分镜、生成请求、资产、发布包和抖音播放快照协议；
 - `content_skills/`：`explain-expert-view` 与 `brief-recent-news` 的版本化 `SKILL.md` 和工作流 manifest，不包含运行时提示词；

@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0",
-  "version": "2.0.0",
-  "display_name": "人物观点解读",
-  "input_mode": "person_viewpoint",
+  "version": "2.1.0",
+  "display_name": "观点与主题解读",
+  "input_mode": "creative_request",
   "compatible_formats": [
     "person_idea_explainer",
     "research_explainer",

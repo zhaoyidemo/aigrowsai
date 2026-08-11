@@ -21,6 +21,7 @@ from qijia_video.contracts import (
     Actor,
     AssetRef,
     CreativeBrief,
+    CreativeRequestInput,
     GenerationSettings,
     JobState,
     NewsResearchBrief,
@@ -257,8 +258,9 @@ class QijiaVideoContractTests(unittest.TestCase):
         )
         expert = default_skill_registry.resolve("explain-expert-view")
         news = default_skill_registry.resolve("brief-recent-news")
-        self.assertEqual(expert.version, "2.0.0")
+        self.assertEqual(expert.version, "2.1.0")
         self.assertEqual(news.version, "2.0.0")
+        self.assertEqual(expert.input_mode.value, "creative_request")
         self.assertEqual(news.research_mode.value, "recent_news_required")
         self.assertNotEqual(expert.manifest_hash, news.manifest_hash)
         self.assertIn("quote-integrity", expert.policy_ids)
@@ -521,16 +523,44 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(card.verified_facts, [])
         self.assertIn("联网核验前", card.interpretation_boundary[0].text)
 
+    def test_creative_request_is_frozen_without_frontend_field_splitting(self):
+        original = (
+            "黄宗羲，以及“大丈夫行事，论是非不论利害，论顺逆不论成败，"
+            "论万世不论一生”这段话。\n我想解释它的出处、真正含义和今天的价值。"
+        )
+        request = CreativeRequestInput(creative_request=f"  {original}  ")
+
+        card = request.to_source_card_input()
+
+        self.assertEqual(request.creative_request, original)
+        self.assertEqual(card.core_idea, original)
+        self.assertEqual(card.subject.type, "topic")
+        self.assertIn("黄宗羲", card.title)
+        self.assertEqual(card.sources, [])
+        self.assertEqual(card.verified_facts, [])
+        self.assertIn("不得由系统猜测", card.interpretation_boundary[0].text)
+
+    def test_unified_creative_request_api_keeps_legacy_routes_compatible(self):
+        paths = {route.path for route in qijia_api.api_router.routes}
+        prefix = "/api/qijia-video"
+
+        self.assertIn(f"{prefix}/source-cards/creative-request", paths)
+        self.assertIn(
+            f"{prefix}/source-cards/creative-request-with-reference",
+            paths,
+        )
+        self.assertIn(f"{prefix}/source-cards/idea", paths)
+        self.assertIn(f"{prefix}/source-cards/idea-with-reference", paths)
+
     def test_h3_compiles_person_research_from_the_complete_original_input(self):
-        idea = PersonViewpointInput(
-            person_name="黄宗羲",
-            viewpoint=(
-                "大丈夫行事，论是非不论利害，论顺逆不论成败，"
-                "论万世不论一生。"
+        request = CreativeRequestInput(
+            creative_request=(
+                "黄宗羲，以及“大丈夫行事，论是非不论利害，论顺逆不论成败，"
+                "论万世不论一生”这段话。我想解释它的出处、真正含义和今天的价值。"
             ),
         )
         card = SourceCard(
-            **idea.to_source_card_input().model_dump(mode="json"),
+            **request.to_source_card_input().model_dump(mode="json"),
             id="card-huang-zongxi",
             revision=1,
             status="verified",
@@ -551,8 +581,10 @@ class QijiaVideoContractTests(unittest.TestCase):
         )
 
         self.assertEqual(compiled.profile_version, "2.0.0")
-        self.assertIn(idea.viewpoint, compiled.prompt)
-        self.assertIn('"论万世不论一生"', compiled.prompt)
+        self.assertIn(request.creative_request, compiled.prompt)
+        self.assertIn("用户原始创作请求", compiled.prompt)
+        self.assertIn('"大丈夫行事，论是非不论利害', compiled.prompt)
+        self.assertNotIn("对象：", compiled.prompt)
         self.assertIn("人物归属、可靠原文、出处位置、文字异同与上下文", compiled.prompt)
         self.assertIn("至少执行三个意图不同的查询", compiled.prompt)
         self.assertNotIn("面向家长", compiled.prompt)
@@ -1718,27 +1750,28 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             calls.append(request)
             generated = {
+                "person_name": "阿尔弗雷德·阿德勒",
+                "input_type": "paraphrased_viewpoint",
+                "research_focus": "核验这项观点与阿德勒思想的关系和可靠语境。",
+                "attribution_status": "partially_supported",
+                "verified_wording": "",
+                "attribution_note": "没有把用户表述核验为人物逐字原话。",
+                "source_context": "可靠资料支持相关思想背景，但不支持逐字归属。",
                 "summary": "该人物的思想可以帮助家长区分支持与替代。",
-                "core_tension": "及时帮助和保留自主空间之间存在真实张力。",
-                "audience_relevance": [
-                    "孩子遇到困难时，家长常在立即接手和继续观察之间摇摆。",
-                    "不同风险场景需要不同程度的支持。",
-                ],
-                "content_angles": [
-                    "先判断风险，再决定帮助到哪一步。",
-                    "把支持拆成提示、示范和代办三个层级。",
-                ],
-                "interaction_opportunity": "你更容易在哪类任务里过早接手？",
                 "evidence": [
                     {
                         "claim": "可靠原始资料支持的背景事实。",
                         "source_title": "模型填写但应由注释覆盖的标题",
                         "source_url": cited_url,
+                        "source_kind": "primary",
+                        "evidence_type": "interpretation",
                     },
                     {
                         "claim": "没有检索注释支持的内容不能进入简报。",
                         "source_title": "未核验页面",
                         "source_url": uncited_url,
+                        "source_kind": "other",
+                        "evidence_type": "other",
                     },
                 ],
                 "uncertainties": ["该观点不能表述为人物逐字原话。"],
@@ -1774,9 +1807,12 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             model="test/research-model",
             transport=httpx.MockTransport(handler),
         )
-        card_input = PersonViewpointInput(
-            person_name="阿尔弗雷德·阿德勒",
-            viewpoint="真正影响孩子的，是孩子如何理解自己在家庭中的位置。",
+        original_request = (
+            "阿尔弗雷德·阿德勒，以及“真正影响孩子的，是孩子如何理解自己在家庭中的位置”"
+            "这个观点。我想了解它与阿德勒思想的真实关系。"
+        )
+        card_input = CreativeRequestInput(
+            creative_request=original_request,
         ).to_source_card_input()
         card = SourceCard(
             **card_input.model_dump(mode="json"),
@@ -1805,6 +1841,8 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(request_body["max_tool_calls"], 4)
         self.assertEqual(request_body["tool_choice"], "required")
+        response_schema = request_body["response_format"]["json_schema"]["schema"]
+        self.assertIn("person_name", response_schema["required"])
         tool = request_body["tools"][0]
         self.assertEqual(tool["type"], "openrouter:web_search")
         self.assertEqual(tool["parameters"]["engine"], "exa")
@@ -1814,8 +1852,9 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         prompt = request_body["messages"][1]["content"]
         self.assertIn("研究日期（UTC）", prompt)
         self.assertIn("先核验归属、可靠原文、出处、文字异同与上下文", prompt)
-        self.assertEqual(brief.person_name, card.subject.name)
-        self.assertEqual(brief.viewpoint, card.core_idea)
+        self.assertEqual(card.subject.type, "topic")
+        self.assertEqual(brief.person_name, "阿尔弗雷德·阿德勒")
+        self.assertEqual(brief.viewpoint, original_request)
         self.assertEqual(brief.prompt_version, PERSON_RESEARCH_PROMPT_VERSION)
         self.assertEqual(brief.model_id, "resolved/research-model")
         self.assertEqual(len(brief.evidence), 1)
@@ -3323,7 +3362,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         job = await self.service.create_job(card.id, self.actor)
 
         self.assertEqual(job.skill_snapshot.skill_id, "explain-expert-view")
-        self.assertEqual(job.skill_snapshot.version, "2.0.0")
+        self.assertEqual(job.skill_snapshot.version, "2.1.0")
         self.assertEqual(job.skill_snapshot.research_mode.value, "none")
         self.assertEqual(
             job.generation_settings.skill_id,
@@ -3466,9 +3505,13 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_person_research_enriches_the_job_without_adding_a_gate(self):
+        original_request = (
+            "阿尔弗雷德·阿德勒，以及“真正影响孩子的，是孩子如何理解自己在家庭中的位置”"
+            "这个观点。我想核验它的来源并解释真正含义。"
+        )
         brief = PersonResearchBrief.model_validate({
             "person_name": "阿尔弗雷德·阿德勒",
-            "viewpoint": "真正影响孩子的，是孩子如何理解自己在家庭中的位置。",
+            "viewpoint": original_request,
             "summary": "用家庭位置感解释孩子如何参与真实任务。",
             "core_tension": "家长的快速帮助可能同时减少孩子的参与空间。",
             "audience_relevance": ["孩子卡住时，家长容易直接接手。"],
@@ -3514,9 +3557,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         provider = ResearchingScriptProvider()
         self.service.script_provider = provider
         card = await self.service.create_source_card(
-            PersonViewpointInput(
-                person_name=brief.person_name,
-                viewpoint=brief.viewpoint,
+            CreativeRequestInput(
+                creative_request=original_request,
             ).to_source_card_input(),
             self.actor,
         )
@@ -3546,6 +3588,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(brief.content_angles[0], provider.generated_prompt)
         self.assertIsNotNone(generated.creative_brief)
         enriched = SourceCard.model_validate(generated.source_card_snapshot)
+        self.assertEqual(enriched.subject.type, "person")
+        self.assertEqual(enriched.subject.name, brief.person_name)
         self.assertEqual(
             [item.id for item in enriched.sources if item.id.startswith("research_source")],
             ["research_source_01"],
@@ -3601,14 +3645,14 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             await self.service.generate_script(job.id, self.actor)
         failed = await self.service.get_job(job.id, self.actor)
         self.assertEqual(failed.state, JobState.FAILED)
-        self.assertIn("已使用原始人物观点继续生成", failed.research_warning)
+        self.assertIn("已使用原始创作请求继续生成", failed.research_warning)
 
         completed = await self.service.generate_script(job.id, self.actor)
 
         self.assertEqual(completed.state, JobState.SCRIPT_REVIEW_REQUIRED)
         self.assertEqual(provider.research_calls, 1)
         self.assertEqual(provider.generate_calls, 2)
-        self.assertIn("已使用原始人物观点继续生成", completed.research_warning)
+        self.assertIn("已使用原始创作请求继续生成", completed.research_warning)
 
     async def test_recent_news_research_requires_user_authorized_retry_after_failure(self):
         class FailingNewsProvider(TemplateScriptProvider):

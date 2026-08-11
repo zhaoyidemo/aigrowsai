@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from qijia_video import MODULE_VERSION
 from qijia_video.contracts import (
     AssetRef,
+    CreativeRequestInput,
     GenerationSettings,
     NewsTopicInput,
     PersonViewpointInput,
@@ -459,6 +460,19 @@ async def create_person_viewpoint(
     return ok(card.model_dump(mode="json"), "人物观点已确认，开始创作")
 
 
+@api_router.post("/source-cards/creative-request")
+@boundary
+async def create_creative_request(
+    body: CreativeRequestInput, user: dict = Depends(get_current_user)
+):
+    actor = actor_from_user(user)
+    card = await runtime.service.create_source_card(
+        body.to_source_card_input(), actor
+    )
+    card = await runtime.service.verify_source_card(card.id, card.revision, actor)
+    return ok(card.model_dump(mode="json"), "原始创作请求已冻结，开始研究与创作")
+
+
 @api_router.post("/source-cards/news-topic")
 @boundary
 async def create_news_topic(
@@ -500,6 +514,26 @@ async def create_person_viewpoint_with_reference(
     card = await runtime.service.create_source_card(source_card, actor)
     card = await runtime.service.verify_source_card(card.id, card.revision, actor)
     return ok(card.model_dump(mode="json"), "人物观点和全局参考图已确认，开始创作")
+
+
+@api_router.post("/source-cards/creative-request-with-reference")
+@boundary
+async def create_creative_request_with_reference(
+    creative_request: str = Form(..., min_length=10, max_length=1800),
+    reference_image: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    request = CreativeRequestInput(creative_request=creative_request)
+    reference_asset = await _store_reference_image(reference_image)
+    source_card = request.to_source_card_input()
+    source_card.reference_assets = [reference_asset.model_dump(mode="json")]
+    actor = actor_from_user(user)
+    card = await runtime.service.create_source_card(source_card, actor)
+    card = await runtime.service.verify_source_card(card.id, card.revision, actor)
+    return ok(
+        card.model_dump(mode="json"),
+        "原始创作请求和全局参考图已冻结，开始研究与创作",
+    )
 
 
 @api_router.get("/source-cards")
