@@ -56,6 +56,9 @@ from qijia_video.errors import (
     QualityGateFailed,
     RevisionConflict,
 )
+from qijia_video.director_skill_registry import (
+    default_director_skill_registry,
+)
 from qijia_video.infrastructure.memory_repository import InMemoryAggregateRepository
 from qijia_video.infrastructure.media import FfmpegMediaPackager
 from qijia_video.infrastructure.image_providers import (
@@ -277,7 +280,18 @@ class QijiaVideoContractTests(unittest.TestCase):
         ))
 
     def test_visual_styles_and_prompt_method_are_provider_independent(self):
+        director_catalog = default_director_skill_registry.public_catalog()
         catalog = default_visual_style_registry.public_catalog()
+        self.assertEqual(
+            {item["skill_id"] for item in director_catalog},
+            {"animated-explainer"},
+        )
+        self.assertTrue(all(
+            item["role"] == "director_owner" for item in director_catalog
+        ))
+        self.assertTrue(all(
+            item["role"] == "visual_language" for item in catalog
+        ))
         self.assertEqual(
             {item["style_id"] for item in catalog},
             {
@@ -311,6 +325,12 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertIn("主体定义", legacy_profile.planning_framework)
         self.assertNotIn("MiniMax", profile.planning_framework)
         self.assertNotIn("Seedance", profile.planning_framework)
+        director = default_director_skill_registry.resolve(
+            "animated-explainer"
+        )
+        self.assertIn("具体事件", director.scene_design_rules)
+        self.assertIn("blocking", director.shot_design_rules)
+        self.assertIn("图片是默认媒介", director.media_rules)
         maximum_shot = StoryboardShot(
             shot_id="shot_01",
             segment_id="n01",
@@ -1050,6 +1070,60 @@ class QijiaVideoContractTests(unittest.TestCase):
 
         self.assertEqual(len(script.beats), 3)
         self.assertEqual(len(plan.shots), 3)
+
+    def test_storyboard_v3_contract_rejects_non_executable_direction(self):
+        def shot(index, *, visual_type='image'):
+            return {
+                'shot_id': f'shot_{index:02d}',
+                'segment_id': f'n{index:02d}',
+                'beat_ids': [f'n{index:02d}'],
+                'narration_excerpt': f'第 {index} 段旁白',
+                'visual_type': visual_type,
+                'context': {
+                    'semantic_goal': f'完成第 {index} 次语义推进',
+                    'concrete_event': f'人物在场景 {index} 完成动作并得到反馈',
+                    'blocking': f'人物从画面左侧走到位置 {index}',
+                    'subject': '同一位主人公',
+                    'action': f'完成动作 {index}',
+                    'environment': f'场景 {index}',
+                    'composition': '竖屏中景，行动路径清楚',
+                    'continuity_handoff': '服装与随身物件保持一致',
+                    'start_state': f'动作 {index} 尚未开始',
+                    'end_state': f'动作 {index} 已完成并出现反馈',
+                    'camera_intent': '固定中景跟随一次主体移动',
+                    'media_rationale': '静态画面足以表达事件结果',
+                },
+            }
+
+        payload = {
+            'schema_version': '3.0',
+            'shots': [shot(index) for index in range(1, 4)],
+            'input_hash': 'a' * 64,
+            'created_at': timestamp(),
+        }
+        plan = StoryboardPlan.model_validate(payload)
+        self.assertEqual(len(plan.shots), 3)
+
+        duplicate_event = json.loads(json.dumps(payload))
+        duplicate_event['shots'][1]['context']['concrete_event'] = (
+            duplicate_event['shots'][0]['context']['concrete_event']
+        )
+        with self.assertRaises(ValidationError):
+            StoryboardPlan.model_validate(duplicate_event)
+
+        unchanged_state = json.loads(json.dumps(payload))
+        unchanged_state['shots'][0]['context']['end_state'] = (
+            unchanged_state['shots'][0]['context']['start_state']
+        )
+        with self.assertRaises(ValidationError):
+            StoryboardPlan.model_validate(unchanged_state)
+
+        too_many_videos = {
+            **payload,
+            'shots': [shot(index, visual_type='video') for index in range(1, 5)],
+        }
+        with self.assertRaises(ValidationError):
+            StoryboardPlan.model_validate(too_many_videos)
 
 
 class SeedanceProviderContractTests(unittest.IsolatedAsyncioTestCase):
@@ -1970,6 +2044,120 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             [item.text for item in script.narration_segments],
         )
 
+    async def test_openrouter_director_v3_owns_chapters_and_concrete_events(self):
+        card = SourceCard(
+            **valid_card().model_dump(mode="json"),
+            id="card-director-v3",
+            revision=1,
+            status="verified",
+        )
+        script = await TemplateScriptProvider().generate(card)
+        beat_ids = [item.id for item in script.beats]
+        durations = {item.id: 6.0 for item in script.beats}
+        groups = [[beat_ids[0]], beat_ids[1:3], beat_ids[3:]]
+        calls: list[httpx.Request] = []
+
+        def context(index: int) -> dict:
+            return {
+                "semantic_goal": f"解释第 {index} 章",
+                "concrete_event": (
+                    f"第 {index} 章的主体在书房移动一件关键物品，"
+                    "同伴立即调整位置，桌面关系形成新的可见结果。"
+                ),
+                "blocking": (
+                    "主体位于画面左侧中景，沿桌边向右移动物品；"
+                    "同伴在右后方退让一步，物品停在两人之间。"
+                ),
+                "visual_metaphor": "",
+                "subject": "同一位成年人、同伴与关键物品",
+                "action": "成年人移动物品，同伴调整站位并作出反馈",
+                "environment": "门窗与桌面位置固定的安静书房",
+                "composition": "竖屏中景，人物分居两侧，桌面是视觉焦点",
+                "continuity_handoff": (
+                    "开场建立人物关系" if index == 1 else "承接上一章结果"
+                ),
+                "start_state": f"第 {index} 章行动尚未发生",
+                "end_state": f"第 {index} 章行动结果已经可见",
+                "camera_intent": "固定胸口高度机位，轻微向右跟随并停在桌面关系",
+                "media_rationale": (
+                    "连续调度不可由静态关系替代"
+                    if index == 1 else "静态决定性瞬间足以表达关系"
+                ),
+                "reference_roles": [],
+            }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            payload = json.loads(request.content)
+            prompt = payload["messages"][1]["content"]
+            self.assertIn("真实 TTS 时长", prompt)
+            self.assertIn('"duration_seconds": 6.0', prompt)
+            schema = payload["response_format"]["json_schema"]["schema"]
+            context_schema = schema["properties"]["shots"]["items"][
+                "properties"
+            ]["context"]
+            self.assertIn("concrete_event", context_schema["required"])
+            self.assertIn("blocking", context_schema["required"])
+            self.assertNotIn(
+                "first_frame_prompt",
+                schema["properties"]["shots"]["items"]["properties"],
+            )
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": json.dumps({
+                    "visual_bible": {
+                        "core_visual_idea": "用物品位置变化解释选择与后果。",
+                        "visual_world": "统一的现代编辑插画书房。",
+                        "recurring_subjects": ["成年人", "同伴", "关键物品"],
+                        "scene_anchors": ["固定书桌", "右侧窗光"],
+                        "continuity_rules": ["人物身份稳定", "物品位置承接"],
+                        "color_material_system": "低饱和纸张色与稳定侧光。",
+                        "composition_system": "竖屏中景，桌面关系优先。",
+                        "reference_strategy": "无参考图，不声明参考角色。",
+                        "forbidden_elements": ["可读文字", "漂浮符号"],
+                    },
+                    "shots": [
+                        {
+                            "beat_ids": group,
+                            "visual_type": "video" if index == 1 else "image",
+                            "context": context(index),
+                        }
+                        for index, group in enumerate(groups, 1)
+                    ],
+                }, ensure_ascii=False)}}],
+            })
+
+        provider = OpenRouterStoryboardProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="test/director",
+            transport=httpx.MockTransport(handler),
+        )
+        bible, plan = await provider.generate_director_plan(
+            script,
+            "【导演方法】动画解说导演",
+            durations,
+            director_skill_id="animated-explainer",
+            director_skill_version="1.0.0",
+            input_hash="a" * 64,
+        )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(plan.schema_version, "3.0")
+        self.assertEqual([shot.beat_ids for shot in plan.shots], groups)
+        self.assertEqual(
+            [shot.visual_type for shot in plan.shots],
+            ["video", "image", "image"],
+        )
+        self.assertTrue(all(
+            shot.context.concrete_event and shot.context.blocking
+            for shot in plan.shots
+        ))
+        self.assertTrue(all(
+            shot.context.visual_metaphor == "" for shot in plan.shots
+        ))
+        self.assertEqual(bible.director_skill_id, "animated-explainer")
+        self.assertEqual(bible.input_hash, "a" * 64)
+
     async def test_storyboard_normalizes_a_missing_shot_without_second_call(self):
         card = SourceCard(
             **valid_card().model_dump(mode="json"),
@@ -2660,20 +2848,24 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job.script_skill_snapshot.skill_id, "evidence-led-explainer")
         self.assertEqual(
             job.director_skill_snapshot.skill_id,
-            "paper-collage-explainer",
+            "animated-explainer",
         )
-        self.assertEqual(job.director_skill_snapshot.version, "1.1.0")
+        self.assertEqual(job.director_skill_snapshot.version, "1.0.0")
+        self.assertEqual(job.director_skill_snapshot.mode, "animated_explainer")
         self.assertEqual(
             job.provider_adapter_snapshot.adapter_id,
             "seedream-seedance",
         )
-        self.assertEqual(job.provider_adapter_snapshot.version, "1.2.0")
-        self.assertIsNone(job.visual_style_snapshot)
+        self.assertEqual(job.provider_adapter_snapshot.version, "1.3.0")
+        self.assertEqual(
+            job.visual_style_snapshot.style_id,
+            "paper-collage-explainer",
+        )
         self.assertIsNone(job.prompt_writing_profile_snapshot)
         self.assertIsNone(job.creative_brief)
         self.assertEqual(
             job.generation_settings.visual_style_version,
-            job.director_skill_snapshot.version,
+            job.visual_style_snapshot.version,
         )
         self.assertEqual(
             job.generation_settings.director_skill_version,
@@ -2688,6 +2880,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("【唯一视觉负责人】", compiled)
         self.assertIn("已确认脚本是内容唯一真相", compiled)
         self.assertIn("高级编辑纸张拼贴", compiled)
+        self.assertIn("【导演方法】动画解说导演@1.0.0", compiled)
+        self.assertIn("【独立 Visual Style】编辑纸张拼贴@1.1.0", compiled)
         self.assertIn("VisualBible", compiled)
         self.assertIn("ShotContextIR", compiled)
         self.assertNotIn("H3", compiled)
@@ -2697,11 +2891,19 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.id, job.revision, job.script_hash, self.actor
         )
         job = await self.service.produce(job.id, self.actor)
-        self.assertEqual(job.storyboard_plan.schema_version, "2.0")
+        self.assertEqual(job.storyboard_plan.schema_version, "3.0")
         self.assertIsNotNone(job.visual_bible)
         self.assertTrue(all(shot.context for shot in job.storyboard_plan.shots))
         self.assertTrue(all(
-            "【Provider Adapter】seedream-seedance@1.2.0" in item.prompt
+            shot.context.concrete_event and shot.context.blocking
+            for shot in job.storyboard_plan.shots
+        ))
+        self.assertTrue(all(
+            shot.context.visual_metaphor == ""
+            for shot in job.storyboard_plan.shots
+        ))
+        self.assertTrue(all(
+            "【Provider Adapter】seedream-seedance@1.3.0" in item.prompt
             and "【VisualBible】" in item.prompt
             and "【ShotContextIR】" in item.prompt
             and job.visual_bible.visual_world in item.prompt
@@ -2709,7 +2911,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             for item in job.first_frame_candidates
         ))
         self.assertTrue(all(
-            "【Provider Adapter】seedream-seedance@1.2.0" in item.prompt
+            "【Provider Adapter】seedream-seedance@1.3.0" in item.prompt
             and "最高且唯一视觉基准" in item.prompt
             and job.visual_bible.visual_world in item.prompt
             and "【Director Skill 动态语言】" not in item.prompt
@@ -3249,7 +3451,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(reopened.storyboard_plan)
         self.assertIsNotNone(reopened.render_manifest)
-        self.assertEqual(len(reopened.visual_requests), 2)
+        self.assertEqual(
+            len(reopened.visual_requests),
+            len(request_fingerprints),
+        )
         self.assertEqual(
             narration_char_count(reopened.script.narration_text()), 739
         )
@@ -3529,8 +3734,12 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job = await self.service.produce(job.id, self.actor)
         self.assertEqual(seed_widths, [31] * 5)
         self.assertEqual(
-            call_order,
-            ["image"] * 2 + ["video_submit"] * 2 + ["image"] * 3,
+            call_order.count("image"),
+            len(job.storyboard_plan.shots),
+        )
+        self.assertEqual(
+            call_order.count("video_submit"),
+            len(job.visual_requests),
         )
         self.assertEqual(job.state, JobState.FINAL_REVIEW_REQUIRED)
         self.assertEqual(len(job.review_bundle_hash), 64)
@@ -3555,7 +3764,15 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertEqual(job.generation_settings.image_count, 0)
         self.assertEqual(job.generation_settings.shot_count, 0)
-        self.assertEqual(len(job.visual_requests), 2)
+        self.assertEqual(
+            len(job.visual_requests),
+            sum(
+                shot.visual_type == "video"
+                for shot in job.storyboard_plan.shots
+            ),
+        )
+        self.assertGreaterEqual(len(job.visual_requests), 1)
+        self.assertLessEqual(len(job.visual_requests), 3)
         self.assertTrue(all(
             request.resolution == "1080p"
             and 8 <= request.duration_seconds <= 10
@@ -3581,10 +3798,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             first_video_shot.context.camera_intent,
             job.visual_requests[0].prompt,
         )
-        self.assertIn("【抖音开场执行】", job.visual_requests[0].prompt)
         self.assertNotIn("视频提示词结构", job.visual_requests[0].prompt)
-        self.assertEqual(len(job.video_tasks), 2)
-        self.assertEqual(len(job.visual_versions), 2)
+        self.assertEqual(len(job.video_tasks), len(job.visual_requests))
+        self.assertEqual(len(job.visual_versions), len(job.visual_requests))
         self.assertTrue(all(
             version.version == 1
             and version.asset is not None
@@ -3615,13 +3831,21 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [shot.visual_type for shot in job.storyboard_plan.shots].count("video"),
-            2,
+            len(job.visual_requests),
         )
         self.assertEqual(
             [shot.visual_type for shot in job.storyboard_plan.shots].count("image"),
-            3,
+            len(job.storyboard_plan.shots) - len(job.visual_requests),
         )
-        self.assertEqual(job.storyboard_plan.shots[0].visual_type, "video")
+        timing_by_id = {
+            item.segment_id: item.duration_seconds
+            for item in job.narration_manifest.segments
+        }
+        self.assertTrue(all(
+            sum(timing_by_id[beat_id] for beat_id in shot.beat_ids) <= 10
+            for shot in job.storyboard_plan.shots
+            if shot.visual_type == "video"
+        ))
         self.assertEqual(
             len(job.first_frame_candidates), len(job.storyboard_plan.shots)
         )
@@ -3686,11 +3910,11 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(all(
             request.prompt.startswith(
-                "【Provider Adapter】seedream-seedance@1.2.0"
+                "【Provider Adapter】seedream-seedance@1.3.0"
             )
             and "输入首帧就是视频第一帧" in request.prompt
             and "只生成无声画面" in request.prompt
-            and "不新增任何可读文字" in request.prompt
+            and "可读文字" in request.prompt
             and "【首帧驱动】" not in request.prompt
             and "【动作与运镜】" not in request.prompt
             for request in job.visual_requests
@@ -3780,7 +4004,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         job = await self.service.produce(job.id, self.actor)
 
-        shot_id = job.visual_requests[1].request_id
+        shot_id = job.visual_requests[0].request_id
         original_requests = {
             item.request_id: item for item in job.visual_requests
         }
@@ -3841,7 +4065,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             storyboard_shot.selected_candidate_id,
             frame_candidate.candidate_id,
         )
-        self.assertEqual(len(self.service._all_video_tasks(job)), 3)
+        self.assertEqual(
+            len(self.service._all_video_tasks(job)),
+            len(original_requests) + 1,
+        )
         self.assertEqual(
             {
                 item.request_id: item.fingerprint()
@@ -3888,7 +4115,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len([
             item for item in job.visual_versions if item.shot_id == shot_id
         ]), 2)
-        self.assertEqual(len(self.service._all_video_tasks(job)), 3)
+        self.assertEqual(
+            len(self.service._all_video_tasks(job)),
+            len(original_requests) + 1,
+        )
 
         legacy_prompt = "历史后台任务已经冻结的完整镜头提示词。"
         job = await self.service.regenerate_shot(
@@ -3907,7 +4137,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len([
             item for item in job.visual_versions if item.shot_id == shot_id
         ]), 3)
-        self.assertEqual(len(self.service._all_video_tasks(job)), 4)
+        self.assertEqual(
+            len(self.service._all_video_tasks(job)),
+            len(original_requests) + 2,
+        )
 
     async def test_editor_media_can_mix_images_and_videos_and_restore_ai(self):
         card = await self.service.create_source_card(valid_card(), self.actor)
@@ -4675,7 +4908,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         job = await self.service.produce(job.id, self.actor)
         original_bundle = job.review_bundle_hash
-        shot_id = job.visual_requests[1].request_id
+        shot_id = job.visual_requests[0].request_id
         original = next(
             item for item in job.visual_requests if item.request_id == shot_id
         )
@@ -4804,7 +5037,8 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("H3", storyboard_provider.base_style)
         self.assertNotIn(job.editorial_plan.core_thesis, storyboard_provider.base_style)
         requests = job.visual_requests
-        self.assertEqual(len(requests), 2)
+        self.assertGreaterEqual(len(requests), 1)
+        self.assertLessEqual(len(requests), 3)
         self.assertTrue(all(
             request.resolution == "1080p"
             and request.model_id == SEEDANCE_EFFICIENT_MODEL
@@ -4816,7 +5050,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             (1080, 1920),
         )
         self.assertTrue(all(
-            request.prompt.startswith("【Provider Adapter】seedream-seedance@1.2.0")
+            request.prompt.startswith("【Provider Adapter】seedream-seedance@1.3.0")
             and "【VisualBible】" in request.prompt
             and "【ShotContextIR】" in request.prompt
             and "视频提示词结构" not in request.prompt
@@ -4867,7 +5101,6 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "storyboard",
             "first_frames",
             "seedance_shot_1",
-            "seedance_shot_2",
             "seedance_parallel",
             "visual_assets",
             "remotion_render",
@@ -4877,6 +5110,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "confirm_final",
             "package",
         }.issubset(stages))
+        self.assertNotIn("seedance_shot_2", stages)
         self.assertNotIn("seedance_shot_3", stages)
         self.assertNotIn("frame_selection", stages)
 
@@ -4964,6 +5198,8 @@ class QijiaVideoPermissionTests(unittest.TestCase):
                 "script_skill_version",
                 "director_skill_id",
                 "director_skill_version",
+                "visual_style_id",
+                "visual_style_version",
                 "provider_adapter_id",
                 "provider_adapter_version",
                 "video_resolution",
@@ -4976,7 +5212,6 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             "script_prompt",
             "seedance_prompt",
             "prompt_writing_profile_id",
-            "visual_style_id",
             "image_count",
             "shot_count",
         ):
@@ -4985,6 +5220,14 @@ class QijiaVideoPermissionTests(unittest.TestCase):
                     qijia_api.CreateGenerationSettings.model_validate({
                         legacy_field: "legacy",
                     })
+        migrated = qijia_api.CreateGenerationSettings.model_validate({
+            "director_skill_id": "paper-collage-explainer",
+            "director_skill_version": "1.1.0",
+        }).to_internal()
+        self.assertEqual(migrated.director_skill_id, "animated-explainer")
+        self.assertEqual(migrated.director_skill_version, "")
+        self.assertEqual(migrated.visual_style_id, "paper-collage-explainer")
+        self.assertEqual(migrated.visual_style_version, "1.1.0")
 
     def test_api_and_page_require_independent_permission(self):
         denied = self.client_for({
@@ -5039,20 +5282,24 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             {item["skill_id"] for item in skill_response.json()["data"]},
             {"explain-expert-view"},
         )
-        self.assertNotIn("visual_styles", response.json()["data"])
+        self.assertIn("visual_styles", response.json()["data"])
         self.assertNotIn("prompt_writing_profile", response.json()["data"])
         self.assertEqual(
             {item["skill_id"] for item in response.json()["data"]["script_skills"]},
             {"evidence-led-explainer"},
         )
         self.assertEqual(
-            {item["director_skill_id"] for item in response.json()["data"]["director_skills"]},
-            {
-                "content-skill-default",
-                "paper-collage-explainer",
-                "papercraft-stop-motion",
-            },
+            {item["skill_id"] for item in response.json()["data"]["director_skills"]},
+            {"animated-explainer"},
         )
+        self.assertTrue(all(
+            item["role"] == "director_owner"
+            for item in response.json()["data"]["director_skills"]
+        ))
+        self.assertTrue(all(
+            item["role"] == "visual_language"
+            for item in response.json()["data"]["visual_styles"]
+        ))
         self.assertEqual(
             response.json()["data"]["provider_adapter"]["adapter_id"],
             "seedream-seedance",

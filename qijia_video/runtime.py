@@ -13,6 +13,7 @@ from qijia_video import run_service as task_service
 from qijia_video.contracts import (
     Actor,
     AssetRef,
+    DEFAULT_DIRECTOR_SKILL_ID,
     DEFAULT_VISUAL_STYLE_ID,
     GenerationSettings,
     SEEDANCE_EFFICIENT_MODEL,
@@ -219,13 +220,11 @@ class QijiaVideoRuntime:
             "script_prompt",
             "image_count",
             "shot_count",
-            "visual_style_id",
-            "visual_style_version",
             "prompt_writing_profile_id",
             "prompt_writing_profile_version",
         ):
             public_generation_defaults.pop(private_field, None)
-        public_generation_defaults["director_skill_id"] = DEFAULT_VISUAL_STYLE_ID
+        public_generation_defaults["director_skill_id"] = DEFAULT_DIRECTOR_SKILL_ID
         return {
             "module": "qijia_video",
             "mode": "skill-video-platform",
@@ -251,6 +250,7 @@ class QijiaVideoRuntime:
             "content_skills": self.service.content_skills(),
             "script_skills": self.service.script_skills(),
             "director_skills": self.service.director_skills(),
+            "visual_styles": self.service.visual_styles(),
             "provider_adapter": self.service.provider_adapter(),
             "douyin_performance": {
                 "ready": self.douyin_performance_provider.configured,

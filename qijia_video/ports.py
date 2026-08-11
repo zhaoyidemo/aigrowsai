@@ -18,6 +18,7 @@ from qijia_video.contracts import (
     SourceCard,
     StoryboardPlan,
     ProviderTask,
+    VisualBible,
     VisualGenerationRequest,
 )
 
@@ -64,6 +65,18 @@ class ScriptProvider(Protocol):
 
 class StoryboardProvider(Protocol):
     name: str
+
+    async def generate_director_plan(
+        self,
+        script: ScriptDraft,
+        director_instruction: str,
+        narration_durations: dict[str, float],
+        *,
+        director_skill_id: str,
+        director_skill_version: str,
+        input_hash: str,
+        on_usage=None,
+    ) -> tuple[VisualBible, StoryboardPlan]: ...
 
     async def generate(
         self,

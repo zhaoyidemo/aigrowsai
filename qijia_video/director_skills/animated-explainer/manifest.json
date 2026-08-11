@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "version": "1.0.0",
+  "display_name": "动画解说导演",
+  "description": "把已确认口播与真实 TTS 时长导演成具体、可读、可生产的视觉事件；负责章节节奏、主体调度、摄影机、连续性和媒介选择，不负责画风或模型语法。",
+  "default": true,
+  "mode": "animated_explainer",
+  "compatible_formats": [
+    "person_idea_explainer",
+    "research_explainer",
+    "concept_explainer",
+    "book_explainer"
+  ],
+  "workflow_file": "SKILL.md",
+  "scene_design_file": "references/scene-design.md",
+  "shot_design_file": "references/shot-design.md",
+  "continuity_file": "references/continuity.md",
+  "media_policy_file": "references/media-policy.md",
+  "critic_rules": [
+    "不了解旁白的观众也必须能说清画面里发生了什么具体事情",
+    "每章必须有可观察的起始状态、主体行动、环境或他者反馈和结束结果",
+    "隐喻只能辅助具体事件，不得用漂浮符号、空无空间或人物发呆承担主要表达",
+    "相邻章节必须推进新的事件、信息或后果，不得只替换景别或重复推近",
+    "摄影机位置、方向、运动路径、停止位置和结束景别必须可执行",
+    "不得虚构脚本没有陈述的历史事件、人物行动、对白或因果",
+    "图片是默认媒介；只有八秒内可完成的连续动作或状态变化才使用视频，全片最多三段",
+    "Visual Style 只约束媒介、材质、色彩和造型，不得替代导演决策"
+  ]
+}

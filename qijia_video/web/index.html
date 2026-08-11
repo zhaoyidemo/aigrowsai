@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.26.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.27.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -125,12 +125,18 @@
               <select id="script-skill" aria-label="Script Skill"></select>
               <small id="script-skill-description">不会设计镜头或媒体模型提示词。</small>
             </label>
+            <label class="creation-setting director-skill-setting" for="director-skill">
+              <span>导演方法</span>
+              <strong>负责具体事件、人物调度、摄影机、章节与连续性</strong>
+              <select id="director-skill" aria-label="Director Skill"></select>
+              <small id="director-skill-description">读取已确认脚本与旁白时长，不改写事实和口播。</small>
+            </label>
             <section class="creation-setting visual-style-setting" aria-labelledby="visual-style-label">
-              <span id="visual-style-label">视觉导演</span>
-              <strong>唯一负责视觉世界、隐喻、连续性与分镜</strong>
-              <select id="visual-style" aria-label="Director Skill"></select>
-              <small id="visual-style-description">读取已确认脚本，不改写事实和口播。</small>
-              <div id="visual-style-previews" class="visual-style-previews" aria-label="导演风格预览"></div>
+              <span id="visual-style-label">视觉风格</span>
+              <strong>只负责媒介、材质、色彩、光线与造型语言</strong>
+              <select id="visual-style" aria-label="Visual Style"></select>
+              <small id="visual-style-description">为导演方案提供统一美术语言，不决定故事和镜头。</small>
+              <div id="visual-style-previews" class="visual-style-previews" aria-label="视觉风格预览"></div>
             </section>
           </section>
           <details class="production-specs" aria-labelledby="production-specs-title">
@@ -238,7 +244,7 @@
           </form>
           <details id="generation-orchestration" class="generation-orchestration">
             <summary>
-              <span><strong>v2 单一负责人生成链路</strong><small>每个阶段只有一个创作负责人 · 可选查看</small></span>
+              <span><strong>单一负责人生成链路 · Director v3</strong><small>创作职责独立，导演与画风不再混为一层 · 可选查看</small></span>
               <span>查看架构</span>
             </summary>
             <div class="generation-orchestration-body">
@@ -247,7 +253,7 @@
                   <p class="step">生成架构</p>
                   <h3>输入、脚本、导演和模型适配各守一个边界</h3>
                 </div>
-                <span class="orchestration-lock">Pipeline v2</span>
+                <span class="orchestration-lock">Pipeline v2 · Director v3</span>
               </div>
               <section class="orchestration-core prompt-profile-setting" aria-labelledby="provider-adapter-label">
                 <div class="orchestration-core-heading">
@@ -270,7 +276,8 @@
                 <ol class="orchestration-priority" aria-label="生成职责边界">
                   <li>Input Policy 只限定知识边界</li>
                   <li>Script Skill 只管内容</li>
-                  <li>Director Skill 只管画面</li>
+                  <li>Director Skill 管事件、调度与镜头</li>
+                  <li>Visual Style 只提供美术语言</li>
                   <li id="reference-priority-state">参考图属性（未上传）</li>
                   <li>Adapter 只管模型语法</li>
                 </ol>
@@ -281,12 +288,13 @@
                   <article><span>01</span><strong>ContextPack</strong><small>原始输入与用户材料，不调用外部检索</small></article>
                   <article><span>02</span><strong>EditorialPlan</strong><small>比较候选角度，只决定怎么讲</small></article>
                   <article><span>03</span><strong>确认的 ScriptDraft</strong><small>全片唯一内容真相，不夹带画面</small></article>
-                  <article><span>04</span><strong>VisualBible</strong><small>由一个导演建立视觉世界与连续性</small></article>
-                  <article><span>05</span><strong>ShotContextIR</strong><small>中立镜头语义、隐喻与起止状态</small></article>
-                  <article><span>06</span><strong>Provider Prompt</strong><small>最后才编译 Seedream / Seedance 语法</small></article>
+                  <article><span>04</span><strong>TTS Timing</strong><small>实际旁白时长约束章节与视频选择</small></article>
+                  <article><span>05</span><strong>VisualBible</strong><small>导演统合事件逻辑、连续性与所选画风</small></article>
+                  <article><span>06</span><strong>ShotContextIR</strong><small>具体事件、主体调度、摄影机与起止状态</small></article>
+                  <article><span>07</span><strong>Provider Prompt</strong><small>最后才编译 Seedream / Seedance 语法</small></article>
                 </div>
               </div>
-              <p class="orchestration-boundary">任何新 Script Skill 或 Director Skill 都是替换本阶段负责人，不是再叠加一层。旧 H3 Prompt Writing 当前只用于历史任务兼容；未来真正调用 H3 模型时，才单独实现对应 Provider Adapter。</p>
+              <p class="orchestration-boundary">任何新 Script Skill 或 Director Skill 都是替换本阶段负责人，不叠加第二套总纲。Visual Style 是可组合的美术约束，不拥有脚本或导演决策；Provider Adapter 最后才翻译为模型语法。</p>
             </div>
           </details>
         </section>
@@ -528,6 +536,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.26.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.27.0"></script>
 </body>
 </html>

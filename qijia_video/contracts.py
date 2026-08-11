@@ -31,6 +31,7 @@ DEFAULT_VISUAL_STYLE_ID = "content-skill-default"
 H3_PROMPT_WRITING_PROFILE_ID = "h3-prompt-writing"
 DEFAULT_PROMPT_WRITING_PROFILE_ID = H3_PROMPT_WRITING_PROFILE_ID
 DEFAULT_SCRIPT_SKILL_ID = 'evidence-led-explainer'
+DEFAULT_DIRECTOR_SKILL_ID = 'animated-explainer'
 DEFAULT_PROVIDER_ADAPTER_ID = 'seedream-seedance'
 SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-0-pro-fast-251015"
 SEEDANCE_RETIRED_MODEL = "doubao-seedance-1-5-pro-251215"
@@ -849,13 +850,41 @@ class DirectorSkillSnapshot(ContractModel):
     )
     display_name: str = Field(min_length=1, max_length=120)
     description: str = Field(min_length=1, max_length=1000)
-    directing_instructions: str = Field(min_length=1, max_length=4000)
-    storyboard_rules: str = Field(min_length=1, max_length=4000)
-    image_art_direction: str = Field(min_length=1, max_length=4000)
-    motion_art_direction: str = Field(min_length=1, max_length=4000)
+    # New Director Skills own a production mode and directing method. The
+    # legacy fields remain readable for jobs created before the method/style
+    # split, but are empty in new snapshots.
+    mode: str = Field(default='legacy-style-director', min_length=1, max_length=64)
+    compatible_formats: list[ContentFormat] = Field(default_factory=list)
+    workflow_instructions: str = Field(default='', max_length=6000)
+    scene_design_rules: str = Field(default='', max_length=8000)
+    shot_design_rules: str = Field(default='', max_length=8000)
+    continuity_rules: str = Field(default='', max_length=6000)
+    media_rules: str = Field(default='', max_length=5000)
+    critic_rules: list[str] = Field(default_factory=list, max_length=30)
+    directing_instructions: str = Field(default='', max_length=4000)
+    storyboard_rules: str = Field(default='', max_length=4000)
+    image_art_direction: str = Field(default='', max_length=4000)
+    motion_art_direction: str = Field(default='', max_length=4000)
     negative_rules: list[str] = Field(default_factory=list, max_length=30)
     manifest_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
     frozen_at: str = Field(min_length=1, max_length=64)
+
+    @model_validator(mode='after')
+    def validate_directing_method(self):
+        if self.mode == 'legacy-style-director':
+            return self
+        required_method_parts = (
+            self.compatible_formats,
+            self.workflow_instructions,
+            self.scene_design_rules,
+            self.shot_design_rules,
+            self.continuity_rules,
+            self.media_rules,
+            self.critic_rules,
+        )
+        if not all(required_method_parts):
+            raise ValueError('新版 Director Skill 必须包含完整导演方法与质量规则')
+        return self
 
 
 class ProviderAdapterSnapshot(ContractModel):
@@ -1147,7 +1176,11 @@ class ShotContextIR(ContractModel):
     '''Observable, provider-neutral direction for one semantic chapter.'''
 
     semantic_goal: str = Field(min_length=1, max_length=600)
-    visual_metaphor: str = Field(min_length=1, max_length=800)
+    # v3 makes an observable event and blocking mandatory. Metaphor is an
+    # optional supporting device, never the scene's default substance.
+    concrete_event: str = Field(default='', max_length=1000)
+    blocking: str = Field(default='', max_length=1000)
+    visual_metaphor: str = Field(default='', max_length=800)
     subject: str = Field(min_length=1, max_length=600)
     action: str = Field(min_length=1, max_length=600)
     environment: str = Field(min_length=1, max_length=600)
@@ -1223,7 +1256,7 @@ class StoryboardShot(ContractModel):
 
 
 class StoryboardPlan(ContractModel):
-    schema_version: Literal['1.0', '2.0'] = SCHEMA_VERSION
+    schema_version: Literal['1.0', '2.0', '3.0'] = SCHEMA_VERSION
     shots: list[StoryboardShot] = Field(min_length=3, max_length=13)
     model_id: str = Field(default="", max_length=256)
     prompt_version: str = Field(default="", max_length=128)
@@ -1239,6 +1272,48 @@ class StoryboardPlan(ContractModel):
             item.context is None for item in self.shots
         ):
             raise ValueError('StoryboardPlan v2 的每个镜头都必须包含 ShotContextIR')
+        if self.schema_version == '3.0':
+            if len(self.shots) > 12:
+                raise ValueError('StoryboardPlan v3 最多包含 12 个视觉章节')
+            if sum(item.visual_type == 'video' for item in self.shots) > 3:
+                raise ValueError('StoryboardPlan v3 最多包含 3 个视频章节')
+            missing_context = [
+                item.shot_id for item in self.shots if item.context is None
+            ]
+            if missing_context:
+                raise ValueError('StoryboardPlan v3 的每个镜头都必须包含 ShotContextIR')
+            contexts = [item.context for item in self.shots if item.context]
+            missing_events = [
+                item.shot_id
+                for item in self.shots
+                if not item.context.concrete_event or not item.context.blocking
+            ]
+            if missing_events:
+                raise ValueError(
+                    'StoryboardPlan v3 必须提供具体事件与主体调度：'
+                    + '、'.join(missing_events)
+                )
+            event_keys = [
+                ''.join(item.concrete_event.split()).casefold()
+                for item in contexts
+            ]
+            if len(event_keys) != len(set(event_keys)):
+                raise ValueError('StoryboardPlan v3 的具体事件不得重复')
+            if any(
+                ''.join(item.start_state.split()).casefold()
+                == ''.join(item.end_state.split()).casefold()
+                for item in contexts
+            ):
+                raise ValueError('StoryboardPlan v3 的起止状态必须发生可见变化')
+            allowed_reference_roles = {
+                'identity', 'wardrobe', 'object', 'location', 'style'
+            }
+            if any(
+                role not in allowed_reference_roles
+                for item in contexts
+                for role in item.reference_roles
+            ):
+                raise ValueError('StoryboardPlan v3 包含未知的参考图职责')
         return self
 
 

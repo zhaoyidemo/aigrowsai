@@ -9,7 +9,6 @@ from typing import Any
 from qijia_video.contracts import (
     DEFAULT_PROMPT_WRITING_PROFILE_ID,
     DEFAULT_VISUAL_STYLE_ID,
-    DirectorSkillSnapshot,
     GenerationSettings,
     PromptWritingProfileSnapshot,
     VisualStyleSnapshot,
@@ -143,21 +142,6 @@ class VisualStyleDefinition:
             frozen_at=timestamp(),
         )
 
-    def director_snapshot(self) -> DirectorSkillSnapshot:
-        return DirectorSkillSnapshot(
-            skill_id=self.style_id,
-            version=self.version,
-            display_name=self.display_name,
-            description=self.description,
-            directing_instructions=self.director_prompt,
-            storyboard_rules=self.storyboard_rules,
-            image_art_direction=self.image_rules,
-            motion_art_direction=self.motion_rules,
-            negative_rules=list(self.negative_rules),
-            manifest_hash=self.manifest_hash,
-            frozen_at=timestamp(),
-        )
-
     def public_payload(self) -> dict[str, Any]:
         return {
             "style_id": self.style_id,
@@ -166,8 +150,7 @@ class VisualStyleDefinition:
             "description": self.description,
             "default": self.default,
             "tags": list(self.tags),
-            "director_skill_id": self.style_id,
-            "role": "visual_owner",
+            "role": "visual_language",
         }
 
 
@@ -260,7 +243,6 @@ def _load_style(root: Path) -> VisualStyleDefinition:
             manifest_hash=content_hash(hash_payload),
         )
         definition.snapshot()
-        definition.director_snapshot()
     except (TypeError, ValueError) as exc:
         raise RuntimeError(f"视觉风格内容无效：{root}") from exc
     return definition
@@ -384,23 +366,6 @@ class VisualStyleRegistry:
         effective.visual_style_id = definition.style_id
         effective.visual_style_version = definition.version
         return effective, definition.snapshot()
-
-    def freeze_director(
-        self,
-        settings: GenerationSettings,
-    ) -> tuple[GenerationSettings, DirectorSkillSnapshot]:
-        selected_id = settings.director_skill_id or settings.visual_style_id
-        selected_version = (
-            settings.director_skill_version or settings.visual_style_version
-        )
-        definition = self.resolve(selected_id, selected_version)
-        effective = settings.model_copy(deep=True)
-        effective.director_skill_id = definition.style_id
-        effective.director_skill_version = definition.version
-        # Keep API aliases aligned while v2 execution only reads the Director Skill.
-        effective.visual_style_id = definition.style_id
-        effective.visual_style_version = definition.version
-        return effective, definition.director_snapshot()
 
     def public_catalog(self) -> list[dict[str, Any]]:
         latest: dict[str, VisualStyleDefinition] = {}

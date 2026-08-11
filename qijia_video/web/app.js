@@ -3,6 +3,7 @@ const PROMPT_STORAGE_KEY = 'qijia-video-generation-settings-v3';
 const LEGACY_PROMPT_STORAGE_KEY = 'qijia-video-generation-settings-v1';
 const DEFAULT_CONTENT_SKILL_ID = 'explain-expert-view';
 const DEFAULT_SCRIPT_SKILL_ID = 'evidence-led-explainer';
+const DEFAULT_DIRECTOR_SKILL_ID = 'animated-explainer';
 const DEFAULT_VISUAL_STYLE_ID = 'content-skill-default';
 const SCRIPT_TARGET_MIN_CHARS = 220;
 const SCRIPT_TARGET_MAX_CHARS = 300;
@@ -199,6 +200,7 @@ function generationDefaults() {
     video_resolution: '1080p',
     seedance_model: 'doubao-seedance-1-0-pro-fast-251015',
     script_skill_id: DEFAULT_SCRIPT_SKILL_ID,
+    director_skill_id: DEFAULT_DIRECTOR_SKILL_ID,
     visual_style_id: DEFAULT_VISUAL_STYLE_ID,
     tts_voice_id: 'zh_female_vv_uranus_bigtts', tts_speed_ratio: 1.2,
   };
@@ -302,11 +304,50 @@ function selectContentSkill(skillId, {resetPrompts = false} = {}) {
   updateContentSkillIntake();
 }
 
-function visualStyles() {
+function directorSkills() {
   return Array.isArray(state.capabilities?.director_skills)
     ? state.capabilities.director_skills
-    : Array.isArray(state.capabilities?.visual_styles)
-      ? state.capabilities.visual_styles
+    : [];
+}
+
+function directorSkill(skillId = '') {
+  const skills = directorSkills();
+  const requested = String(skillId || '').trim();
+  return skills.find((item) => item.skill_id === requested)
+    || skills.find((item) => item.skill_id === DEFAULT_DIRECTOR_SKILL_ID)
+    || skills.find((item) => item.default)
+    || skills[0]
+    || null;
+}
+
+function selectedDirectorSkill() {
+  return directorSkill($('#director-skill')?.value || '');
+}
+
+function updateDirectorSkillDescription() {
+  const skill = selectedDirectorSkill();
+  $('#director-skill-description').textContent = skill
+    ? skill.description + ' · v' + skill.version
+    : '负责具体事件、人物调度、镜头组织、媒介选择与跨镜头连续性。';
+  renderOrchestrationSelection();
+}
+
+function renderDirectorSkillSelector(preferredSkillId = '') {
+  const selector = $('#director-skill');
+  const skills = directorSkills();
+  selector.innerHTML = skills.map((item) => (
+    '<option value="' + escapeHtml(item.skill_id) + '">'
+      + escapeHtml(item.display_name) + ' · v' + escapeHtml(item.version)
+      + '</option>'
+  )).join('');
+  const selected = directorSkill(preferredSkillId);
+  if (selected) selector.value = selected.skill_id;
+  updateDirectorSkillDescription();
+}
+
+function visualStyles() {
+  return Array.isArray(state.capabilities?.visual_styles)
+    ? state.capabilities.visual_styles
     : [];
 }
 
@@ -349,7 +390,7 @@ function updateVisualStyleDescription() {
   const style = selectedVisualStyle();
   $('#visual-style-description').textContent = style
     ? `${style.description} · v${style.version}`
-    : '唯一负责 VisualBible、镜头语义、媒介选择与跨镜头连续性。';
+    : '只定义媒介、材质、造型、色彩、光线和构图语言。';
   renderVisualStylePreviews();
   renderOrchestrationSelection();
 }
@@ -379,7 +420,9 @@ function renderOrchestrationSelection() {
   if (!contentNode || !scriptNode || !directorNode || !adapterNode || !referenceNode) return;
   contentNode.textContent = selectedContentSkill()?.display_name || '知识边界';
   scriptNode.textContent = selectedScriptSkill()?.display_name || 'Script Skill';
-  directorNode.textContent = selectedVisualStyle()?.display_name || 'Director Skill';
+  const directorName = selectedDirectorSkill()?.display_name || 'Director Skill';
+  const styleName = selectedVisualStyle()?.display_name || 'Visual Style';
+  directorNode.textContent = directorName + ' · ' + styleName;
   adapterNode.textContent = providerAdapter()?.display_name || 'Provider Adapter';
   const hasReference = !!state.referenceImageFile;
   referenceNode.textContent = hasReference
@@ -672,18 +715,23 @@ function initializePromptFields() {
   )
     ? saved.script_skill_id
     : generationDefaults().script_skill_id || DEFAULT_SCRIPT_SKILL_ID;
-  const savedDirectorSkillId = saved?.director_skill_id || saved?.visual_style_id;
-  const selectedStyleId = visualStyles().some(
-    (item) => item.style_id === savedDirectorSkillId,
+  const legacyStyleId = visualStyles().some(
+    (item) => item.style_id === saved?.director_skill_id,
+  ) ? saved.director_skill_id : '';
+  const selectedDirectorSkillId = directorSkills().some(
+    (item) => item.skill_id === saved?.director_skill_id,
   )
-    ? savedDirectorSkillId
-    : generationDefaults().director_skill_id
-      || generationDefaults().visual_style_id
-      || DEFAULT_VISUAL_STYLE_ID;
+    ? saved.director_skill_id
+    : generationDefaults().director_skill_id || DEFAULT_DIRECTOR_SKILL_ID;
+  const savedStyleId = saved?.visual_style_id || legacyStyleId;
+  const selectedStyleId = visualStyles().some((item) => item.style_id === savedStyleId)
+    ? savedStyleId
+    : generationDefaults().visual_style_id || DEFAULT_VISUAL_STYLE_ID;
   const migratedVisualStyle = !!saved
-    && savedDirectorSkillId !== selectedStyleId;
+    && (!!legacyStyleId || savedStyleId !== selectedStyleId);
   renderContentSkillSelector(selectedSkillId);
   renderScriptSkillSelector(selectedScriptSkillId);
+  renderDirectorSkillSelector(selectedDirectorSkillId);
   renderVisualStyleSelector(selectedStyleId);
   renderProviderAdapter();
   setResolutionField(saved);
@@ -697,7 +745,8 @@ function generationSettingsPayload(skillOverride = '') {
   const selected = selectedContentSkill();
   const requestedSkill = contentSkill(skillOverride || selected?.skill_id || '');
   const requestedScriptSkill = selectedScriptSkill();
-  const requestedDirector = selectedVisualStyle();
+  const requestedDirector = selectedDirectorSkill();
+  const requestedVisualStyle = selectedVisualStyle();
   const adapter = providerAdapter();
   const videoResolution = $('#video-resolution').value;
   const ttsVoiceId = normalizedTtsVoiceId($('#tts-voice-id').value);
@@ -715,8 +764,12 @@ function generationSettingsPayload(skillOverride = '') {
       script_skill_version: requestedScriptSkill.version,
     } : {}),
     ...(requestedDirector ? {
-      director_skill_id: requestedDirector.style_id,
+      director_skill_id: requestedDirector.skill_id,
       director_skill_version: requestedDirector.version,
+    } : {}),
+    ...(requestedVisualStyle ? {
+      visual_style_id: requestedVisualStyle.style_id,
+      visual_style_version: requestedVisualStyle.version,
     } : {}),
     ...(adapter ? {
       provider_adapter_id: adapter.adapter_id,
@@ -1329,7 +1382,7 @@ function renderCapabilities() {
       ? '家庭教育选题研究已就绪'
       : `选题研究待配置：${(data.topic_research?.missing_configuration || []).join('、') || '配置不完整'}`,
     videoReady
-      ? `视频生产已就绪 · ${data.storage} 存储 · ${scriptSkills().length} 个 Script Skill · ${visualStyles().length} 个 Director Skill`
+      ? `视频生产已就绪 · ${data.storage} 存储 · ${scriptSkills().length} 个 Script Skill · ${directorSkills().length} 个 Director Skill · ${visualStyles().length} 个 Visual Style`
       : `视频生产待配置：${(data.missing_configuration || []).join('、') || data.renderer?.detail || '配置不完整'}`,
   ];
   node.querySelector('span:last-child').textContent = parts.join(' ｜ ');
@@ -2001,12 +2054,15 @@ function renderShotInspector(job) {
       <details class="shot-context-details">
         <summary>查看 Director Skill 交付的 ShotContextIR</summary>
         <div class="shot-context-grid">
-          <article><span>视觉隐喻</span><p>${escapeHtml(shotContext.visual_metaphor)}</p></article>
+          <article><span>具体事件</span><p>${escapeHtml(shotContext.concrete_event || shotContext.semantic_goal)}</p></article>
           <article><span>主体与动作</span><p>${escapeHtml(shotContext.subject)} · ${escapeHtml(shotContext.action)}</p></article>
+          <article><span>主体调度</span><p>${escapeHtml(shotContext.blocking || shotContext.action)}</p></article>
           <article><span>环境与构图</span><p>${escapeHtml(shotContext.environment)} · ${escapeHtml(shotContext.composition)}</p></article>
+          <article><span>摄影机</span><p>${escapeHtml(shotContext.camera_intent)}</p></article>
           <article><span>状态变化</span><p>${escapeHtml(shotContext.start_state)} → ${escapeHtml(shotContext.end_state)}</p></article>
           <article><span>连续性承接</span><p>${escapeHtml(shotContext.continuity_handoff)}</p></article>
           <article><span>媒介理由</span><p>${escapeHtml(shotContext.media_rationale)}</p></article>
+          ${shotContext.visual_metaphor ? `<article><span>辅助隐喻</span><p>${escapeHtml(shotContext.visual_metaphor)}</p></article>` : ''}
         </div>
       </details>` : '';
   const semanticPanel = `
@@ -2873,11 +2929,11 @@ function renderJobGenerationMethods(job) {
     $('#job-generation-methods').innerHTML = [
       '<summary>',
       '<span><strong>本任务的单一职责生成链</strong><small>每个阶段只有一个负责人，任务版本已冻结</small></span>',
-      '<span>查看 v2 责任链</span>',
+      '<span>查看 Director v3 责任链</span>',
       '</summary>',
       '<div class="job-generation-methods-body">',
       '<div class="job-orchestration-heading">',
-      '<div><span>Pipeline v2</span><strong>输入、脚本、导演、模型适配互不越权</strong></div>',
+      '<div><span>Pipeline v2 · Director v3</span><strong>输入、脚本、导演、画风、模型适配互不越权</strong></div>',
       '<small>' + escapeHtml(hasReference ? '参考图角色边界已启用' : '本任务未使用参考图') + '</small>',
       '</div>',
       '<div class="job-orchestration-inputs">',
@@ -2895,9 +2951,15 @@ function renderJobGenerationMethods(job) {
       ),
       jobGenerationInputCard(
         '阶段 03 · Director Skill',
-        '读取已确认脚本，产出 VisualBible 与 ShotContextIR，不改写内容',
+        '读取已确认脚本与 TTS 时长，决定具体事件、章节、人物调度、摄影机和媒介，不改写内容',
         job.director_skill_snapshot,
         '导演负责人缺失',
+      ),
+      jobGenerationInputCard(
+        '导演输入 · Visual Style',
+        '只约束媒介、材质、造型、色彩、光线和构图，不拥有故事或镜头决策',
+        job.visual_style_snapshot,
+        '旧版视觉语言',
       ),
       jobGenerationInputCard(
         '阶段 04 · Provider Adapter',
@@ -2907,21 +2969,22 @@ function renderJobGenerationMethods(job) {
       ),
       '</div>',
       '<div class="job-orchestration-merge" aria-hidden="true"><span></span>',
-      '<strong>ContextPack → EditorialPlan + ScriptDraft → 人工确认 → VisualBible + ShotContextIR → Provider Prompt</strong>',
+      '<strong>ContextPack → EditorialPlan + ScriptDraft → 人工确认 → TTS Timing → StoryboardPlan v3 + VisualBible + ShotContextIR → Provider Prompt</strong>',
       '<span></span></div>',
       '<article class="job-orchestration-core">',
       '<div><span>唯一冲突裁决</span><strong>后阶段不得反向改写前阶段</strong>',
       '<small>已确认 ScriptDraft 是内容唯一真相</small></div>',
-      '<p>Director Skill 只能解释脚本的视觉含义；Provider Adapter 只能翻译已经确定的镜头语义。新增 Skill 时替换对应负责人，不叠加第二套总纲。</p>',
+      '<p>Director Skill 只拥有导演决策；Visual Style 是可组合的美术约束；Provider Adapter 只翻译已经确定的镜头语义。新增 Skill 时替换对应负责人，不叠加第二套总纲。</p>',
       '<ol aria-label="本任务责任边界">',
       '<li>Input Policy 管知识边界</li><li>Script Skill 管内容</li>',
-      '<li>人工确认锁定脚本</li><li>Director Skill 管视觉</li>',
+      '<li>人工确认锁定脚本</li><li>Director Skill 管事件、调度与镜头</li>',
+      '<li>Visual Style 管美术语言</li>',
       '<li>Provider Adapter 管模型语法</li>',
       '</ol>',
       '</article>',
       '<div class="job-orchestration-outputs">',
       '<span>可审计产物</span>',
-      '<div><strong>ContextPack</strong><strong>EditorialPlan</strong><strong>ScriptDraft</strong><strong>VisualBible</strong><strong>ShotContextIR</strong><strong>Provider Prompt</strong></div>',
+      '<div><strong>ContextPack</strong><strong>EditorialPlan</strong><strong>ScriptDraft</strong><strong>TTS Timing</strong><strong>StoryboardPlan v3</strong><strong>VisualBible</strong><strong>ShotContextIR</strong><strong>Provider Prompt</strong></div>',
       '</div>',
       '</div>',
     ].join('');
@@ -3040,9 +3103,8 @@ function renderDetail() {
     $('#script-review-spec').textContent = [
       job.skill_snapshot?.display_name || '旧版工作流',
       job.script_skill_snapshot?.display_name || '旧版脚本逻辑',
-      job.director_skill_snapshot?.display_name
-        || job.visual_style_snapshot?.display_name
-        || '旧版视觉设定',
+      job.director_skill_snapshot?.display_name || '旧版导演逻辑',
+      job.visual_style_snapshot?.display_name || '旧版视觉设定',
       job.provider_adapter_snapshot?.display_name
         || job.prompt_writing_profile_snapshot?.display_name
         || '旧版提示词方法',
@@ -4331,6 +4393,10 @@ $('#content-skill').addEventListener('change', () => {
 $('#script-skill').addEventListener('change', () => {
   renderScriptSkillSelector($('#script-skill').value);
   renderOrchestrationSelection();
+  persistPromptFields();
+});
+$('#director-skill').addEventListener('change', () => {
+  updateDirectorSkillDescription();
   persistPromptFields();
 });
 $('#visual-style').addEventListener('change', () => {

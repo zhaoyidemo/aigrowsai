@@ -42,6 +42,7 @@ SCRIPT_PROMPT_VERSION = "qijia_script_v14_single_creative_brief"
 SCRIPT_SKILL_PROMPT_VERSION = 'qijia_script_v15_editorial_plan'
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v12_semantic_adaptive"
 DIRECTOR_PROMPT_VERSION = 'qijia_director_v13_shot_context_ir'
+DIRECTOR_V3_PROMPT_VERSION = 'qijia_director_v20_concrete_event'
 OPENROUTER_REASONING_EFFORT = "high"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 STORYBOARD_MAX_COMPLETION_TOKENS = 128_000
@@ -382,6 +383,85 @@ _DIRECTOR_RESPONSE_SCHEMA = {
                     'context': _SHOT_CONTEXT_RESPONSE_SCHEMA,
                 },
                 'required': ['segment_id', 'beat_ids', 'visual_type', 'context'],
+                'additionalProperties': False,
+            },
+        },
+    },
+    'required': ['visual_bible', 'shots'],
+    'additionalProperties': False,
+}
+
+_SHOT_CONTEXT_V3_RESPONSE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        key: {'type': 'string'}
+        for key in (
+            'semantic_goal',
+            'concrete_event',
+            'blocking',
+            'visual_metaphor',
+            'subject',
+            'action',
+            'environment',
+            'composition',
+            'continuity_handoff',
+            'start_state',
+            'end_state',
+            'camera_intent',
+            'media_rationale',
+        )
+    },
+    'required': [
+        'semantic_goal',
+        'concrete_event',
+        'blocking',
+        'visual_metaphor',
+        'subject',
+        'action',
+        'environment',
+        'composition',
+        'continuity_handoff',
+        'start_state',
+        'end_state',
+        'camera_intent',
+        'media_rationale',
+        'reference_roles',
+    ],
+    'additionalProperties': False,
+}
+_SHOT_CONTEXT_V3_RESPONSE_SCHEMA['properties']['reference_roles'] = {
+    'type': 'array',
+    'items': {
+        'type': 'string',
+        'enum': ['identity', 'wardrobe', 'object', 'location', 'style'],
+    },
+    'maxItems': 8,
+}
+
+_DIRECTOR_V3_RESPONSE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'visual_bible': _VISUAL_BIBLE_RESPONSE_SCHEMA,
+        'shots': {
+            'type': 'array',
+            'minItems': 3,
+            'maxItems': 12,
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'beat_ids': {
+                        'type': 'array',
+                        'minItems': 1,
+                        'maxItems': 8,
+                        'items': {'type': 'string'},
+                    },
+                    'visual_type': {
+                        'type': 'string',
+                        'enum': ['image', 'video'],
+                    },
+                    'context': _SHOT_CONTEXT_V3_RESPONSE_SCHEMA,
+                },
+                'required': ['beat_ids', 'visual_type', 'context'],
                 'additionalProperties': False,
             },
         },
@@ -1295,6 +1375,153 @@ class OpenRouterStoryboardProvider:
     """Turn an approved script into an ordered provider-neutral shot plan."""
 
     name = "openrouter-storyboard"
+
+    async def generate_director_plan(
+        self,
+        script: ScriptDraft,
+        director_instruction: str,
+        narration_durations: dict[str, float],
+        *,
+        director_skill_id: str,
+        director_skill_version: str,
+        input_hash: str,
+        on_usage: UsageRecorder | None = None,
+    ) -> tuple[VisualBible, StoryboardPlan]:
+        '''Let the v3 Director choose chapter boundaries and media.'''
+
+        if not self.configured:
+            raise ProviderUnavailable('真实分镜生成未配置：请设置 OPENROUTER_API_KEY')
+        expected_beat_ids = [item.id for item in script.beats]
+        if (
+            not 3 <= len(expected_beat_ids) <= 12
+            or set(narration_durations) != set(expected_beat_ids)
+            or any(float(narration_durations[item]) <= 0 for item in expected_beat_ids)
+        ):
+            raise ProviderUnavailable('Director v3 需要完整脚本与逐段旁白时长')
+        beat_payload = [
+            {
+                'beat_id': item.id,
+                'role': item.role,
+                'duration_seconds': round(float(narration_durations[item.id]), 3),
+                'narration': item.narration,
+            }
+            for item in script.beats
+        ]
+        prompt = (
+            f'{director_instruction}\n\n'
+            '【本次导演任务】根据完整脚本和真实 TTS 时长，自主决定 3—12 个视觉章节。'
+            '每个 beat_id 必须且只能出现一次，保持原顺序；只允许合并相邻 ScriptBeat，'
+            '不得改写或遗漏旁白。图片是默认媒介；只有连续动作不可替代、章节旁白不超过'
+            '十秒且动作能在八秒内完成时才选择 video，全片最多三段 video。\n\n'
+            '每章先写 concrete_event，再写 blocking、主体、动作、环境、构图、起止状态、'
+            '连续性承接和可执行 camera_intent。concrete_event 必须让不了解旁白的人也能'
+            '说清谁在什么地方做了什么、产生什么反馈和结果。visual_metaphor 可以为空，'
+            '不得用抽象符号替代具体事件。独立场景允许硬切，不强造空间承接。\n\n'
+            '只返回符合 JSON Schema 的 VisualBible 与 shots；不得输出首帧提示词、I2V '
+            '提示词、模型参数、供应商名称或解释过程。\n\n'
+            '【完整脚本与真实时长】\n'
+            + json.dumps(beat_payload, ensure_ascii=False, indent=2)
+        )
+        response = await _openrouter_json_request(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            messages=[
+                {
+                    'role': 'system',
+                    'content': (
+                        '你是任务冻结的唯一 Animated Explainer Director。'
+                        '以具体事件、可执行调度和摄影机方案交付 VisualBible 与 '
+                        'StoryboardPlan v3；不写脚本，不写供应商提示词。'
+                    ),
+                },
+                {'role': 'user', 'content': prompt},
+            ],
+            label='导演方案生成',
+            schema_name='qijia_director_concrete_event_v3',
+            response_schema=_DIRECTOR_V3_RESPONSE_SCHEMA,
+            max_completion_tokens=STORYBOARD_MAX_COMPLETION_TOKENS,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+            operation='storyboard_generation',
+            on_usage=on_usage,
+        )
+        raw_shots = response.data.get('shots')
+        if not isinstance(raw_shots, list) or not 3 <= len(raw_shots) <= 12:
+            raise ProviderUnavailable('Director Skill 返回了错误的章节数量')
+        beats_by_id = {item.id: item for item in script.beats}
+        returned_groups = [
+            list(item.get('beat_ids') or []) if isinstance(item, dict) else []
+            for item in raw_shots
+        ]
+        if not _beat_groups_cover_script(returned_groups, expected_beat_ids):
+            raise ProviderUnavailable('Director Skill 未按顺序完整覆盖确认脚本')
+        selected_types = [
+            str(item.get('visual_type') or '') for item in raw_shots
+        ]
+        if (
+            any(item not in {'image', 'video'} for item in selected_types)
+            or sum(item == 'video' for item in selected_types) > 3
+        ):
+            raise ProviderUnavailable('Director Skill 返回了无效的图片/视频分配')
+        shots: list[StoryboardShot] = []
+        try:
+            normalized_events: set[str] = set()
+            for index, (raw, beat_ids, visual_type) in enumerate(
+                zip(raw_shots, returned_groups, selected_types),
+                1,
+            ):
+                chapter_duration = sum(
+                    float(narration_durations[beat_id]) for beat_id in beat_ids
+                )
+                if visual_type == 'video' and chapter_duration > 10.0:
+                    raise ValueError('video chapter exceeds narration limit')
+                context = ShotContextIR.model_validate(raw.get('context'))
+                event_key = re.sub(
+                    r'\s+', '', context.concrete_event
+                ).casefold()
+                if not event_key or event_key in normalized_events:
+                    raise ValueError('duplicate or empty concrete event')
+                normalized_events.add(event_key)
+                if (
+                    re.sub(r'\s+', '', context.start_state).casefold()
+                    == re.sub(r'\s+', '', context.end_state).casefold()
+                ):
+                    raise ValueError('start and end states are identical')
+                shots.append(StoryboardShot(
+                    shot_id=f'shot_{index:02d}',
+                    segment_id=beat_ids[0],
+                    beat_ids=beat_ids,
+                    narration_excerpt='\n'.join(
+                        beats_by_id[beat_id].narration for beat_id in beat_ids
+                    ),
+                    visual_type=visual_type,
+                    visual_intent=context.semantic_goal,
+                    context=context,
+                ))
+            bible_payload = dict(response.data.get('visual_bible') or {})
+            bible_payload.update({
+                'schema_version': '1.0',
+                'director_skill_id': director_skill_id,
+                'director_skill_version': director_skill_version,
+                'model_id': response.model_id,
+                'input_hash': input_hash,
+                'created_at': timestamp(),
+            })
+            bible = VisualBible.model_validate(bible_payload)
+            plan = StoryboardPlan(
+                schema_version='3.0',
+                shots=shots,
+                model_id=response.model_id,
+                prompt_version=DIRECTOR_V3_PROMPT_VERSION,
+                input_hash=input_hash,
+                created_at=timestamp(),
+            )
+            return bible, plan
+        except (KeyError, TypeError, ValueError, ValidationError) as exc:
+            raise ProviderUnavailable(
+                'Director Skill 返回内容不符合具体事件与可执行调度契约，请重试'
+            ) from exc
 
     async def generate_with_direction(
         self,

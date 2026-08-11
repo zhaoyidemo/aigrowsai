@@ -202,9 +202,80 @@ class TemplateScriptProvider:
 
 
 class TemplateStoryboardProvider:
-    """Deterministic visual metaphors for tests and the local demo."""
+    """Deterministic director plans for tests and the local demo."""
 
     name = "template-storyboard-mock"
+
+    async def generate_director_plan(
+        self,
+        script: ScriptDraft,
+        director_instruction: str,
+        narration_durations: dict[str, float],
+        *,
+        director_skill_id: str,
+        director_skill_version: str,
+        input_hash: str,
+        on_usage=None,
+    ) -> tuple[VisualBible, StoryboardPlan]:
+        beat_ids = [item.id for item in script.beats]
+        target_count = min(6, len(beat_ids))
+        base_size, remainder = divmod(len(beat_ids), target_count)
+        groups: list[list[str]] = []
+        cursor = 0
+        for index in range(target_count):
+            size = base_size + (1 if index < remainder else 0)
+            groups.append(beat_ids[cursor:cursor + size])
+            cursor += size
+        beats_by_id = {item.id: item for item in script.beats}
+        visual_types: list[str] = []
+        video_count = 0
+        for index, group in enumerate(groups):
+            duration = sum(float(narration_durations[item]) for item in group)
+            role = beats_by_id[group[0]].role
+            needs_motion = index == 0 or role in {'example', 'application'}
+            use_video = needs_motion and duration <= 10.0 and video_count < 3
+            visual_types.append('video' if use_video else 'image')
+            video_count += int(use_video)
+        bible, legacy_plan = await self.generate_with_direction(
+            script,
+            director_instruction,
+            groups,
+            visual_types,
+            director_skill_id=director_skill_id,
+            director_skill_version=director_skill_version,
+            on_usage=on_usage,
+        )
+        shots: list[StoryboardShot] = []
+        for index, shot in enumerate(legacy_plan.shots, 1):
+            context = shot.context
+            if context is None:
+                raise ValueError('模板 Director 缺少 ShotContextIR')
+            context = context.model_copy(update={
+                'concrete_event': (
+                    f'核心主体在可辨认场景中完成第 {index} 章的关键行动，'
+                    '环境或他者立即产生可见反馈，结果改变下一章的理解起点。'
+                ),
+                'blocking': (
+                    '核心主体位于竖屏中景，关键物件位于其行动方向；'
+                    '主体完成一次明确位移或操作，反馈对象保持清楚空间关系。'
+                ),
+                'visual_metaphor': '',
+            })
+            shots.append(shot.model_copy(update={
+                'context': context,
+                'visual_intent': context.semantic_goal,
+            }))
+        return (
+            bible.model_copy(update={'input_hash': input_hash}),
+            StoryboardPlan(
+                schema_version='3.0',
+                shots=shots,
+                model_id=self.name,
+                prompt_version='template_director_concrete_event_v2',
+                input_hash=input_hash,
+                created_at=timestamp(),
+            ),
+        )
 
     async def generate_with_direction(
         self,

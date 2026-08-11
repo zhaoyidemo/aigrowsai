@@ -24,6 +24,7 @@ from qijia_video import MODULE_VERSION
 from qijia_video.contracts import (
     AssetRef,
     CreativeRequestInput,
+    DEFAULT_DIRECTOR_SKILL_ID,
     DEFAULT_PROVIDER_ADAPTER_ID,
     DEFAULT_SCRIPT_SKILL_ID,
     DEFAULT_VISUAL_STYLE_ID,
@@ -61,6 +62,11 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
 SHOT_MEDIA_UPLOAD_TOKEN_VERSION = 1
 logger = logging.getLogger(__name__)
+LEGACY_DIRECTOR_AS_STYLE_IDS = {
+    "content-skill-default",
+    "paper-collage-explainer",
+    "papercraft-stop-motion",
+}
 api_router = APIRouter(
     prefix="/api/qijia-video",
     tags=["齐家 AI 短视频"],
@@ -176,8 +182,18 @@ class CreateGenerationSettings(StrictRequest):
         max_length=32,
         pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
     )
-    director_skill_id: str = Field(
+    visual_style_id: str = Field(
         default=DEFAULT_VISUAL_STYLE_ID,
+        max_length=64,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    visual_style_version: str = Field(
+        default="",
+        max_length=32,
+        pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
+    )
+    director_skill_id: str = Field(
+        default=DEFAULT_DIRECTOR_SKILL_ID,
         max_length=64,
         pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
     )
@@ -202,7 +218,17 @@ class CreateGenerationSettings(StrictRequest):
     seedance_model: SeedanceModelId = SEEDANCE_EFFICIENT_MODEL
 
     def to_internal(self) -> GenerationSettings:
-        return GenerationSettings.model_validate(self.model_dump(mode="json"))
+        payload = self.model_dump(mode="json")
+        if (
+            "director_skill_id" in self.model_fields_set
+            and "visual_style_id" not in self.model_fields_set
+            and self.director_skill_id in LEGACY_DIRECTOR_AS_STYLE_IDS
+        ):
+            payload["visual_style_id"] = self.director_skill_id
+            payload["visual_style_version"] = self.director_skill_version
+            payload["director_skill_id"] = DEFAULT_DIRECTOR_SKILL_ID
+            payload["director_skill_version"] = ""
+        return GenerationSettings.model_validate(payload)
 
 
 class CreateJobRequest(StrictRequest):
@@ -467,7 +493,7 @@ async def list_content_skills(user: dict = Depends(get_current_user)):
     return ok(runtime.service.content_skills())
 
 
-@api_router.get("/visual-styles", deprecated=True)
+@api_router.get("/visual-styles")
 @boundary
 async def list_visual_styles(user: dict = Depends(get_current_user)):
     del user

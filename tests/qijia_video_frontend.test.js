@@ -52,15 +52,21 @@ test('video creation uses model knowledge without external retrieval', () => {
   assert.match(app, /job\.skill_snapshot\?\.display_name/);
 });
 
-test('Director Skills are selected and frozen independently from content policy and providers', () => {
+test('Director Skill and Visual Style are selected and frozen independently', () => {
+  assert.match(page, /id="director-skill"/);
   assert.match(page, /id="visual-style"/);
-  assert.match(page, /唯一负责视觉世界、隐喻、连续性与分镜/);
-  assert.match(page, /读取已确认脚本，不改写事实和口播/);
+  assert.match(page, /负责具体事件、人物调度、摄影机、章节与连续性/);
+  assert.match(page, /只负责媒介、材质、色彩、光线与造型语言/);
+  assert.match(page, /读取已确认脚本与旁白时长，不改写事实和口播/);
+  assert.match(app, /DEFAULT_DIRECTOR_SKILL_ID = 'animated-explainer'/);
   assert.match(app, /DEFAULT_VISUAL_STYLE_ID = 'content-skill-default'/);
   assert.doesNotMatch(app, /function visualStyleGenerationDefaults/);
-  assert.match(app, /director_skill_id: requestedDirector\.style_id/);
+  assert.match(app, /director_skill_id: requestedDirector\.skill_id/);
   assert.match(app, /director_skill_version: requestedDirector\.version/);
+  assert.match(app, /visual_style_id: requestedVisualStyle\.style_id/);
+  assert.match(app, /visual_style_version: requestedVisualStyle\.version/);
   assert.match(app, /job\.director_skill_snapshot\?\.display_name/);
+  assert.match(app, /job\.visual_style_snapshot\?\.display_name/);
   assert.match(page, /id="visual-style-previews"/);
   assert.match(app, /function renderVisualStylePreviews/);
   assert.match(app, /data-visual-style-id/);
@@ -68,16 +74,16 @@ test('Director Skills are selected and frozen independently from content policy 
   assert.match(styles, /\.visual-style-preview/);
 });
 
-test('v2 visibly separates input policy, script, directing, and provider compilation', () => {
+test('Director v3 visibly separates directing, visual language, and provider compilation', () => {
   assert.match(page, /<details id="generation-orchestration"/);
   assert.match(page, /输入、脚本、导演和模型适配各守一个边界/);
   assert.match(page, /id="script-skill"/);
   assert.match(page, /id="provider-adapter-name"/);
-  assert.match(page, /Input Policy 只限定知识边界[\s\S]*Script Skill 只管内容[\s\S]*Director Skill 只管画面[\s\S]*Adapter 只管模型语法/);
-  assert.match(page, /ContextPack[\s\S]*EditorialPlan[\s\S]*确认的 ScriptDraft[\s\S]*VisualBible[\s\S]*ShotContextIR[\s\S]*Provider Prompt/);
+  assert.match(page, /Input Policy 只限定知识边界[\s\S]*Script Skill 只管内容[\s\S]*Director Skill 管事件、调度与镜头[\s\S]*Visual Style 只提供美术语言[\s\S]*Adapter 只管模型语法/);
+  assert.match(page, /ContextPack[\s\S]*EditorialPlan[\s\S]*确认的 ScriptDraft[\s\S]*TTS Timing[\s\S]*VisualBible[\s\S]*ShotContextIR[\s\S]*Provider Prompt/);
   assert.match(page, /任何新 Script Skill 或 Director Skill 都是替换本阶段负责人/);
-  assert.match(page, /旧 H3 Prompt Writing 当前只用于历史任务兼容/);
-  assert.match(page, /未来真正调用 H3 模型时，才单独实现对应 Provider Adapter/);
+  assert.match(page, /Visual Style 是可组合的美术约束/);
+  assert.match(page, /Provider Adapter 最后才翻译为模型语法/);
   assert.match(page, /<details id="job-generation-methods"/);
   assert.match(app, /function providerAdapter/);
   assert.match(app, /function scriptSkills/);
@@ -493,7 +499,8 @@ test('Script Skill owns writing and creation payload exposes no competing contro
   );
   assert.doesNotMatch(settingsSource, /script_prompt|seedance_prompt|image_count|shot_count/);
   assert.match(settingsSource, /script_skill_id: requestedScriptSkill\.skill_id/);
-  assert.match(settingsSource, /director_skill_id: requestedDirector\.style_id/);
+  assert.match(settingsSource, /director_skill_id: requestedDirector\.skill_id/);
+  assert.match(settingsSource, /visual_style_id: requestedVisualStyle\.style_id/);
   assert.match(settingsSource, /provider_adapter_id: adapter\.adapter_id/);
   assert.match(app, /localStorage\.removeItem\(LEGACY_PROMPT_STORAGE_KEY\)/);
   assert.doesNotMatch(app, /function customScriptPromptEnabled|restore-prompt-defaults|job-seedance-prompt/);

@@ -102,6 +102,11 @@ from qijia_video.prompt_orchestration import (
     compile_script_skill_prompt,
 )
 from qijia_video.director_prompting import compile_director_instruction
+from qijia_video.director_skill_registry import (
+    DirectorSkillRegistry,
+    DirectorSkillRegistryError,
+    default_director_skill_registry,
+)
 from qijia_video.provider_prompting import (
     compile_image_provider_prompt,
     compile_video_provider_prompt,
@@ -198,6 +203,7 @@ class QijiaVideoService:
         tikhub_price_per_success_usd: float = 0.002,
         skill_registry: ContentSkillRegistry | None = None,
         script_skill_registry: ScriptSkillRegistry | None = None,
+        director_skill_registry: DirectorSkillRegistry | None = None,
         visual_style_registry: VisualStyleRegistry | None = None,
         provider_adapter_registry: ProviderAdapterRegistry | None = None,
         prompt_writing_profile_registry: (
@@ -218,6 +224,9 @@ class QijiaVideoService:
         self.skill_registry = skill_registry or default_skill_registry
         self.script_skill_registry = (
             script_skill_registry or default_script_skill_registry
+        )
+        self.director_skill_registry = (
+            director_skill_registry or default_director_skill_registry
         )
         self.visual_style_registry = (
             visual_style_registry or default_visual_style_registry
@@ -892,7 +901,10 @@ class QijiaVideoService:
                 shot.narration_excerpt = "\n".join(
                     segments_by_id[beat_id].text for beat_id in shot.beat_ids
                 )
-            job.storyboard_plan.input_hash = self._storyboard_input_hash(job)
+            rebound_hash = self._storyboard_input_hash(job)
+            job.storyboard_plan.input_hash = rebound_hash
+            if job.visual_bible:
+                job.visual_bible.input_hash = rebound_hash
         else:
             job.storyboard_plan = None
             job.first_frame_candidates = []
@@ -1029,13 +1041,17 @@ class QijiaVideoService:
                 self.script_skill_registry.freeze(card, frozen_settings)
             )
             frozen_settings, director_skill_snapshot = (
-                self.visual_style_registry.freeze_director(frozen_settings)
+                self.director_skill_registry.freeze(card, frozen_settings)
+            )
+            frozen_settings, visual_style_snapshot = (
+                self.visual_style_registry.freeze(frozen_settings)
             )
             frozen_settings, provider_adapter_snapshot = (
                 self.provider_adapter_registry.freeze(frozen_settings)
             )
         except (
             ProviderAdapterRegistryError,
+            DirectorSkillRegistryError,
             ScriptSkillRegistryError,
             SkillRegistryError,
             VisualStyleRegistryError,
@@ -1077,6 +1093,7 @@ class QijiaVideoService:
             skill_snapshot=skill_snapshot,
             script_skill_snapshot=script_skill_snapshot,
             director_skill_snapshot=director_skill_snapshot,
+            visual_style_snapshot=visual_style_snapshot,
             provider_adapter_snapshot=provider_adapter_snapshot,
             generation_settings=frozen_settings,
             created_by=actor.username,
@@ -1096,12 +1113,12 @@ class QijiaVideoService:
         return self.script_skill_registry.public_catalog()
 
     def visual_styles(self) -> list[dict]:
-        """Pipeline v1 catalog kept for older clients; v2 uses director_skills."""
+        """Visual language catalog, independent from the directing method."""
 
         return self.visual_style_registry.public_catalog()
 
     def director_skills(self) -> list[dict]:
-        return self.visual_style_registry.public_catalog()
+        return self.director_skill_registry.public_catalog()
 
     def provider_adapter(self) -> dict:
         return self.provider_adapter_registry.public_default()
@@ -1860,6 +1877,26 @@ class QijiaVideoService:
             return {}
         return durations
 
+    @classmethod
+    def _director_timing_map(cls, job: VideoJob) -> dict[str, float]:
+        '''Return actual TTS timings, with a deterministic recovery fallback.'''
+
+        if not job.script:
+            raise InvalidTransition('缺少已确认脚本')
+        actual = cls._narration_durations(job)
+        if actual:
+            return actual
+        weights = {
+            item.id: max(1, narration_char_count(item.narration))
+            for item in job.script.beats
+        }
+        total_weight = sum(weights.values())
+        total_duration = float(job.script.estimated_duration_seconds)
+        return {
+            beat_id: max(0.1, total_duration * weight / total_weight)
+            for beat_id, weight in weights.items()
+        }
+
     @staticmethod
     def _visual_types_for_durations(
         durations: list[float],
@@ -2045,6 +2082,7 @@ class QijiaVideoService:
                 raise InvalidTransition('v2 任务缺少冻结的 Director Skill')
             return compile_director_instruction(
                 job.director_skill_snapshot,
+                visual_style=job.visual_style_snapshot,
                 has_reference_image=cls._has_reference_image(job),
             )
         settings = cls._generation_settings(job)
@@ -2089,6 +2127,25 @@ class QijiaVideoService:
 
     @classmethod
     def _storyboard_input_hash(cls, job: VideoJob) -> str:
+        if (
+            job.pipeline_version == PipelineVersion.SINGLE_OWNER
+            and job.director_skill_snapshot
+            and job.director_skill_snapshot.mode != 'legacy-style-director'
+        ):
+            if not job.script:
+                raise InvalidTransition('缺少已确认脚本')
+            timings = cls._director_timing_map(job)
+            return content_hash({
+                'script_hash': content_hash(job.script),
+                'director_instruction': cls._storyboard_base_style(job),
+                'narration_timings': [
+                    {
+                        'beat_id': item.id,
+                        'duration_seconds': round(float(timings[item.id]), 3),
+                    }
+                    for item in job.script.beats
+                ],
+            })
         return cls._storyboard_input_hash_for_style(
             job,
             cls._storyboard_base_style(job),
@@ -2106,6 +2163,125 @@ class QijiaVideoService:
         actor: Actor,
         progress: ProgressReporter | None = None,
     ) -> VideoJob:
+        director_v3 = bool(
+            job.pipeline_version == PipelineVersion.SINGLE_OWNER
+            and job.director_skill_snapshot
+            and job.director_skill_snapshot.mode != 'legacy-style-director'
+        )
+        if director_v3:
+            if not job.script or not job.director_skill_snapshot:
+                raise InvalidTransition('Director v3 任务缺少确认脚本或导演快照')
+            expected_hash = self._storyboard_input_hash(job)
+            expected_ids = [item.id for item in job.script.beats]
+            timings = self._director_timing_map(job)
+            if job.storyboard_plan:
+                returned_ids = [
+                    beat_id
+                    for shot in job.storyboard_plan.shots
+                    for beat_id in shot.beat_ids
+                ]
+                if (
+                    job.storyboard_plan.schema_version != '3.0'
+                    or job.storyboard_plan.input_hash != expected_hash
+                    or returned_ids != expected_ids
+                    or not job.visual_bible
+                    or job.visual_bible.input_hash != expected_hash
+                    or job.visual_bible.director_skill_id
+                    != job.director_skill_snapshot.skill_id
+                    or job.visual_bible.director_skill_version
+                    != job.director_skill_snapshot.version
+                ):
+                    raise QualityGateFailed(
+                        '已保存 Director v3 方案与当前脚本、时长或 Skill 不一致'
+                    )
+                return job
+            self._report(
+                progress,
+                message='导演正在依据完整脚本和真实旁白时长规划视觉章节…',
+                stage='storyboard',
+                percent=44,
+            )
+            generate_director_plan = getattr(
+                self.storyboard_provider, 'generate_director_plan', None
+            )
+            if not callable(generate_director_plan):
+                raise ProviderUnavailable(
+                    '当前分镜 Provider 不支持 Director v3 具体事件契约'
+                )
+
+            async def persist_director_usage(
+                usage: ProviderUsageRecord,
+            ) -> None:
+                nonlocal job
+                job = await self._persist_usage_record(job, usage, actor)
+
+            visual_bible, plan = await generate_director_plan(
+                job.script,
+                self._storyboard_base_style(job),
+                timings,
+                director_skill_id=job.director_skill_snapshot.skill_id,
+                director_skill_version=job.director_skill_snapshot.version,
+                input_hash=expected_hash,
+                on_usage=persist_director_usage,
+            )
+            returned_ids = [
+                beat_id for shot in plan.shots for beat_id in shot.beat_ids
+            ]
+            contexts = [shot.context for shot in plan.shots]
+            event_keys = [
+                re.sub(r'\s+', '', context.concrete_event).casefold()
+                for context in contexts
+                if context
+            ]
+            allowed_reference_roles = {
+                'identity', 'wardrobe', 'object', 'location', 'style'
+            }
+            reference_roles = [
+                role
+                for context in contexts
+                if context
+                for role in context.reference_roles
+            ]
+            if (
+                plan.schema_version != '3.0'
+                or plan.input_hash != expected_hash
+                or visual_bible.input_hash != expected_hash
+                or returned_ids != expected_ids
+                or any(context is None for context in contexts)
+                or len(event_keys) != len(plan.shots)
+                or len(set(event_keys)) != len(event_keys)
+                or sum(shot.visual_type == 'video' for shot in plan.shots) > 3
+                or any(role not in allowed_reference_roles for role in reference_roles)
+                or (not self._has_reference_image(job) and reference_roles)
+                or visual_bible.director_skill_id
+                != job.director_skill_snapshot.skill_id
+                or visual_bible.director_skill_version
+                != job.director_skill_snapshot.version
+            ):
+                raise ProviderUnavailable(
+                    'Director 未交付完整、唯一且可执行的具体事件方案'
+                )
+            for shot in plan.shots:
+                if shot.visual_type == 'video' and sum(
+                    float(timings[beat_id]) for beat_id in shot.beat_ids
+                ) > SEEDANCE_MAX_NATURAL_CHAPTER_SECONDS:
+                    raise ProviderUnavailable(
+                        'Director 把超过十秒的旁白章节错误分配为八秒视频'
+                    )
+            job.storyboard_plan = plan
+            job.visual_bible = visual_bible
+            job = await self._save_job(job, actor)
+            self._report(
+                progress,
+                message=(
+                    f'{len(plan.shots)} 个具体事件章节已就绪，'
+                    '正在确定每个镜头的素材来源…'
+                ),
+                stage='storyboard',
+                percent=46,
+            )
+            return job
+
         beat_groups = self._storyboard_expected_groups(job)
         grouped_beats = self._storyboard_beat_groups(job)
         visual_types = list(self._storyboard_visual_types(job, grouped_beats))
@@ -3201,7 +3377,29 @@ class QijiaVideoService:
             None,
         )
         if not request:
-            return None
+            shot = next(
+                (
+                    item
+                    for item in (
+                        job.storyboard_plan.shots
+                        if job.storyboard_plan else []
+                    )
+                    if item.shot_id == shot_id
+                ),
+                None,
+            )
+            if not shot:
+                return None
+            candidate = next(
+                (
+                    item
+                    for item in job.first_frame_candidates
+                    if item.shot_id == shot_id
+                    and item.candidate_id == shot.selected_candidate_id
+                ),
+                None,
+            )
+            return candidate.asset if candidate else None
         version = cls._version_for_request(job, request)
         if version and version.asset:
             return version.asset
@@ -5411,6 +5609,13 @@ class QijiaVideoService:
                 else []
             )
             if not audio_assets:
+                rebind_reused_director_plan = bool(
+                    job.storyboard_plan
+                    and job.visual_bible
+                    and job.visual_requests
+                    and job.video_tasks
+                    and not job.narration_manifest
+                )
                 previous_visual_assets = [
                     item
                     for item in (
@@ -5453,6 +5658,10 @@ class QijiaVideoService:
                         duration_seconds=generated.duration_seconds,
                     ))
                 job.narration_manifest = narration
+                if rebind_reused_director_plan:
+                    rebound_hash = self._storyboard_input_hash(job)
+                    job.storyboard_plan.input_hash = rebound_hash
+                    job.visual_bible.input_hash = rebound_hash
                 job.render_manifest = self._build_render_manifest(
                     job, audio_assets, previous_visual_assets
                 )
