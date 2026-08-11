@@ -1,12 +1,12 @@
-# 齐家 AI 家庭教育内容工作台
+# 齐家 AI 知识视频工作台
 
-面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的选题与短视频生产服务。新视频任务使用 `Pipeline v2 + Director v3`：Input Policy 管原始输入与知识边界，Script Skill 管内容，Director Skill 管具体事件、章节、调度、摄影机与媒介选择，Visual Style 只提供美术语言，Provider Adapter 管模型语法。视频创作主链不启用联网搜索，脚本模型直接使用用户材料与自身已有知识。Seedream、Seedance、TTS、Remotion、FFmpeg、存储、成本与任务状态机继续共用。
+面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的选题与短视频生产服务。新视频任务使用 `Pipeline v3 + Director v3`：原始请求先由内部 H3 Prompt Adapter 编译为唯一 Script Skill 的结构化指令，一次模型调用只返回 `ScriptDraft`；人工确认后，Director Skill 才负责事件、章节、调度、摄影机与媒介选择。Visual Style 只提供美术语言，Provider Adapter 只翻译媒体模型语法。视频创作主链不启用联网搜索，脚本模型直接使用用户材料与自身已有知识。
 
 环境变量中的管理员账号可以创建、启停同事账号，授予或收回工作台使用权限，并重置密码。同事可以查看团队创建的全部内容、成本和抖音效果，只能修改和继续执行自己创建的内容；管理员可以管理全部内容。
 
-## Content Skill 架构
+## 输入与知识边界
 
-当前只向新任务公开一套 Content Skill：
+新任务内部固定一套 Content Policy，不作为用户可选项：
 
 - `explain-expert-view@3.0.0`：用一个 `creative_request` 接收人物、引语、观点、问题、资料或表达方向。原始请求不拆分、不改写，直接交给 Script Skill；模型可以使用训练中已有的稳定知识，但不调用搜索、浏览器、OpenRouter Web Search、Exa 或其他外部研究工具。用户给出的候选引语与人物归属不冒充“已核验原话”，精确出处、版本、日期、数据、争议信息和最新动态必须克制表述并由编辑复核。
 
@@ -14,30 +14,28 @@
 
 每个 Skill 位于 `qijia_video/content_skills/<skill-id>/`，只由 `SKILL.md` 与 `manifest.json` 定义 Input Policy，不拥有研究提示词、脚本提示词或视觉策略文件。`skill_registry.py` 创建任务时冻结 `skill_id`、版本、manifest 哈希、`knowledge_mode`、政策 ID 与质量规则，并硬性要求所有公开 Skill 使用 `model_knowledge + research_mode=none`。后续修改 Skill 文件不会改变已创建任务；旧快照中的研究字段仍可读取，但不能发起新的外部检索。
 
-扩展新领域时只新增 Input Policy 和必要的输入适配，不复制视频生产基础设施，也不允许 Skill 调用搜索工具或改写自身。接口包括：
-
-- `GET /api/qijia-video/skills`：读取可选择的最新 Skill 目录；
-- `POST /api/qijia-video/jobs`：在 `generation_settings` 中可传 `skill_id` 与 `skill_version`；省略时按来源卡 `content_format` 路由并冻结。
+扩展新领域时只新增内部 Input Policy 和必要的输入适配，不复制视频生产基础设施，也不允许 Policy 调用搜索工具或改写自身。产品创建入口只有 `POST /api/qijia-video/jobs/creative-request` 及其参考图版本；旧 SourceCard 多步入口不再公开。
 
 ## 单一职责生成链与多模态提示词
 
 工作台把输入边界、写作、导演和模型提示词拆成四个按序责任阶段，并把画风从导演方法中拆成独立、可组合的约束：
 
 - Input Policy / Content Skill：只冻结原始输入、用户材料、模型知识边界、事实/安全政策和质量规则，不发起研究，不生成内容角度、脚本结构或逐段画面；
-- Script Skill：唯一负责比较创作角度、论证结构和完整口播，交付 `EditorialPlan + ScriptDraft`，不得设计画面；
+- H3 Prompt Adapter：完整保留用户原始请求，整理任务、上下文、材料与约束的优先级；它不是第二个创作负责人，也不生成前置业务产物；
+- Script Skill：在一次模型调用内部完成角度取舍、论证结构、成稿与审稿，唯一交付 `ScriptDraft`，不得设计画面；
 - Director Skill：人工确认脚本并取得真实 TTS 时长后，唯一负责 `StoryboardPlan v3 + VisualBible + ShotContextIR`，自主决定语义章节、具体事件、主体调度、摄影机、连续性和媒介，不得改写脚本；
 - Visual Style：只定义媒介质感、材质、造型、色彩、光线和构图语言，不拥有故事、章节或镜头决策；
 - Provider Adapter：只把冻结的镜头语义编译为 Seedream/Seedance 可执行提示词，不得新增内容或导演决策。
 
-两种纸艺 Visual Style 借鉴了 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 的纸张拼贴与纸艺定格表达。`animated-explainer@1.0.0` Director Skill 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中 Animated Explainer 的具体事件、调度与连续性原则，但不引入其研究、脚本、语音或 CLI 链路。旧 `h3-prompt-writing` 资源只用于读取 Pipeline v1 历史快照；未来真正调用 H3 模型时，再实现 H3 专用 Provider Adapter。当前生产链不新增 MiniMax API Key。
+两种纸艺 Visual Style 与内部 `h3-prompt-writing` Adapter 借鉴了 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 的提示词结构、纸张拼贴与纸艺定格表达；这里借鉴的是方法，不耦合 MiniMax 模型，也不新增 MiniMax API Key。`animated-explainer@1.0.0` Director Skill 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中 Animated Explainer 的具体事件、调度与连续性原则，但不引入其研究、脚本、语音或 CLI 链路。
 
-Script Skill 位于 `qijia_video/script_skills/`，Director Skill 位于 `qijia_video/director_skills/`，Visual Style 位于 `qijia_video/visual_styles/`，Provider Adapter 位于 `qijia_video/provider_adapters/`。新任务分别冻结 `script_skill_snapshot`、`director_skill_snapshot`、`visual_style_snapshot` 与 `provider_adapter_snapshot`；`prompt_writing_profile_snapshot` 和 `creative_brief` 只用于 v1 历史任务。接口包括 `GET /script-skills`、`GET /director-skills`、`GET /visual-styles` 与 `GET /provider-adapter`。
+H3 Prompt Adapter 位于 `qijia_video/prompt_adapters/`，Script Skill 位于 `qijia_video/script_skills/`，Director Skill 位于 `qijia_video/director_skills/`，Visual Style 位于 `qijia_video/visual_styles/`，Provider Adapter 位于 `qijia_video/provider_adapters/`。新任务分别冻结 `prompt_adapter_snapshot`、`script_skill_snapshot`、`director_skill_snapshot`、`visual_style_snapshot` 与 `provider_adapter_snapshot`。只有 Visual Style 是公开选择，目录接口为 `GET /api/qijia-video/visual-styles`；其余角色由服务端固定并随任务审计。
 
-工作台创建区优先展示自然语言主输入、三种同场景视觉样片与可选参考图。当前 Script Skill 和 Director Skill 以一行创作引擎摘要呈现；只有未来存在多个可选方法时才显示切换控件。版本号、内部产物与 Provider 信息收纳在可折叠技术详情及任务审计中。任务详情仍可审计 `ContextPack`、`EditorialPlan`、确认后的脚本、TTS Timing、`StoryboardPlan v3`、`VisualBible`、每个镜头的具体事件/调度/摄影机 `ShotContextIR` 与只读 Provider Prompt；已经保存过研究简报的旧任务只读展示历史证据，不会再次联网。
+工作台创建区只展示自然语言主输入、三种同场景视觉样片、可选参考图和生产规格。内部 Adapter、Policy、Script Skill、Director Skill、Provider、模型名与中间规划不在创建页或脚本确认页展示。发布包的 `pipeline_snapshot.json` 仍记录冻结版本，供故障审计而非参与创作。
 
 成片阶段的单镜头重生成只接受编辑者填写的 `revision_intent`。服务端会把它与冻结的 `VisualBible`、`ShotContextIR`、首帧和参考图角色通过 Provider Adapter 重新编译；前端只读展示最终提示词，不允许直接编辑或提交。局部修改不会反向改写脚本或导演世界，也不会重做旁白、图片章节或其他视频镜头。
 
-新任务 API 不再接受前端可编辑的 `script_prompt`、`seedance_prompt`、`image_count` 或 `shot_count`。调用方选择内容政策、Script Skill、Director Skill、Visual Style、画质与配音；Provider Adapter 自动匹配当前生产模型。旧版把 Visual Style 写进 `director_skill_id` 的请求会在 API 边界迁移，已经冻结的历史任务仍可恢复和重试。
+新任务 API 只接受原始请求、用户明确核对的材料、Visual Style、画质、配音和视频模型规格；不接受 Content/Script/Director/Provider 选择，也不接受 `script_prompt`、`seedance_prompt`、`image_count` 或 `shot_count`。已经冻结的历史任务仍可由服务层恢复和重试，但旧创建协议不再公开。
 
 ## 当前真实链路
 
@@ -45,10 +43,9 @@ Script Skill 位于 `qijia_video/script_skills/`，Director Skill 位于 `qijia_
 入口 A：TikHub 抖音家庭教育数据 → 5 个候选与成本记录 → 人工采用并补充可靠来源
 入口 B：统一自然语言创作请求
 两种入口汇入统一生产链路
-  → 分别冻结 Input Policy、唯一 Script Skill、唯一 Director Skill、Visual Style 与 Provider Adapter
-  → 确定性整理原始输入与用户材料为 ContextPack，不发起外部检索
-  → 唯一 Script Skill 直接使用 ContextPack 与模型已有知识
-  → 唯一 Script Skill 比较 2–3 个真实角度并生成 EditorialPlan 与 ScriptDraft
+  → 原子冻结原始 CreativeInput、内部 H3 Prompt Adapter、Content Policy、唯一 Script Skill、唯一 Director Skill、Visual Style 与 Provider Adapter
+  → H3 Prompt Adapter 保留原始输入并编译任务、上下文、材料与约束，不发起模型调用、不生成前置简报
+  → 唯一 Script Skill 在一次调用内部完成角度取舍、结构、成稿与审稿，只返回 ScriptDraft
   → 人工修改并确认脚本；确认后的 ScriptDraft 成为内容唯一真相
   → 豆包 TTS 2.0 完整旁白
   → 唯一 Director Skill 读取确认脚本与逐段真实 TTS 时长，自主划分 3–12 个语义章节
@@ -66,7 +63,7 @@ Script Skill 位于 `qijia_video/script_skills/`，Director Skill 位于 `qijia_
   → TikHub 作品表现快照、成本与 10 倍 ROI
 ```
 
-抖音趋势只用于解释“为什么值得研究”，不会自动成为来源卡中的已核验事实。生产链路不使用 Mock，也不会自动发布到抖音。Mock Provider 只存在于显式 CLI 演示和测试中。
+抖音趋势只用于解释“为什么值得研究”，不会自动成为 `verified_materials`。生产链路不使用 Mock，也不会自动发布到抖音。Mock Provider 只存在于显式 CLI 演示和测试中。
 
 新任务不预设图片或视频数量。Script Skill 先写完整论证，Director Skill 再按确认脚本与真实 TTS 时长规划章节，不逐句配图、不重复构图，也不为配额拆镜。每章必须先成立一个可观察的具体事件，隐喻只能作为可选辅助。每个视觉章节生成一张 Seedream 图；只有连续动作、状态转变或镜头运动对理解不可替代、章节旁白不超过 10 秒且动作可在 8 秒内完成时才继续生成 Seedance，最多 3 段但可以为 0。成本按实际章节与实际视频数计算。历史任务中已经冻结的固定数量仍按原规格恢复。
 
@@ -139,8 +136,8 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 - `qijia_video/director_skills/`、`qijia_video/director_skill_registry.py`、`qijia_video/director_prompting.py`：独立 Director Skill、具体事件、VisualBible、StoryboardPlan v3 与 ShotContextIR 编排；
 - `qijia_video/visual_styles/`、`qijia_video/visual_style_registry.py`：独立、可组合且不拥有导演决策的视觉语言；历史 Profile 读取逻辑继续隔离保留。
 - `qijia_video/provider_adapters/`、`qijia_video/provider_adapter_registry.py`、`qijia_video/provider_prompting.py`：Seedream/Seedance 末端提示词编译，不参与脚本或导演决策。
-- `qijia_video/prompt_orchestration.py`：把不可变输入、用户材料、纯模型知识方式和硬政策边界编译为 Script Skill 的唯一 `ContextPack` 提示词。
-- `qijia_video/infrastructure/postgres_repository.py`：来源卡与视频任务聚合仓储。
+- `qijia_video/prompt_orchestration.py`：把原始输入、H3 Prompt Adapter、用户核对材料、模型知识方式和硬政策边界编译为唯一 Script Skill 提示词。
+- `qijia_video/infrastructure/postgres_repository.py`：视频任务与历史兼容数据的聚合仓储。
 - `qijia_video/accounts.py`、`qijia_video/account_api.py`：同事账号、密码哈希、会话失效与管理员 API。
 - `qijia_video/run_service.py`：后台任务进度、互斥和重启恢复。
 - `qijia_video/topic_*`：选题契约、确定性研究流程、任务执行与 API。
@@ -228,7 +225,7 @@ node --test tests/qijia_video_frontend.test.js
 npm.cmd run typecheck --prefix video_renderer
 ```
 
-真实部署验收至少包括：登录，用统一创作请求检查 `external_retrieval=false`、ContextPack 与 EditorialPlan，确认只产生一次脚本模型调用且请求不含 `tools`，人工修改并确认 ScriptDraft，核对 VisualBible 与逐镜头 ShotContextIR、完整旁白、实际媒体提示词、Remotion 成片、发布包下载、抖音效果与成本数据，以及服务重启后的 v2 快照稳定性和历史任务兼容性。
+真实部署验收至少包括：登录，用统一创作请求检查 `pipeline_version=v3`、`external_retrieval=false`、冻结的 H3 Prompt Adapter 与原始输入快照，确认只产生一次脚本模型调用、请求不含 `tools` 且响应 schema 只有 ScriptDraft；再人工修改并确认口播稿，核对 VisualBible 与逐镜头 ShotContextIR、完整旁白、实际媒体提示词、Remotion 成片、发布包下载、抖音效果与成本数据，以及服务重启后的 v3 快照稳定性和历史任务兼容性。
 
 ## 数据边界
 

@@ -101,6 +101,16 @@ class TemplateScriptProvider:
         )
         return script
 
+    async def generate_direct_script(
+        self,
+        card: SourceCard,
+        prompt: str,
+        *,
+        on_usage=None,
+    ) -> ScriptDraft:
+        del on_usage
+        return await self.generate(card, prompt)
+
     async def generate_with_plan(
         self,
         card: SourceCard,

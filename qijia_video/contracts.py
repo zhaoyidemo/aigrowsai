@@ -30,6 +30,7 @@ BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_VISUAL_STYLE_ID = "content-skill-default"
 H3_PROMPT_WRITING_PROFILE_ID = "h3-prompt-writing"
 DEFAULT_PROMPT_WRITING_PROFILE_ID = H3_PROMPT_WRITING_PROFILE_ID
+DEFAULT_PROMPT_ADAPTER_ID = H3_PROMPT_WRITING_PROFILE_ID
 DEFAULT_SCRIPT_SKILL_ID = 'evidence-led-explainer'
 DEFAULT_DIRECTOR_SKILL_ID = 'animated-explainer'
 DEFAULT_PROVIDER_ADAPTER_ID = 'seedream-seedance'
@@ -98,6 +99,7 @@ class SkillKnowledgeMode(StrEnum):
 class PipelineVersion(StrEnum):
     LEGACY = 'v1'
     SINGLE_OWNER = 'v2'
+    DIRECT_SCRIPT = 'v3'
 
 
 class RiskLevel(StrEnum):
@@ -276,14 +278,14 @@ class CreativeRequestInput(ContractModel):
         return self
 
     def to_source_card_input(self) -> SourceCardInput:
+        """Compatibility adapter for v1/v2 clients; v3 does not persist it."""
+
         request = self.creative_request
         compact = re.sub(r"\s+", " ", request).strip()
         return SourceCardInput(
             content_domain=ContentDomain.GENERAL_KNOWLEDGE,
             content_format=ContentFormat.PERSON_IDEA,
             target_audience="希望理解这项人物、观点或主题的普通中文受众",
-            # topic marks a request whose primary subject must be identified by
-            # evidence research instead of guessed by the intake form.
             subject={"type": "topic", "name": compact[:120]},
             title=compact[:300],
             core_idea=request,
@@ -300,6 +302,44 @@ class CreativeRequestInput(ContractModel):
             }],
         )
 
+
+class CreativeMaterial(ContractModel):
+    """Creator-verified material supplied with one direct creative request."""
+
+    title: str = Field(default="用户核对材料", min_length=1, max_length=300)
+    text: str = Field(min_length=1, max_length=6000)
+    url: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_url(self):
+        if self.url and not self.url.startswith(("https://", "http://")):
+            raise ValueError("资料 URL 必须使用 http 或 https")
+        return self
+
+
+class CreativeInputSnapshot(ContractModel):
+    """Immutable v3 intake. It is not a SourceCard or an editorial plan."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    original_request: str = Field(min_length=10, max_length=5000)
+    display_title: str = Field(min_length=1, max_length=300)
+    verified_materials: list[CreativeMaterial] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    reference_assets: list[dict[str, Any]] = Field(
+        default_factory=list,
+        max_length=1,
+    )
+    created_at: str = ""
+
+    @model_validator(mode="after")
+    def validate_references(self):
+        for raw_asset in self.reference_assets:
+            asset = AssetRef.model_validate(raw_asset)
+            if asset.media_type not in ("image/jpeg", "image/png", "image/webp"):
+                raise ValueError("全局参考素材只支持 JPG、PNG 或 WebP 图片")
+        return self
 
 class PersonViewpointInput(ContractModel):
     """Compatibility input for clients that still submit separate legacy fields."""
@@ -965,6 +1005,28 @@ class PromptWritingProfileSnapshot(ContractModel):
     reference_policy: str = Field(min_length=1, max_length=3000)
     audio_policy: str = Field(min_length=1, max_length=1000)
     negative_rules: list[str] = Field(default_factory=list, max_length=30)
+    manifest_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    frozen_at: str = Field(min_length=1, max_length=64)
+
+
+class PromptAdapterSnapshot(ContractModel):
+    """Frozen internal prompt compiler used before the single Script Skill call."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    adapter_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    version: str = Field(
+        min_length=1,
+        max_length=32,
+        pattern=r"^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
+    )
+    display_name: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=1000)
+    compilation_framework: str = Field(min_length=1, max_length=8000)
+    quality_rules: list[str] = Field(min_length=1, max_length=30)
     manifest_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     frozen_at: str = Field(min_length=1, max_length=64)
 
@@ -1723,15 +1785,22 @@ class VideoJob(ContractModel):
     id: str
     revision: int = Field(default=1, ge=1)
     state: JobState
-    source_card_id: str
-    source_card_revision: int = Field(ge=1)
-    source_card_snapshot: dict[str, Any]
+    # v1/v2 jobs persist a SourceCard. New v3 jobs persist the creator's input
+    # directly and synthesize a neutral compatibility card only inside domain
+    # validation boundaries.
+    source_card_id: str = ""
+    source_card_revision: int = Field(default=1, ge=1)
+    source_card_snapshot: dict[str, Any] = Field(default_factory=dict)
+    input_snapshot: CreativeInputSnapshot | None = None
     # New jobs freeze the full content workflow. None means the persisted task
     # predates Skill routing and must continue under legacy semantics.
     skill_snapshot: ContentSkillSnapshot | None = None
     script_skill_snapshot: ScriptSkillSnapshot | None = None
     director_skill_snapshot: DirectorSkillSnapshot | None = None
     provider_adapter_snapshot: ProviderAdapterSnapshot | None = None
+    # v3 freezes H3 as an internal, deterministic prompt compiler. It creates
+    # no user-facing plan and never becomes a second content owner.
+    prompt_adapter_snapshot: PromptAdapterSnapshot | None = None
     # New tasks also freeze visual treatment and the internal prompt-writing
     # method. They remain separate from Content Skill and provider selection.
     visual_style_snapshot: VisualStyleSnapshot | None = None

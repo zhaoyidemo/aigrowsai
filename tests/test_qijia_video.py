@@ -21,6 +21,7 @@ from qijia_video.contracts import (
     Actor,
     AssetRef,
     CreativeBrief,
+    CreativeInputSnapshot,
     CreativeRequestInput,
     GenerationSettings,
     JobState,
@@ -95,7 +96,11 @@ from qijia_video.infrastructure.video_providers import (
     SeedanceVideoProvider,
 )
 from qijia_video.prompts import SCRIPT_HARD_MAX_CHARS, narration_char_count
-from qijia_video.prompt_orchestration import compile_script_skill_prompt
+from qijia_video.prompt_orchestration import (
+    compile_direct_script_prompt,
+    compile_script_skill_prompt,
+)
+from qijia_video.prompt_adapter_registry import default_prompt_adapter_registry
 from qijia_video.service import QijiaVideoService, REQUIRED_PACKAGE_NAMES
 from qijia_video.script_skill_registry import default_script_skill_registry
 from qijia_video.skill_registry import default_skill_registry
@@ -257,7 +262,7 @@ class QijiaVideoContractTests(unittest.TestCase):
         )
         expert = default_skill_registry.resolve("explain-expert-view")
         news = default_skill_registry.resolve("brief-recent-news")
-        self.assertEqual(expert.version, "3.0.0")
+        self.assertEqual(expert.version, "4.0.0")
         self.assertEqual(news.version, "2.1.0")
         self.assertEqual(expert.input_mode.value, "creative_request")
         self.assertEqual(expert.knowledge_mode.value, "model_knowledge")
@@ -566,18 +571,18 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertIn("不会联网核验", card.interpretation_boundary[0].text)
         self.assertIn("模型可以使用其已有的稳定知识", card.interpretation_boundary[0].text)
 
-    def test_unified_creative_request_api_keeps_legacy_routes_compatible(self):
+    def test_unified_creative_request_api_exposes_only_atomic_v3_creation(self):
         paths = {route.path for route in qijia_api.api_router.routes}
         prefix = "/api/qijia-video"
 
-        self.assertIn(f"{prefix}/source-cards/creative-request", paths)
-        self.assertIn(
-            f"{prefix}/source-cards/creative-request-with-reference",
-            paths,
-        )
-        self.assertIn(f"{prefix}/source-cards/idea", paths)
-        self.assertIn(f"{prefix}/source-cards/idea-with-reference", paths)
-        self.assertNotIn(f"{prefix}/source-cards/news-topic", paths)
+        self.assertIn(f"{prefix}/jobs/creative-request", paths)
+        self.assertIn(f"{prefix}/jobs/creative-request-with-reference", paths)
+        self.assertFalse(any(path.startswith(f"{prefix}/source-cards") for path in paths))
+        self.assertNotIn(f"{prefix}/jobs", {
+            route.path
+            for route in qijia_api.api_router.routes
+            if "POST" in route.methods
+        })
         self.assertNotIn(
             f"{prefix}/jobs/{{job_id}}/actions/retry-news-research",
             paths,
@@ -597,12 +602,6 @@ class QijiaVideoContractTests(unittest.TestCase):
                 "论万世不论一生”这段话。我想解释它的出处、真正含义和今天的价值。"
             ),
         )
-        card = SourceCard(
-            **request.to_source_card_input().model_dump(mode="json"),
-            id="card-huang-zongxi",
-            revision=1,
-            status="verified",
-        )
         skill = default_skill_registry.resolve(
             "explain-expert-view"
         ).snapshot()
@@ -610,24 +609,31 @@ class QijiaVideoContractTests(unittest.TestCase):
             "evidence-led-explainer"
         ).snapshot()
 
-        compiled = compile_script_skill_prompt(
-            card,
+        compiled = compile_direct_script_prompt(
+            CreativeInputSnapshot(
+                original_request=request.creative_request,
+                display_title="黄宗羲的这段话",
+            ),
+            prompt_adapter=default_prompt_adapter_registry.freeze_default(),
             content_policy=skill,
             script_skill=script_skill,
-            research_brief=None,
             minimum_characters=220,
             maximum_characters=300,
         )
 
         self.assertIn(request.creative_request, compiled)
-        self.assertIn("【唯一 ContextPack（用户提供材料）】", compiled)
+        self.assertIn("【用户原始创作请求｜最高优先级】", compiled)
+        self.assertIn("【用户明确核对的材料】", compiled)
         self.assertIn('"external_retrieval": false', compiled)
-        self.assertIn("禁止联网搜索、浏览器、检索插件和外部研究工具", compiled)
+        self.assertIn("禁止联网搜索、浏览器、检索插件或外部研究工具", compiled)
         self.assertIn("可以使用模型训练中已有的稳定知识", compiled)
-        self.assertIn("不得写成已经核验的人物逐字原话", compiled)
+        self.assertIn("不得写成已核验逐字原话", compiled)
         self.assertNotIn("至少执行三个意图不同的查询", compiled)
         self.assertNotIn("openrouter:web_search", compiled)
-        self.assertNotIn("H3", compiled)
+        self.assertIn("【内部 H3 Prompt Adapter】h3-prompt-writing@1.0.0", compiled)
+        self.assertIn("用户原始请求是创作意图的最高优先级", compiled)
+        self.assertIn("最终只输出 ScriptDraft", compiled)
+        self.assertNotIn("最终只交付EditorialPlan", compiled)
 
     def test_verified_research_wording_becomes_a_source_bound_quote(self):
         idea = PersonViewpointInput(
@@ -1839,6 +1845,73 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("【系统输出格式】", custom_prompt)
         self.assertNotIn("【本次来源卡】", custom_prompt)
 
+    async def test_openrouter_direct_script_returns_only_scriptdraft_in_one_call(self):
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            generated = {
+                "schema_version": "3.0",
+                "video_title": "真正重要的是判断标准",
+                "cover_text": "先问是非，再问成败",
+                "beats": [
+                    {
+                        "id": f"n{index:02d}",
+                        "narration": text.ljust(35, "。"),
+                        "role": role,
+                        "on_screen_text": "",
+                        "source_refs": [],
+                        "quote_ref": None,
+                    }
+                    for index, (role, text) in enumerate([
+                        ("hook", "一个决定的价值，不只由结果决定。"),
+                        ("context", "这段话把判断标准放在眼前得失之前。"),
+                        ("explanation", "它要求人先辨认事情本身的是非。"),
+                        ("application", "今天面对选择，也可以先追问长期影响。"),
+                        ("closing", "成败会变化，判断标准决定人走向哪里。"),
+                    ], 1)
+                ],
+                "caption": "先判断是非，再衡量得失。",
+                "hashtags": ["人物观点", "选择", "思考"],
+            }
+            return httpx.Response(200, json={
+                "id": "generation-direct-script-1",
+                "model": "resolved/test-model",
+                "choices": [{"message": {"content": json.dumps(
+                    generated, ensure_ascii=False
+                )}}],
+            })
+
+        provider = OpenRouterScriptProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="test/model",
+            transport=httpx.MockTransport(handler),
+        )
+        card = SourceCard(
+            **valid_card().model_dump(mode="json"),
+            id="card-direct-script",
+            revision=1,
+            status="verified",
+        )
+
+        script = await provider.generate_direct_script(
+            card,
+            "【用户原始创作请求｜最高优先级】\n黄宗羲及其观点",
+        )
+
+        self.assertEqual(len(calls), 1)
+        request_body = json.loads(calls[0].content)
+        response_format = request_body["response_format"]["json_schema"]
+        self.assertEqual(response_format["name"], "qijia_direct_script_draft_v1")
+        properties = response_format["schema"]["properties"]
+        self.assertNotIn("creative_brief", properties)
+        self.assertNotIn("editorial_plan", properties)
+        self.assertNotIn("tools", request_body)
+        self.assertIn("只返回最终 ScriptDraft JSON", request_body["messages"][0]["content"])
+        self.assertEqual(script.source_card_id, card.id)
+        self.assertEqual(script.video_title, "真正重要的是判断标准")
+
     async def test_openrouter_reports_truncated_json_with_the_exact_stage(self):
         def handler(_: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -2812,7 +2885,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         job = await self.service.create_job(card.id, self.actor)
 
         self.assertEqual(job.skill_snapshot.skill_id, "explain-expert-view")
-        self.assertEqual(job.skill_snapshot.version, "3.0.0")
+        self.assertEqual(job.skill_snapshot.version, "4.0.0")
         self.assertEqual(job.skill_snapshot.knowledge_mode.value, "model_knowledge")
         self.assertEqual(job.skill_snapshot.research_mode.value, "none")
         self.assertEqual(
@@ -2826,7 +2899,9 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(job.skill_snapshot.manifest_hash), 64)
         self.assertEqual(job.skill_snapshot.script_system_prompt, "")
         self.assertEqual(job.skill_snapshot.visual_policy, "")
-        self.assertEqual(job.pipeline_version, "v2")
+        self.assertEqual(job.pipeline_version, "v3")
+        self.assertIsNotNone(job.input_snapshot)
+        self.assertEqual(job.source_card_snapshot, {})
         self.assertEqual(job.script_skill_snapshot.skill_id, "evidence-led-explainer")
         self.assertEqual(job.generation_settings.script_prompt, "")
         self.assertEqual(job.generation_settings.seedance_prompt, "")
@@ -2887,7 +2962,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        self.assertEqual(job.pipeline_version, "v2")
+        self.assertEqual(job.pipeline_version, "v3")
         self.assertEqual(job.script_skill_snapshot.skill_id, "evidence-led-explainer")
         self.assertEqual(
             job.director_skill_snapshot.skill_id,
@@ -2905,6 +2980,11 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "paper-collage-explainer",
         )
         self.assertIsNone(job.prompt_writing_profile_snapshot)
+        self.assertEqual(
+            job.prompt_adapter_snapshot.adapter_id,
+            "h3-prompt-writing",
+        )
+        self.assertEqual(job.prompt_adapter_snapshot.version, "1.0.0")
         self.assertIsNone(job.creative_brief)
         self.assertEqual(
             job.generation_settings.visual_style_version,
@@ -2917,7 +2997,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job.generation_settings.script_prompt, "")
         self.assertEqual(job.generation_settings.seedance_prompt, "")
         job = await self.service.generate_script(job.id, self.actor)
-        self.assertIsNotNone(job.editorial_plan)
+        self.assertIsNone(job.editorial_plan)
         self.assertIsNone(job.creative_brief)
         compiled = self.service._storyboard_base_style(job)
         self.assertIn("【唯一视觉负责人】", compiled)
@@ -2928,7 +3008,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("VisualBible", compiled)
         self.assertIn("ShotContextIR", compiled)
         self.assertNotIn("H3", compiled)
-        self.assertNotIn(job.editorial_plan.core_thesis, compiled)
+        self.assertNotIn("EditorialPlan", compiled)
 
         job = await self.service.approve_script(
             job.id, job.revision, job.script_hash, self.actor
@@ -3044,9 +3124,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         job = await self.service.create_job(card.id, self.actor)
         job = await self.service.generate_script(job.id, self.actor)
-        initial_plan_hash = job.editorial_plan.draft_script_hash
-        initial_thesis = job.editorial_plan.core_thesis
-        self.assertEqual(initial_plan_hash, job.script_hash)
+        self.assertIsNone(job.editorial_plan)
 
         edited = job.script.model_copy(deep=True)
         editor_truth = "这是人工确认后的唯一解释路径，导演必须以这一版内容为准。"
@@ -3059,8 +3137,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.actor,
         )
 
-        self.assertEqual(job.editorial_plan.draft_script_hash, initial_plan_hash)
-        self.assertNotEqual(job.editorial_plan.draft_script_hash, job.script_hash)
+        self.assertIsNone(job.editorial_plan)
         job = await self.service.approve_script(
             job.id, job.revision, job.script_hash, self.actor
         )
@@ -3075,7 +3152,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertIn("【唯一视觉负责人】", director.director_instruction)
-        self.assertNotIn(initial_thesis, director.director_instruction)
+        self.assertNotIn("EditorialPlan", director.director_instruction)
 
     async def test_model_knowledge_generation_never_calls_research_provider(self):
         original_request = (
@@ -3098,11 +3175,11 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 self.research_calls += 1
                 raise AssertionError("模型知识任务不得调用人物搜索")
 
-            async def generate_with_plan(
+            async def generate_direct_script(
                 self, card, prompt, *, on_usage=None
             ):
                 self.generated_prompt = prompt
-                return await super().generate_with_plan(
+                return await super().generate_direct_script(
                     card, prompt, on_usage=on_usage
                 )
 
@@ -3132,15 +3209,15 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "model_knowledge",
         )
         self.assertIn(original_request, provider.generated_prompt)
-        self.assertIn("【唯一 ContextPack（用户提供材料）】", provider.generated_prompt)
+        self.assertIn("【用户原始创作请求｜最高优先级】", provider.generated_prompt)
         self.assertIn('"external_retrieval": false', provider.generated_prompt)
         self.assertIn("禁止联网搜索", provider.generated_prompt)
         self.assertIn(
-            "【Script Skill】evidence-led-explainer@1.1.0",
+            "【Script Skill】evidence-led-explainer@2.0.0",
             provider.generated_prompt,
         )
         self.assertNotIn("openrouter:web_search", provider.generated_prompt)
-        self.assertIsNotNone(generated.editorial_plan)
+        self.assertIsNone(generated.editorial_plan)
         self.assertIsNone(generated.creative_brief)
 
     async def test_script_retry_does_not_add_a_research_call(self):
@@ -3154,13 +3231,13 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 self.research_calls += 1
                 raise AssertionError("脚本重试不得调用研究 Provider")
 
-            async def generate_with_plan(
+            async def generate_direct_script(
                 self, card, prompt, *, on_usage=None
             ):
                 self.generate_calls += 1
                 if self.generate_calls == 1:
                     raise ProviderUnavailable("脚本服务暂时不可用")
-                return await super().generate_with_plan(
+                return await super().generate_direct_script(
                     card, prompt, on_usage=on_usage
                 )
 
@@ -4986,9 +5063,13 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         class RecordingScriptProvider(TemplateScriptProvider):
             prompt = None
 
-            async def generate(self, card, prompt=None):
+            async def generate_direct_script(
+                self, card, prompt, *, on_usage=None
+            ):
                 self.prompt = prompt
-                return await super().generate(card, prompt)
+                return await super().generate_direct_script(
+                    card, prompt, on_usage=on_usage
+                )
 
         provider = RecordingScriptProvider()
         self.service.script_provider = provider
@@ -5051,16 +5132,16 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             card.id, self.actor, settings
         )
         job = await self.service.generate_script(job.id, self.actor)
-        self.assertTrue(provider.prompt.startswith("你是任务冻结的唯一 Script Skill"))
-        self.assertIn("【不可变原始输入】", provider.prompt)
-        self.assertIn("【唯一 ContextPack（用户提供材料）】", provider.prompt)
-        self.assertIn("【Script Skill】evidence-led-explainer@1.1.0", provider.prompt)
+        self.assertTrue(provider.prompt.startswith("你是本任务唯一的 Script Skill"))
+        self.assertIn("【用户原始创作请求｜最高优先级】", provider.prompt)
+        self.assertIn("【用户明确核对的材料】", provider.prompt)
+        self.assertIn("【Script Skill】evidence-led-explainer@2.0.0", provider.prompt)
         self.assertIn('"external_retrieval": false', provider.prompt)
         self.assertIn("禁止联网搜索", provider.prompt)
-        self.assertIn("【冻结的事实、安全与质量政策】", provider.prompt)
-        self.assertNotIn("H3", provider.prompt)
+        self.assertIn("【硬性政策】", provider.prompt)
+        self.assertIn("【内部 H3 Prompt Adapter】", provider.prompt)
         self.assertIn("245-325 个汉字", provider.prompt)
-        self.assertIsNotNone(job.editorial_plan)
+        self.assertIsNone(job.editorial_plan)
         self.assertIsNone(job.creative_brief)
 
         job = await self.service.approve_script(
@@ -5078,7 +5159,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("VisualBible", storyboard_provider.base_style)
         self.assertIn("ShotContextIR", storyboard_provider.base_style)
         self.assertNotIn("H3", storyboard_provider.base_style)
-        self.assertNotIn(job.editorial_plan.core_thesis, storyboard_provider.base_style)
+        self.assertNotIn("EditorialPlan", storyboard_provider.base_style)
         requests = job.visual_requests
         self.assertGreaterEqual(len(requests), 1)
         self.assertLessEqual(len(requests), 3)
@@ -5153,8 +5234,11 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "confirm_final",
             "package",
         }.issubset(stages))
-        self.assertNotIn("seedance_shot_2", stages)
-        self.assertNotIn("seedance_shot_3", stages)
+        video_count = len(job.visual_requests)
+        for index in range(1, video_count + 1):
+            self.assertIn(f"seedance_shot_{index}", stages)
+        for index in range(video_count + 1, 4):
+            self.assertNotIn(f"seedance_shot_{index}", stages)
         self.assertNotIn("frame_selection", stages)
 
     async def test_legacy_frozen_video_requests_resume_without_seedream_cost(self):
@@ -5228,23 +5312,15 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         app.dependency_overrides[auth_service.get_current_user] = lambda: user
         return TestClient(app)
 
-    def test_create_job_public_settings_expose_only_v2_selections(self):
+    def test_create_job_public_settings_expose_only_creator_choices(self):
         properties = set(
             qijia_api.CreateGenerationSettings.model_json_schema()["properties"]
         )
         self.assertEqual(
             properties,
             {
-                "skill_id",
-                "skill_version",
-                "script_skill_id",
-                "script_skill_version",
-                "director_skill_id",
-                "director_skill_version",
                 "visual_style_id",
                 "visual_style_version",
-                "provider_adapter_id",
-                "provider_adapter_version",
                 "video_resolution",
                 "tts_voice_id",
                 "tts_speed_ratio",
@@ -5255,6 +5331,14 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             "script_prompt",
             "seedance_prompt",
             "prompt_writing_profile_id",
+            "skill_id",
+            "skill_version",
+            "script_skill_id",
+            "script_skill_version",
+            "director_skill_id",
+            "director_skill_version",
+            "provider_adapter_id",
+            "provider_adapter_version",
             "image_count",
             "shot_count",
         ):
@@ -5263,14 +5347,14 @@ class QijiaVideoPermissionTests(unittest.TestCase):
                     qijia_api.CreateGenerationSettings.model_validate({
                         legacy_field: "legacy",
                     })
-        migrated = qijia_api.CreateGenerationSettings.model_validate({
-            "director_skill_id": "paper-collage-explainer",
-            "director_skill_version": "1.1.0",
+        internal = qijia_api.CreateGenerationSettings.model_validate({
+            "visual_style_id": "paper-collage-explainer",
+            "visual_style_version": "1.1.0",
         }).to_internal()
-        self.assertEqual(migrated.director_skill_id, "animated-explainer")
-        self.assertEqual(migrated.director_skill_version, "")
-        self.assertEqual(migrated.visual_style_id, "paper-collage-explainer")
-        self.assertEqual(migrated.visual_style_version, "1.1.0")
+        self.assertEqual(internal.visual_style_id, "paper-collage-explainer")
+        self.assertEqual(internal.visual_style_version, "1.1.0")
+        self.assertEqual(internal.script_skill_id, "evidence-led-explainer")
+        self.assertEqual(internal.director_skill_id, "")
 
     def test_api_and_page_require_independent_permission(self):
         denied = self.client_for({
@@ -5291,7 +5375,7 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         response = allowed.get("/api/qijia-video/capabilities")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"]["module"], "qijia_video")
-        self.assertEqual(response.json()["data"]["pipeline_version"], "v2")
+        self.assertEqual(response.json()["data"]["pipeline_version"], "v3")
         self.assertNotIn("mock", response.json()["data"]["script_provider"])
         self.assertNotIn("mock", response.json()["data"]["tts_provider"])
         self.assertNotIn("mock", response.json()["data"]["video_provider"])
@@ -5313,52 +5397,24 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         seedream_pricing = response.json()["data"]["seedream_pricing"]
         self.assertEqual(seedream_pricing["chapter_policy"], "semantic_adaptive")
         self.assertEqual(seedream_pricing["max_video_chapters"], 3)
-        skills = response.json()["data"]["content_skills"]
-        self.assertEqual(
-            {item["skill_id"] for item in skills},
-            {"explain-expert-view"},
-        )
-        self.assertTrue(all(item["external_retrieval"] is False for item in skills))
-        skill_response = allowed.get("/api/qijia-video/skills")
-        self.assertEqual(skill_response.status_code, 200)
-        self.assertEqual(
-            {item["skill_id"] for item in skill_response.json()["data"]},
-            {"explain-expert-view"},
-        )
         self.assertIn("visual_styles", response.json()["data"])
+        self.assertNotIn("content_skills", response.json()["data"])
+        self.assertNotIn("script_skills", response.json()["data"])
+        self.assertNotIn("director_skills", response.json()["data"])
+        self.assertNotIn("provider_adapter", response.json()["data"])
         self.assertNotIn("prompt_writing_profile", response.json()["data"])
-        self.assertEqual(
-            {item["skill_id"] for item in response.json()["data"]["script_skills"]},
-            {"evidence-led-explainer"},
-        )
-        self.assertEqual(
-            {item["skill_id"] for item in response.json()["data"]["director_skills"]},
-            {"animated-explainer"},
-        )
-        self.assertTrue(all(
-            item["role"] == "director_owner"
-            for item in response.json()["data"]["director_skills"]
-        ))
         self.assertTrue(all(
             item["role"] == "visual_language"
             for item in response.json()["data"]["visual_styles"]
         ))
-        self.assertEqual(
-            response.json()["data"]["provider_adapter"]["adapter_id"],
-            "seedream-seedance",
-        )
-        self.assertEqual(
-            allowed.get("/api/qijia-video/script-skills").status_code,
-            200,
-        )
-        self.assertEqual(
-            allowed.get("/api/qijia-video/director-skills").status_code,
-            200,
-        )
-        self.assertEqual(
-            allowed.get("/api/qijia-video/provider-adapter").status_code,
-            200,
-        )
+        for retired_path in (
+            "/api/qijia-video/skills",
+            "/api/qijia-video/script-skills",
+            "/api/qijia-video/director-skills",
+            "/api/qijia-video/provider-adapter",
+            "/api/qijia-video/source-cards",
+        ):
+            self.assertEqual(allowed.get(retired_path).status_code, 404)
         style_response = allowed.get("/api/qijia-video/visual-styles")
         self.assertEqual(style_response.status_code, 200)
         self.assertEqual(

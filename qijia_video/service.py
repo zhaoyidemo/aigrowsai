@@ -24,6 +24,9 @@ from qijia_video.contracts import (
     AssetRef,
     ContentFormat,
     ContentSkillSnapshot,
+    ContentDomain,
+    CreativeInputSnapshot,
+    CreativeMaterial,
     CreativeBrief,
     DouyinPerformance,
     DouyinPlaybackSnapshot,
@@ -37,6 +40,7 @@ from qijia_video.contracts import (
     PersonResearchBrief,
     PipelineVersion,
     PreGenerationMediaMode,
+    PromptAdapterSnapshot,
     PromptWritingProfileSnapshot,
     ProviderTask,
     ProviderTaskState,
@@ -99,8 +103,13 @@ from qijia_video.prompts import (
     narration_char_count,
 )
 from qijia_video.prompt_orchestration import (
+    compile_direct_script_prompt,
     compile_legacy_h3_script_prompt,
     compile_script_skill_prompt,
+)
+from qijia_video.prompt_adapter_registry import (
+    PromptAdapterRegistry,
+    default_prompt_adapter_registry,
 )
 from qijia_video.director_prompting import compile_director_instruction
 from qijia_video.director_skill_registry import (
@@ -207,6 +216,7 @@ class QijiaVideoService:
         director_skill_registry: DirectorSkillRegistry | None = None,
         visual_style_registry: VisualStyleRegistry | None = None,
         provider_adapter_registry: ProviderAdapterRegistry | None = None,
+        prompt_adapter_registry: PromptAdapterRegistry | None = None,
         prompt_writing_profile_registry: (
             PromptWritingProfileRegistry | None
         ) = None,
@@ -238,6 +248,9 @@ class QijiaVideoService:
         )
         self.provider_adapter_registry = (
             provider_adapter_registry or default_provider_adapter_registry
+        )
+        self.prompt_adapter_registry = (
+            prompt_adapter_registry or default_prompt_adapter_registry
         )
         self.work_root = work_root.resolve()
         self.work_root.mkdir(parents=True, exist_ok=True)
@@ -654,6 +667,92 @@ class QijiaVideoService:
         return SourceCard.model_validate(enriched)
 
     @staticmethod
+    def _source_card_from_input_snapshot(
+        snapshot: CreativeInputSnapshot,
+        *,
+        card_id: str = 'direct-input',
+        created_by: str = '',
+    ) -> SourceCard:
+        """Build a neutral validation adapter; it is never persisted as intake."""
+
+        sources = []
+        facts = []
+        for index, material in enumerate(snapshot.verified_materials, start=1):
+            source_id = f'source_{index:02d}'
+            material_id = f'material_{index:02d}'
+            sources.append(SourceEntry(
+                id=source_id,
+                type='other',
+                title=material.title,
+                locator='' if material.url else '用户在创建任务时确认的材料',
+                url=material.url,
+                rights_status='verified_for_citation',
+            ))
+            facts.append(VerifiedFact(
+                id=material_id,
+                text=material.text,
+                source_refs=[source_id],
+            ))
+        now = snapshot.created_at or timestamp()
+        return SourceCard(
+            content_domain=ContentDomain.GENERAL_KNOWLEDGE,
+            content_format=ContentFormat.CONCEPT,
+            target_audience='由用户原始创作请求决定',
+            subject={'type': 'topic', 'name': snapshot.display_title[:300]},
+            title=snapshot.display_title,
+            core_idea=snapshot.original_request,
+            parent_question=snapshot.original_request[:500],
+            sources=sources,
+            verified_facts=facts,
+            interpretation_boundary=[{
+                'id': 'boundary_01',
+                'text': (
+                    '模型已有知识不是本次已核对来源；人物归属、逐字引语、精确出处、'
+                    '版本、日期、数据和最新动态把握不足时必须降格表述或交由人工复核。'
+                ),
+            }],
+            reference_assets=list(snapshot.reference_assets),
+            id=card_id,
+            revision=1,
+            status=SourceCardStatus.VERIFIED,
+            reviewed_by=created_by,
+            reviewed_at=now,
+            created_by=created_by,
+            created_at=now,
+            updated_at=now,
+        )
+
+    @staticmethod
+    def _source_card_for_job(job: VideoJob) -> SourceCard:
+        if job.input_snapshot:
+            return QijiaVideoService._source_card_from_input_snapshot(
+                job.input_snapshot,
+                card_id=job.id,
+                created_by=job.created_by,
+            )
+        return SourceCard.model_validate(job.source_card_snapshot)
+
+    @staticmethod
+    def _direct_script_prompt_for_settings(
+        input_snapshot: CreativeInputSnapshot,
+        settings: GenerationSettings,
+        prompt_adapter: PromptAdapterSnapshot,
+        content_policy: ContentSkillSnapshot,
+        script_skill: ScriptSkillSnapshot,
+    ) -> str:
+        minimum, maximum = TTS_SCRIPT_CHARACTER_TARGETS[
+            settings.tts_speed_ratio
+        ]
+        return compile_direct_script_prompt(
+            input_snapshot,
+            prompt_adapter=prompt_adapter,
+            content_policy=content_policy,
+            script_skill=script_skill,
+            minimum_characters=minimum,
+            maximum_characters=maximum,
+        )
+
+    @staticmethod
     def _legacy_h3_script_prompt_for_settings(
         card: SourceCard,
         settings: GenerationSettings,
@@ -1011,6 +1110,8 @@ class QijiaVideoService:
         actor: Actor,
         generation_settings: GenerationSettings | None = None,
     ) -> VideoJob:
+        """Compatibility entry for persisted v2 SourceCard workflows."""
+
         card = await self.get_source_card(source_card_id, actor)
         if card.status != SourceCardStatus.VERIFIED:
             raise QualityGateFailed("来源卡必须先核验")
@@ -1019,6 +1120,92 @@ class QijiaVideoService:
                 "最新新闻依赖实时检索，当前工作台已停用该入口。"
                 "请在统一创作请求中粘贴你已经掌握的事实与材料。"
             )
+        # The legacy request shape is accepted, but every newly created task
+        # enters the same v3 runtime. SourceCard is converted once at the API
+        # boundary and is not retained as a pre-script workflow stage.
+        original_request = card.core_idea.strip() or card.title
+        snapshot = CreativeInputSnapshot(
+            original_request=original_request,
+            display_title=card.title,
+            verified_materials=[
+                CreativeMaterial(
+                    title=next(
+                        (
+                            source.title
+                            for source in card.sources
+                            if source.id in fact.source_refs
+                        ),
+                        '用户核对材料',
+                    ),
+                    text=fact.text,
+                    url=next(
+                        (
+                            source.url
+                            for source in card.sources
+                            if source.id in fact.source_refs and source.url
+                        ),
+                        '',
+                    ),
+                )
+                for fact in card.verified_facts
+            ],
+            reference_assets=list(card.reference_assets),
+            created_at=timestamp(),
+        )
+        return await self._create_frozen_job(
+            self._source_card_from_input_snapshot(
+                snapshot,
+                created_by=actor.username,
+            ),
+            actor,
+            generation_settings,
+            pipeline_version=PipelineVersion.DIRECT_SCRIPT,
+            input_snapshot=snapshot,
+        )
+
+    async def create_direct_job(
+        self,
+        creative_request: str,
+        actor: Actor,
+        generation_settings: GenerationSettings | None = None,
+        *,
+        verified_materials: list[CreativeMaterial] | None = None,
+        reference_assets: list[dict] | None = None,
+    ) -> VideoJob:
+        """Create one v3 job atomically from the creator's original request."""
+
+        request = re.sub(r'\s+', ' ', str(creative_request or '')).strip()
+        if len(request) < 10:
+            raise QualityGateFailed('请用至少 10 个字说明你想做的内容')
+        now = timestamp()
+        snapshot = CreativeInputSnapshot(
+            original_request=request,
+            display_title=request[:300],
+            verified_materials=list(verified_materials or []),
+            reference_assets=list(reference_assets or []),
+            created_at=now,
+        )
+        card = self._source_card_from_input_snapshot(
+            snapshot,
+            created_by=actor.username,
+        )
+        return await self._create_frozen_job(
+            card,
+            actor,
+            generation_settings,
+            pipeline_version=PipelineVersion.DIRECT_SCRIPT,
+            input_snapshot=snapshot,
+        )
+
+    async def _create_frozen_job(
+        self,
+        card: SourceCard,
+        actor: Actor,
+        generation_settings: GenerationSettings | None,
+        *,
+        pipeline_version: PipelineVersion,
+        input_snapshot: CreativeInputSnapshot | None = None,
+    ) -> VideoJob:
         requested_settings = generation_settings or GenerationSettings()
         script_prompt_explicit = (
             "script_prompt" in requested_settings.model_fields_set
@@ -1040,6 +1227,9 @@ class QijiaVideoService:
             )
             frozen_settings, script_skill_snapshot = (
                 self.script_skill_registry.freeze(card, frozen_settings)
+            )
+            prompt_adapter_snapshot = (
+                self.prompt_adapter_registry.freeze_default()
             )
             frozen_settings, director_skill_snapshot = (
                 self.director_skill_registry.freeze(card, frozen_settings)
@@ -1077,7 +1267,7 @@ class QijiaVideoService:
                 'Director Skill 会按真实语义变化规划视觉章节；'
                 '不要再提交 image_count 或 shot_count'
             )
-        # Do not persist dormant v1 prompt text in a v2 job. Historical jobs
+        # Do not persist dormant v1 prompt text in a new job. Historical jobs
         # still deserialize with the contract defaults and keep their snapshots.
         frozen_settings.script_prompt = ''
         frozen_settings.seedance_prompt = ''
@@ -1085,17 +1275,21 @@ class QijiaVideoService:
         frozen_settings.prompt_writing_profile_version = ''
         now = timestamp()
         draft = VideoJob(
-            pipeline_version=PipelineVersion.SINGLE_OWNER,
+            pipeline_version=pipeline_version,
             id="pending",
             state=JobState.CARD_VERIFIED,
-            source_card_id=card.id,
+            source_card_id=card.id if input_snapshot is None else '',
             source_card_revision=card.revision,
-            source_card_snapshot=card.model_dump(mode="json"),
+            source_card_snapshot=(
+                card.model_dump(mode="json") if input_snapshot is None else {}
+            ),
+            input_snapshot=input_snapshot,
             skill_snapshot=skill_snapshot,
             script_skill_snapshot=script_skill_snapshot,
             director_skill_snapshot=director_skill_snapshot,
             visual_style_snapshot=visual_style_snapshot,
             provider_adapter_snapshot=provider_adapter_snapshot,
+            prompt_adapter_snapshot=prompt_adapter_snapshot,
             generation_settings=frozen_settings,
             created_by=actor.username,
             created_at=now,
@@ -1107,27 +1301,10 @@ class QijiaVideoService:
         )
         return VideoJob.model_validate(saved)
 
-    def content_skills(self) -> list[dict]:
-        return self.skill_registry.public_catalog()
-
-    def script_skills(self) -> list[dict]:
-        return self.script_skill_registry.public_catalog()
-
     def visual_styles(self) -> list[dict]:
         """Visual language catalog, independent from the directing method."""
 
         return self.visual_style_registry.public_catalog()
-
-    def director_skills(self) -> list[dict]:
-        return self.director_skill_registry.public_catalog()
-
-    def provider_adapter(self) -> dict:
-        return self.provider_adapter_registry.public_default()
-
-    def prompt_writing_profile(self) -> dict:
-        """Pipeline v1 metadata kept only for historical job inspection."""
-
-        return self.prompt_writing_profile_registry.public_default()
 
     async def list_jobs(
         self,
@@ -1364,7 +1541,7 @@ class QijiaVideoService:
         job.error = ""
         job = await self._save_job(job, actor)
         try:
-            card = SourceCard.model_validate(job.source_card_snapshot)
+            card = self._source_card_for_job(job)
             settings = self._generation_settings(job)
 
             async def persist_script_usage(usage: ProviderUsageRecord) -> None:
@@ -1399,11 +1576,43 @@ class QijiaVideoService:
                 stage="script_generation",
                 percent=14,
             )
+            is_v3 = job.pipeline_version == PipelineVersion.DIRECT_SCRIPT
             is_v2 = job.pipeline_version == PipelineVersion.SINGLE_OWNER
             generate_with_usage = getattr(
                 self.script_provider, 'generate_with_usage', None
             )
-            if is_v2:
+            if is_v3:
+                if (
+                    not job.input_snapshot
+                    or not job.skill_snapshot
+                    or not job.script_skill_snapshot
+                    or not job.prompt_adapter_snapshot
+                ):
+                    raise QualityGateFailed(
+                        'v3 任务缺少冻结的原始输入、H3 Prompt Adapter、'
+                        '知识边界或 Script Skill'
+                    )
+                script_prompt = self._direct_script_prompt_for_settings(
+                    job.input_snapshot,
+                    settings,
+                    job.prompt_adapter_snapshot,
+                    job.skill_snapshot,
+                    job.script_skill_snapshot,
+                )
+                generate_direct_script = getattr(
+                    self.script_provider, 'generate_direct_script', None
+                )
+                if callable(generate_direct_script):
+                    script = await generate_direct_script(
+                        card,
+                        script_prompt,
+                        on_usage=persist_script_usage,
+                    )
+                else:
+                    script = await self.script_provider.generate(card, script_prompt)
+                creative_brief = None
+                editorial_plan = None
+            elif is_v2:
                 if not job.skill_snapshot or not job.script_skill_snapshot:
                     raise QualityGateFailed(
                         'v2 任务缺少冻结的 Input Policy 或 Script Skill'
@@ -1534,7 +1743,7 @@ class QijiaVideoService:
         self._assert_revision(job.revision, expected_revision)
         if job.state != JobState.SCRIPT_REVIEW_REQUIRED:
             raise InvalidTransition("只有待确认脚本可以编辑")
-        card = SourceCard.model_validate(job.source_card_snapshot)
+        card = self._source_card_for_job(job)
         self._validate_script(script, card)
         next_script_hash = content_hash(script)
         script_changed = next_script_hash != job.script_hash
@@ -1660,7 +1869,7 @@ class QijiaVideoService:
         self._assert_revision(job.revision, expected_revision)
         if job.state != JobState.SCRIPT_REVIEW_REQUIRED or not job.script:
             raise InvalidTransition("当前没有可确认的脚本")
-        card = SourceCard.model_validate(job.source_card_snapshot)
+        card = self._source_card_for_job(job)
         self._validate_script(job.script, card)
         actual = content_hash(job.script)
         if script_hash != actual or script_hash != job.script_hash:
@@ -2106,12 +2315,19 @@ class QijiaVideoService:
 
     @staticmethod
     def _has_reference_image(job: VideoJob) -> bool:
-        source_card = SourceCard.model_validate(job.source_card_snapshot)
+        source_card = QijiaVideoService._source_card_for_job(job)
         return bool(source_card.reference_assets)
+
+    @staticmethod
+    def _uses_single_owner_director(job: VideoJob) -> bool:
+        return job.pipeline_version in {
+            PipelineVersion.SINGLE_OWNER,
+            PipelineVersion.DIRECT_SCRIPT,
+        }
 
     @classmethod
     def _storyboard_base_style(cls, job: VideoJob) -> str:
-        if job.pipeline_version == PipelineVersion.SINGLE_OWNER:
+        if cls._uses_single_owner_director(job):
             if not job.director_skill_snapshot:
                 raise InvalidTransition('v2 任务缺少冻结的 Director Skill')
             return compile_director_instruction(
@@ -2162,7 +2378,7 @@ class QijiaVideoService:
     @classmethod
     def _storyboard_input_hash(cls, job: VideoJob) -> str:
         if (
-            job.pipeline_version == PipelineVersion.SINGLE_OWNER
+            cls._uses_single_owner_director(job)
             and job.director_skill_snapshot
             and job.director_skill_snapshot.mode != 'legacy-style-director'
         ):
@@ -2187,7 +2403,7 @@ class QijiaVideoService:
             # choices are outputs, so they must never mutate the input
             # fingerprint after the plan has been persisted.
             include_visual_types=(
-                job.pipeline_version != PipelineVersion.SINGLE_OWNER
+                not cls._uses_single_owner_director(job)
             ),
         )
 
@@ -2198,7 +2414,7 @@ class QijiaVideoService:
         progress: ProgressReporter | None = None,
     ) -> VideoJob:
         director_v3 = bool(
-            job.pipeline_version == PipelineVersion.SINGLE_OWNER
+            self._uses_single_owner_director(job)
             and job.director_skill_snapshot
             and job.director_skill_snapshot.mode != 'legacy-style-director'
         )
@@ -2331,7 +2547,7 @@ class QijiaVideoService:
             }
             if (
                 self._has_reference_image(job)
-                and job.pipeline_version != PipelineVersion.SINGLE_OWNER
+                and not self._uses_single_owner_director(job)
             ):
                 # Storyboards created before reference-first styling used the
                 # editable global style in their input hash. Accept that exact
@@ -2351,7 +2567,7 @@ class QijiaVideoService:
                 != beat_groups
             ):
                 raise QualityGateFailed("已保存分镜与当前确认脚本不一致")
-            if job.pipeline_version == PipelineVersion.SINGLE_OWNER and (
+            if self._uses_single_owner_director(job) and (
                 job.storyboard_plan.schema_version != '2.0'
                 or not job.visual_bible
                 or job.visual_bible.input_hash != expected_hash
@@ -2374,7 +2590,7 @@ class QijiaVideoService:
             nonlocal job
             job = await self._persist_usage_record(job, usage, actor)
 
-        if job.pipeline_version == PipelineVersion.SINGLE_OWNER:
+        if self._uses_single_owner_director(job):
             if not job.director_skill_snapshot:
                 raise InvalidTransition('v2 任务缺少冻结的 Director Skill')
             generate_with_direction = getattr(
@@ -2460,7 +2676,7 @@ class QijiaVideoService:
         *,
         has_reference_image: bool = False,
     ) -> str:
-        if job.pipeline_version == PipelineVersion.SINGLE_OWNER:
+        if QijiaVideoService._uses_single_owner_director(job):
             if (
                 not job.provider_adapter_snapshot
                 or not job.visual_bible
@@ -2522,7 +2738,7 @@ class QijiaVideoService:
             else None
         )
         if storyboard_shot is None:
-            if job.pipeline_version == PipelineVersion.SINGLE_OWNER:
+            if cls._uses_single_owner_director(job):
                 raise InvalidTransition('v2 镜头缺少冻结的 ShotContextIR')
             # Historical jobs may not have a structured storyboard. They still
             # go through the compiler and safety boundaries instead of treating
@@ -2537,7 +2753,7 @@ class QijiaVideoService:
                 motion_prompt="从当前首帧自然延展。",
             )
         settings = cls._generation_settings(job)
-        if job.pipeline_version == PipelineVersion.SINGLE_OWNER:
+        if cls._uses_single_owner_director(job):
             if (
                 not job.provider_adapter_snapshot
                 or not job.visual_bible
@@ -2619,7 +2835,7 @@ class QijiaVideoService:
     ) -> VideoJob:
         if not job.storyboard_plan:
             raise InvalidTransition("缺少镜头分镜")
-        source_card = SourceCard.model_validate(job.source_card_snapshot)
+        source_card = self._source_card_for_job(job)
         reference_asset = (
             AssetRef.model_validate(source_card.reference_assets[0])
             if source_card.reference_assets
@@ -5322,7 +5538,7 @@ class QijiaVideoService:
             encoding="utf-8",
         )
         sources_path = support / "sources.md"
-        card = SourceCard.model_validate(job.source_card_snapshot)
+        card = self._source_card_for_job(job)
         sources_path.write_text(
             "\n".join(
                 f"- {item.title} — {item.author or '作者未填'}；{item.locator or item.url}"
@@ -5347,9 +5563,15 @@ class QijiaVideoService:
                 str(index), f"{srt_time(start)} --> {srt_time(end)}", cue.text, ""
             ])
         srt_path.write_text("\n".join(srt_lines), encoding="utf-8")
-        source_card_path = support / "source_card.json"
-        source_card_path.write_text(
-            json.dumps(card.model_dump(mode="json"), ensure_ascii=False, indent=2),
+        intake_name = "input_snapshot.json" if job.input_snapshot else "source_card.json"
+        intake_path = support / intake_name
+        intake_payload = (
+            job.input_snapshot.model_dump(mode="json")
+            if job.input_snapshot
+            else card.model_dump(mode="json")
+        )
+        intake_path.write_text(
+            json.dumps(intake_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         narration_path = support / "narration_manifest.json"
@@ -5427,6 +5649,10 @@ class QijiaVideoService:
                     job.script_skill_snapshot.model_dump(mode='json')
                     if job.script_skill_snapshot else None
                 ),
+                'prompt_adapter': (
+                    job.prompt_adapter_snapshot.model_dump(mode='json')
+                    if job.prompt_adapter_snapshot else None
+                ),
                 'director_skill': (
                     job.director_skill_snapshot.model_dump(mode='json')
                     if job.director_skill_snapshot else None
@@ -5435,10 +5661,12 @@ class QijiaVideoService:
                     job.provider_adapter_snapshot.model_dump(mode='json')
                     if job.provider_adapter_snapshot else None
                 ),
-                'editorial_plan': (
-                    job.editorial_plan.model_dump(mode='json')
-                    if job.editorial_plan else None
-                ),
+                **({
+                    'editorial_plan': (
+                        job.editorial_plan.model_dump(mode='json')
+                        if job.editorial_plan else None
+                    ),
+                } if job.pipeline_version != PipelineVersion.DIRECT_SCRIPT else {}),
                 'visual_bible': (
                     job.visual_bible.model_dump(mode='json')
                     if job.visual_bible else None
@@ -5453,7 +5681,7 @@ class QijiaVideoService:
             ("caption.md", caption_path, "text/markdown"),
             ("sources.md", sources_path, "text/markdown"),
             ("subtitles.srt", srt_path, "application/x-subrip"),
-            ("source_card.json", source_card_path, "application/json"),
+            (intake_name, intake_path, "application/json"),
             ("narration_manifest.json", narration_path, "application/json"),
             ("visual_requests.json", video_requests_path, "application/json"),
             ("video_tasks.json", video_tasks_path, "application/json"),
@@ -5627,7 +5855,7 @@ class QijiaVideoService:
         job = await self._save_job(job, actor)
         workspace = Path(tempfile.mkdtemp(prefix=f"{job.id}-", dir=self.work_root))
         try:
-            card = SourceCard.model_validate(job.source_card_snapshot)
+            card = self._source_card_for_job(job)
             self._validate_script(job.script, card)
             settings = self._generation_settings(job)
             self._report(

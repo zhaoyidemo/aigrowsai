@@ -131,7 +131,8 @@ class CostEvent:
 
 def _job_title(job: VideoJob) -> str:
     return str(
-        (job.source_card_snapshot or {}).get("title")
+        (job.input_snapshot.display_title if job.input_snapshot else "")
+        or (job.source_card_snapshot or {}).get("title")
         or (job.script.video_title if job.script else "")
         or job.id
     )

@@ -23,7 +23,7 @@ const ttsProvider = fs.readFileSync(
 );
 
 test('qijia video uses an independent page and API namespace', () => {
-  assert.match(page, /齐家 AI 家庭教育内容工作台/);
+  assert.match(page, /齐家 AI 知识视频工作台/);
   assert.match(login, /家庭教育内容工作台/);
   assert.match(app, /const API = '\/api\/qijia-video'/);
   assert.match(host, /RedirectResponse\("\/qijia-video"/);
@@ -35,39 +35,28 @@ test('qijia video uses an independent page and API namespace', () => {
 });
 
 test('video creation uses model knowledge without external retrieval', () => {
-  assert.match(page, /id="content-skill"/);
-  assert.match(page, /使用模型已有知识创作 · 不联网 · 脚本确认后按真实旁白时长自动导演/);
+  assert.match(page, /id="creative-request-form"/);
+  assert.match(page, /系统直接生成口播稿 · 不联网 · 不生成前置研究简报/);
   assert.match(page, /精确出处、人物归属、版本、日期和最新动态会在脚本确认时标记为需要复核/);
-  assert.doesNotMatch(page, /不联网，只限定模型可以怎样使用已有知识/);
-  assert.match(page, />生成脚本<\/button>/);
+  assert.match(page, />生成口播稿<\/button>/);
   assert.match(app, /qijia-video-generation-settings-v3/);
-  assert.match(app, /DEFAULT_CONTENT_SKILL_ID = 'explain-expert-view'/);
-  assert.match(app, /skill_id: requestedSkill\.skill_id/);
-  assert.match(app, /skill_version: requestedSkill\.version/);
+  assert.doesNotMatch(page, /id="content-skill"|id="script-skill"|id="director-skill"/);
+  assert.doesNotMatch(app, /DEFAULT_CONTENT_SKILL_ID|DEFAULT_SCRIPT_SKILL_ID|DEFAULT_DIRECTOR_SKILL_ID/);
   assert.doesNotMatch(page, /id="news-topic-form"/);
   assert.doesNotMatch(page, /id="retry-research-button"/);
   assert.doesNotMatch(app, /NEWS_CONTENT_SKILL_ID|\/source-cards\/news-topic/);
   assert.doesNotMatch(app, /\/actions\/retry-news-research/);
   assert.doesNotMatch(app, /research_diagnostics|web_search_requests/);
-  assert.match(app, /job\.skill_snapshot\?\.display_name/);
+  assert.match(app, /job\.pipeline_version === 'v3'[\s\S]*'直接创作'/);
 });
 
-test('Director Skill and Visual Style are selected and frozen independently', () => {
-  assert.match(page, /id="director-skill"/);
+test('creator selects only visual style while internal roles stay server-owned', () => {
   assert.match(page, /id="visual-style"/);
-  assert.match(page, /id="creation-engine-summary"/);
-  assert.match(page, /脚本负责把内容讲清楚，导演负责把每一章变成可拍、可读的具体事件/);
-  assert.match(page, /<details id="creation-method-choices"[^>]*hidden>/);
-  assert.match(app, /methodChoices\.hidden = \([\s\S]*contentSkills\(\)\.length <= 1[\s\S]*scriptSkills\(\)\.length <= 1[\s\S]*directorSkills\(\)\.length <= 1/);
-  assert.match(app, /DEFAULT_DIRECTOR_SKILL_ID = 'animated-explainer'/);
   assert.match(app, /DEFAULT_VISUAL_STYLE_ID = 'content-skill-default'/);
   assert.doesNotMatch(app, /function visualStyleGenerationDefaults/);
-  assert.match(app, /director_skill_id: requestedDirector\.skill_id/);
-  assert.match(app, /director_skill_version: requestedDirector\.version/);
   assert.match(app, /visual_style_id: requestedVisualStyle\.style_id/);
   assert.match(app, /visual_style_version: requestedVisualStyle\.version/);
-  assert.match(app, /job\.director_skill_snapshot\?\.display_name/);
-  assert.match(app, /job\.visual_style_snapshot\?\.display_name/);
+  assert.doesNotMatch(app, /director_skill_id:|script_skill_id:|provider_adapter_id:/);
   assert.match(page, /id="visual-style-previews"/);
   assert.match(app, /function renderVisualStylePreviews/);
   assert.match(app, /function visualStylePreviewAsset/);
@@ -104,38 +93,15 @@ test('video jobs expose guarded deletion without erasing audit history', () => {
   assert.match(costsApi, /include_deleted=True/);
 });
 
-test('Director v3 visibly separates directing, visual language, and provider compilation', () => {
-  assert.match(page, /<details id="generation-orchestration"/);
-  assert.match(page, /输入、脚本、导演和模型适配各守一个边界/);
-  assert.match(page, /id="script-skill"/);
-  assert.match(page, /id="provider-adapter-name"/);
-  assert.match(page, /Input Policy 只限定知识边界[\s\S]*Script Skill 只管内容[\s\S]*Director Skill 管事件、调度与镜头[\s\S]*Visual Style 只提供美术语言[\s\S]*Adapter 只管模型语法/);
-  assert.match(page, /ContextPack[\s\S]*EditorialPlan[\s\S]*确认的 ScriptDraft[\s\S]*TTS Timing[\s\S]*VisualBible[\s\S]*ShotContextIR[\s\S]*Provider Prompt/);
-  assert.match(page, /任何新 Script Skill 或 Director Skill 都是替换本阶段负责人/);
-  assert.match(page, /Visual Style 是可组合的美术约束/);
-  assert.match(page, /Provider Adapter 最后才翻译为模型语法/);
-  assert.match(page, /<details id="job-generation-methods"/);
-  assert.match(app, /function providerAdapter/);
-  assert.match(app, /function scriptSkills/);
-  assert.match(app, /function renderOrchestrationSelection/);
-  assert.match(app, /参考图已上传（用途由导演逐镜头判断）/);
-  assert.doesNotMatch(app, /selectedContentSkill\(\)\?\.input_mode !== 'recent_news_topic'/);
-  assert.doesNotMatch(app, /state\.capabilities\?\.prompt_writing_profile/);
-  assert.match(app, /job\.script_skill_snapshot/);
-  assert.match(app, /job\.director_skill_snapshot/);
-  assert.match(app, /job\.provider_adapter_snapshot/);
-  assert.match(app, /已随任务冻结/);
-  assert.match(app, /后阶段不得反向改写前阶段/);
+test('creation UI removes the old planning and technical pipeline experience', () => {
+  assert.doesNotMatch(page, /generation-orchestration|creation-engine-summary|creation-method-choices/);
+  assert.doesNotMatch(page, /job-generation-methods|content-planning-brief/);
+  assert.doesNotMatch(app, /renderContentPlanning|renderJobGenerationMethods|renderOrchestrationSelection/);
+  assert.doesNotMatch(page + app, /ContextPack|EditorialPlan|比较过的脚本角度|完整脚本|x-ai\/grok/);
   assert.match(app, /VisualBible 全片视觉宪法/);
   assert.match(app, /色彩与材质/);
-  assert.match(app, /job-orchestration-core/);
   assert.equal((page.match(/id="reference-image-input"/g) || []).length, 1);
-  assert.doesNotMatch(page, /id="orchestration-reference-action"/);
-  assert.doesNotMatch(page, /<select id="prompt-profile/);
-  assert.match(styles, /\.generation-orchestration/);
-  assert.match(styles, /\.orchestration-core/);
-  assert.match(styles, /\.job-generation-methods/);
-  assert.match(styles, /\.job-orchestration-core/);
+  assert.doesNotMatch(styles, /\.job-generation-methods|\.job-orchestration-core|\.content-planning-brief/);
 });
 
 test('administrator can manage bounded colleague access without exposing passwords', () => {
@@ -234,37 +200,30 @@ test('generated video UI does not expose an automatic publish action', () => {
 });
 
 test('creation intake freezes one unified natural-language creative request', () => {
-  const manualStart = page.indexOf('id="source-card-form"');
-  const manualEnd = page.indexOf('id="generation-orchestration"');
+  const manualStart = page.indexOf('id="creative-request-form"');
+  const manualEnd = page.indexOf('class="visual-style-setting');
   const manualForm = page.slice(manualStart, manualEnd);
   assert.match(manualForm, /name="creative_request"/);
   assert.equal((manualForm.match(/name="creative_request"/g) || []).length, 1);
   assert.doesNotMatch(manualForm, /name="person_name"|name="viewpoint"/);
-  assert.match(page, /使用模型已有知识创作 · 不联网/);
+  assert.match(page, /系统直接生成口播稿 · 不联网 · 不生成前置研究简报/);
   assert.ok(page.indexOf('name="creative_request"') < page.indexOf('id="visual-style-previews"'));
   assert.ok(page.indexOf('id="visual-style-previews"') < page.indexOf('id="manual-reference-input"'));
   assert.ok(page.indexOf('id="manual-reference-input"') < page.indexOf('id="source-submit-button"'));
   assert.doesNotMatch(manualForm, /阿尔弗雷德·阿德勒|真正影响孩子/);
   assert.doesNotMatch(manualForm, /name="source_material"|name="rights_confirmed"|补充出处|专业模式/);
   assert.doesNotMatch(page, /name="parent_question"|name="core_idea"|name="fact_text"|name="subject_name"/);
-  assert.match(app, /\/source-cards\/creative-request/);
-  assert.match(app, /\/source-cards\/creative-request-with-reference/);
+  assert.match(app, /\/jobs\/creative-request/);
+  assert.match(app, /\/jobs\/creative-request-with-reference/);
   assert.match(app, /upload\.append\('creative_request'/);
-  assert.ok(page.indexOf('id="generation-orchestration"') > page.indexOf('id="source-submit-button"'));
+  assert.doesNotMatch(app, /\/source-cards\/creative-request/);
 });
 
-test('model knowledge boundary and editorial planning are visible', () => {
+test('model knowledge boundary is visible without a pre-script planning artifact', () => {
   assert.match(page, /精确出处、人物归属、版本、日期和最新动态会在脚本确认时标记为需要复核/);
   assert.match(page, /不会假装成已经核验/);
-  assert.match(page, /id="content-planning-brief"/);
-  assert.match(app, /function renderContentPlanning\(job\)/);
-  assert.match(page, /ContextPack 与 EditorialPlan/);
-  assert.match(app, /Script Skill EditorialPlan/);
-  assert.match(app, /比较过的脚本角度/);
-  assert.match(app, /不包含任何视觉决策/);
-  assert.match(app, /仅用于旧任务兼容，不会再次联网/);
-  assert.match(app, /renderContentPlanning\(job\)/);
-  assert.doesNotMatch(app, /renderResearchBrief\(job\)/);
+  assert.match(page, /不生成前置研究简报/);
+  assert.doesNotMatch(page + app, /content-planning-brief|EditorialPlan|比较过的脚本角度/);
 });
 
 test('creation intake hides internal architecture behind creator-facing choices', () => {
@@ -272,10 +231,10 @@ test('creation intake hides internal architecture behind creator-facing choices'
   assert.match(page, /有需要保持一致的人物、场景或画面风格吗/);
   assert.match(page, /人物、服装、物件、场景还是风格/);
   const referenceStart = page.indexOf('id="manual-reference-input"');
-  const referenceEnd = page.indexOf('id="creation-engine-summary"');
+  const referenceEnd = page.indexOf('id="manual-intake-actions"');
   assert.doesNotMatch(page.slice(referenceStart, referenceEnd), /ShotContextIR|Director Skill/);
-  assert.match(page, /创作链路与技术信息/);
-  assert.ok(page.indexOf('name="creative_request"') < page.indexOf('id="generation-orchestration"'));
+  assert.doesNotMatch(page, /创作链路与技术信息/);
+  assert.doesNotMatch(page, /Prompt Adapter|Script Skill|Provider Adapter/);
 });
 
 test('topic research is Douyin-only, cost-bounded, and human-gated', () => {
@@ -320,10 +279,12 @@ test('topic research is Douyin-only, cost-bounded, and human-gated', () => {
   assert.match(app, /data-adopt-topic/);
   assert.match(page, /name="source_material"/);
   assert.match(page, /name="rights_confirmed"/);
-  assert.match(app, /抖音趋势仅作为选题线索/);
-  assert.match(app, /editorial_brief: state\.topicHandoffCandidate/);
-  assert.match(app, /parent_question: state\.topicHandoffCandidate/);
-  assert.match(app, /\/source-cards\/quick/);
+  assert.match(app, /抖音趋势只用于选题，不作为脚本事实/);
+  assert.match(app, /state\.topicHandoffCandidate\?\.editorial_angle/);
+  assert.match(app, /state\.topicHandoffCandidate\?\.parent_question/);
+  assert.match(app, /verified_materials:/);
+  assert.match(app, /\/jobs\/creative-request/);
+  assert.doesNotMatch(app, /\/source-cards\/quick/);
   assert.doesNotMatch(app, /topic-research[\s\S]{0,240}自动发布/);
 });
 
@@ -335,7 +296,7 @@ test('creation intake offers one optional global reference image without extra f
   assert.match(page, /不会自动照搬全部属性，也不会把图片内容当作事实依据/);
   assert.doesNotMatch(page, /id="reference-image-input"[^>]*multiple/);
   assert.match(app, /referenceImageFile/);
-  assert.match(app, /\/source-cards\/creative-request-with-reference/);
+  assert.match(app, /\/jobs\/creative-request-with-reference/);
   assert.match(app, /apiMultipart/);
   assert.match(page, /id="job-reference-image"/);
 });
@@ -512,18 +473,16 @@ test('script approval can arrange owned media before paid visual generation', ()
     app.indexOf('function workflowCopy'),
     app.indexOf('function cleanScreenplayValue'),
   );
-  const planningSource = app.slice(
-    app.indexOf('function renderContentPlanning'),
-    app.indexOf('function focusFirstNarration'),
-  );
   assert.match(workflowSource, /job.state === 'media_review_required'/);
   assert.match(workflowSource, /只生成剩余/);
-  assert.doesNotMatch(planningSource, /media_review_required/);
+  assert.doesNotMatch(app, /function renderContentPlanning/);
 });
 
 test('unified creative request starts a real job and polling resumes after refresh', () => {
-  assert.match(app, /card = await api\('POST', '\/source-cards\/creative-request', body\)/);
-  assert.match(app, /source_card_id: card\.id, generation_settings: generationSettings/);
+  assert.match(app, /result = await api\('POST', '\/jobs\/creative-request'/);
+  assert.match(app, /creative_request: body\.creative_request/);
+  assert.match(app, /generation_settings: generationSettings/);
+  assert.doesNotMatch(app, /source_card_id:|\/source-cards\/creative-request/);
   assert.match(app, /job\?\.last_run_task_id/);
   assert.match(app, /resumeSelectedTask/);
   assert.match(app, /fetchTask\(job\.last_run_task_id\)/);
@@ -533,7 +492,6 @@ test('Script Skill owns writing and creation payload exposes no competing contro
   assert.doesNotMatch(page, /id="script-generation-prompt"|id="enable-custom-script-prompt"/);
   assert.doesNotMatch(page, /id="seedance-generation-prompt"/);
   assert.doesNotMatch(page, /id="job-seedance-prompt"/);
-  assert.match(page, /脚本负责把内容讲清楚/);
   assert.match(app, /generation_settings: generationSettings/);
   assert.match(app, /video_resolution: videoResolution/);
   const settingsSource = app.slice(
@@ -541,10 +499,8 @@ test('Script Skill owns writing and creation payload exposes no competing contro
     app.indexOf('async function api'),
   );
   assert.doesNotMatch(settingsSource, /script_prompt|seedance_prompt|image_count|shot_count/);
-  assert.match(settingsSource, /script_skill_id: requestedScriptSkill\.skill_id/);
-  assert.match(settingsSource, /director_skill_id: requestedDirector\.skill_id/);
   assert.match(settingsSource, /visual_style_id: requestedVisualStyle\.style_id/);
-  assert.match(settingsSource, /provider_adapter_id: adapter\.adapter_id/);
+  assert.doesNotMatch(settingsSource, /content_skill|script_skill|director_skill|provider_adapter/);
   assert.match(app, /localStorage\.removeItem\(LEGACY_PROMPT_STORAGE_KEY\)/);
   assert.doesNotMatch(app, /function customScriptPromptEnabled|restore-prompt-defaults|job-seedance-prompt/);
 });
@@ -562,9 +518,9 @@ test('production UI prioritizes the current task and stays usable on mobile', ()
   assert.match(styles, /\.workspace-grid > \.mobile-pane-hidden/);
   assert.match(styles, /@media \(max-width: 900px\)[\s\S]*\.production-view-tabs \{ display: flex/);
   assert.match(styles, /@media \(max-width: 560px\)[\s\S]*\.section-title \{ align-items: flex-start; flex-direction: column/);
-  assert.ok(page.indexOf('id="current-action"') < page.indexOf('id="job-generation-methods"'));
+  assert.doesNotMatch(page, /id="job-generation-methods"/);
   assert.match(app, /querySelectorAll\('\[data-busy-lock\]'\)/);
-  for (const formId of ['topic-source-form', 'source-card-form']) {
+  for (const formId of ['topic-source-form', 'creative-request-form']) {
     const handler = app.slice(
       app.indexOf(`$('#${formId}').addEventListener('submit'`),
       app.indexOf('\n});', app.indexOf(`$('#${formId}').addEventListener('submit'`)) + 4,
@@ -593,9 +549,8 @@ test('script review edits narration and screen text without a competing visual t
   assert.match(page, /id="script-beat-editor"/);
   assert.match(page, /id="script-video-title"/);
   assert.match(page, /id="script-length-status"/);
-  assert.match(page, /这里只编辑完整旁白和可选屏幕文字/);
-  assert.match(page, /确认后的 ScriptDraft 是内容唯一真相/);
-  assert.match(page, /只由所选 Director Skill 建立 VisualBible 与分镜/);
+  assert.match(page, /这里只编辑会被念出的旁白和可选屏幕文字/);
+  assert.match(page, /确认后，系统再根据真实配音时长设计视觉章节/);
   assert.doesNotMatch(app, /data-script-field="visual_direction"/);
   assert.match(app, /data-script-field="narration"/);
   assert.match(app, /data-script-field="on_screen_text"/);
@@ -604,8 +559,8 @@ test('script review edits narration and screen text without a competing visual t
   assert.match(app, /narrationCharacterCount/);
   assert.match(app, /SCRIPT_HARD_MAX_CHARS/);
   assert.match(app, /script\.schema_version = '3\.0'/);
-  assert.match(app, /完整脚本至少需要三个自然叙事段/);
-  assert.doesNotMatch(app, /完整脚本至少需要五个自然叙事段/);
+  assert.match(app, /口播稿至少需要三个自然叙事段/);
+  assert.doesNotMatch(app, /口播稿至少需要五个自然叙事段/);
   assert.doesNotMatch(page, /完整口播稿|建议 200-240 字|精简至 200-240 字/);
   assert.doesNotMatch(app, /actions\/condense-script/);
   assert.doesNotMatch(app, /splitNarrationText|确认时系统会先整理/);

@@ -24,19 +24,13 @@ from qijia_video import MODULE_VERSION
 from qijia_video import run_service
 from qijia_video.contracts import (
     AssetRef,
-    CreativeRequestInput,
-    DEFAULT_DIRECTOR_SKILL_ID,
-    DEFAULT_PROVIDER_ADAPTER_ID,
-    DEFAULT_SCRIPT_SKILL_ID,
+    CreativeMaterial,
     DEFAULT_VISUAL_STYLE_ID,
     GenerationSettings,
-    PersonViewpointInput,
     PreGenerationMediaMode,
-    QuickSourceCardInput,
     SEEDANCE_EFFICIENT_MODEL,
     SeedanceModelId,
     ScriptDraft,
-    SourceCardInput,
 )
 from qijia_video.errors import ProviderUnavailable, QijiaVideoError
 from qijia_video.infrastructure.storage import (
@@ -63,11 +57,6 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
 SHOT_MEDIA_UPLOAD_TOKEN_VERSION = 1
 logger = logging.getLogger(__name__)
-LEGACY_DIRECTOR_AS_STYLE_IDS = {
-    "content-skill-default",
-    "paper-collage-explainer",
-    "papercraft-stop-motion",
-}
 api_router = APIRouter(
     prefix="/api/qijia-video",
     tags=["齐家 AI 短视频"],
@@ -161,28 +150,8 @@ class ShotMediaUploadClaims(StrictRequest):
 
 
 class CreateGenerationSettings(StrictRequest):
-    """Public v2 selections; legacy execution fields are intentionally absent."""
+    """Creator-owned production choices; all pipeline roles are server-owned."""
 
-    skill_id: str = Field(
-        default="",
-        max_length=64,
-        pattern=r"^$|^[a-z0-9]+(?:-[a-z0-9]+)*$",
-    )
-    skill_version: str = Field(
-        default="",
-        max_length=32,
-        pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
-    )
-    script_skill_id: str = Field(
-        default=DEFAULT_SCRIPT_SKILL_ID,
-        max_length=64,
-        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
-    )
-    script_skill_version: str = Field(
-        default="",
-        max_length=32,
-        pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
-    )
     visual_style_id: str = Field(
         default=DEFAULT_VISUAL_STYLE_ID,
         max_length=64,
@@ -193,58 +162,13 @@ class CreateGenerationSettings(StrictRequest):
         max_length=32,
         pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
     )
-    director_skill_id: str = Field(
-        default=DEFAULT_DIRECTOR_SKILL_ID,
-        max_length=64,
-        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
-    )
-    director_skill_version: str = Field(
-        default="",
-        max_length=32,
-        pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
-    )
-    provider_adapter_id: str = Field(
-        default=DEFAULT_PROVIDER_ADAPTER_ID,
-        max_length=64,
-        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
-    )
-    provider_adapter_version: str = Field(
-        default="",
-        max_length=32,
-        pattern=r"^$|^[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?$",
-    )
     video_resolution: Literal["480p", "720p", "1080p"] = "1080p"
     tts_voice_id: TtsVoiceId = "zh_female_vv_uranus_bigtts"
     tts_speed_ratio: TtsSpeedRatio = 1.2
     seedance_model: SeedanceModelId = SEEDANCE_EFFICIENT_MODEL
 
     def to_internal(self) -> GenerationSettings:
-        payload = self.model_dump(mode="json")
-        if (
-            "director_skill_id" in self.model_fields_set
-            and "visual_style_id" not in self.model_fields_set
-            and self.director_skill_id in LEGACY_DIRECTOR_AS_STYLE_IDS
-        ):
-            payload["visual_style_id"] = self.director_skill_id
-            payload["visual_style_version"] = self.director_skill_version
-            payload["director_skill_id"] = DEFAULT_DIRECTOR_SKILL_ID
-            payload["director_skill_version"] = ""
-        return GenerationSettings.model_validate(payload)
-
-
-class CreateJobRequest(StrictRequest):
-    source_card_id: str = Field(min_length=1, max_length=64)
-    generation_settings: CreateGenerationSettings = Field(
-        default_factory=CreateGenerationSettings
-    )
-
-
-class SourceCardUpdateRequest(RevisionRequest):
-    source_card: SourceCardInput
-
-
-class QuickSourceCardUpdateRequest(RevisionRequest):
-    source_card: QuickSourceCardInput
+        return GenerationSettings.model_validate(self.model_dump(mode="json"))
 
 
 class ScriptUpdateRequest(RevisionRequest):
@@ -476,6 +400,19 @@ async def qijia_video_page(user: dict = Depends(get_current_user)):
     )
 
 
+class CreateCreativeJobRequest(StrictRequest):
+    """Atomic v3 intake: one creator request becomes one video job."""
+
+    creative_request: str = Field(min_length=10, max_length=5000)
+    verified_materials: list[CreativeMaterial] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    generation_settings: CreateGenerationSettings = Field(
+        default_factory=CreateGenerationSettings
+    )
+
+
 @api_router.get("/capabilities")
 @boundary
 async def capabilities(user: dict = Depends(get_current_user)):
@@ -487,13 +424,6 @@ async def capabilities(user: dict = Depends(get_current_user)):
     })
 
 
-@api_router.get("/skills")
-@boundary
-async def list_content_skills(user: dict = Depends(get_current_user)):
-    del user
-    return ok(runtime.service.content_skills())
-
-
 @api_router.get("/visual-styles")
 @boundary
 async def list_visual_styles(user: dict = Depends(get_current_user)):
@@ -501,189 +431,12 @@ async def list_visual_styles(user: dict = Depends(get_current_user)):
     return ok(runtime.service.visual_styles())
 
 
-@api_router.get('/script-skills')
+@api_router.post("/jobs/creative-request")
 @boundary
-async def list_script_skills(user: dict = Depends(get_current_user)):
-    del user
-    return ok(runtime.service.script_skills())
-
-
-@api_router.get('/director-skills')
-@boundary
-async def list_director_skills(user: dict = Depends(get_current_user)):
-    del user
-    return ok(runtime.service.director_skills())
-
-
-@api_router.get('/provider-adapter')
-@boundary
-async def get_provider_adapter(user: dict = Depends(get_current_user)):
-    del user
-    return ok(runtime.service.provider_adapter())
-
-
-@api_router.post("/source-cards")
-@boundary
-async def create_source_card(
-    body: SourceCardInput, user: dict = Depends(get_current_user)
-):
-    card = await runtime.service.create_source_card(body, actor_from_user(user))
-    return ok(card.model_dump(mode="json"), "来源卡已创建")
-
-
-@api_router.post("/source-cards/quick")
-@boundary
-async def create_quick_source_card(
-    body: QuickSourceCardInput, user: dict = Depends(get_current_user)
-):
-    actor = actor_from_user(user)
-    card = await runtime.service.create_source_card(
-        body.to_source_card_input(), actor
-    )
-    # 快速表单已经包含“材料已核对且可引用”的明确确认，因此直接完成
-    # 来源卡核验，不再额外要求第三次人工点击。
-    card = await runtime.service.verify_source_card(card.id, card.revision, actor)
-    return ok(card.model_dump(mode="json"), "创作材料已确认可用")
-
-
-@api_router.post("/source-cards/idea")
-@boundary
-async def create_person_viewpoint(
-    body: PersonViewpointInput, user: dict = Depends(get_current_user)
-):
-    actor = actor_from_user(user)
-    card = await runtime.service.create_source_card(
-        body.to_source_card_input(), actor
-    )
-    card = await runtime.service.verify_source_card(card.id, card.revision, actor)
-    return ok(card.model_dump(mode="json"), "人物观点已确认，开始创作")
-
-
-@api_router.post("/source-cards/creative-request")
-@boundary
-async def create_creative_request(
-    body: CreativeRequestInput, user: dict = Depends(get_current_user)
-):
-    actor = actor_from_user(user)
-    card = await runtime.service.create_source_card(
-        body.to_source_card_input(), actor
-    )
-    card = await runtime.service.verify_source_card(card.id, card.revision, actor)
-    return ok(card.model_dump(mode="json"), "原始创作请求已冻结，开始模型创作")
-
-
-@api_router.post("/source-cards/idea-with-reference")
-@boundary
-async def create_person_viewpoint_with_reference(
-    person_name: str = Form(..., min_length=1, max_length=120),
-    viewpoint: str = Form(..., min_length=10, max_length=1800),
-    reference_image: UploadFile = File(...),
+async def create_direct_job(
+    body: CreateCreativeJobRequest,
     user: dict = Depends(get_current_user),
 ):
-    person_name = person_name.strip()
-    viewpoint = viewpoint.strip()
-    if not person_name or len(viewpoint) < 10:
-        raise HTTPException(status_code=422, detail="请输入人物和至少 10 个字的观点")
-    idea = PersonViewpointInput(
-        person_name=person_name,
-        viewpoint=viewpoint,
-    )
-    reference_asset = await _store_reference_image(reference_image)
-    source_card = idea.to_source_card_input()
-    source_card.reference_assets = [reference_asset.model_dump(mode="json")]
-    actor = actor_from_user(user)
-    card = await runtime.service.create_source_card(source_card, actor)
-    card = await runtime.service.verify_source_card(card.id, card.revision, actor)
-    return ok(card.model_dump(mode="json"), "人物观点和全局参考图已确认，开始创作")
-
-
-@api_router.post("/source-cards/creative-request-with-reference")
-@boundary
-async def create_creative_request_with_reference(
-    creative_request: str = Form(..., min_length=10, max_length=1800),
-    reference_image: UploadFile = File(...),
-    user: dict = Depends(get_current_user),
-):
-    request = CreativeRequestInput(creative_request=creative_request)
-    reference_asset = await _store_reference_image(reference_image)
-    source_card = request.to_source_card_input()
-    source_card.reference_assets = [reference_asset.model_dump(mode="json")]
-    actor = actor_from_user(user)
-    card = await runtime.service.create_source_card(source_card, actor)
-    card = await runtime.service.verify_source_card(card.id, card.revision, actor)
-    return ok(
-        card.model_dump(mode="json"),
-        "原始创作请求和全局参考图已冻结，开始模型创作",
-    )
-
-
-@api_router.get("/source-cards")
-@boundary
-async def list_source_cards(
-    limit: int = Query(100, ge=1, le=500),
-    user: dict = Depends(get_current_user),
-):
-    rows = await runtime.service.list_source_cards(actor_from_user(user), limit=limit)
-    return ok([public_resource_payload(item, user) for item in rows])
-
-
-@api_router.get("/source-cards/{card_id}")
-@boundary
-async def get_source_card(card_id: str, user: dict = Depends(get_current_user)):
-    card = await runtime.service.view_source_card(card_id, actor_from_user(user))
-    return ok(public_resource_payload(card, user))
-
-
-@api_router.put("/source-cards/{card_id}")
-@boundary
-async def update_source_card(
-    card_id: str,
-    body: SourceCardUpdateRequest,
-    user: dict = Depends(get_current_user),
-):
-    card = await runtime.service.update_source_card(
-        card_id,
-        body.source_card,
-        body.expected_revision,
-        actor_from_user(user),
-    )
-    return ok(card.model_dump(mode="json"), "来源卡已更新")
-
-
-@api_router.put("/source-cards/{card_id}/quick")
-@boundary
-async def update_quick_source_card(
-    card_id: str,
-    body: QuickSourceCardUpdateRequest,
-    user: dict = Depends(get_current_user),
-):
-    actor = actor_from_user(user)
-    card = await runtime.service.update_source_card(
-        card_id,
-        body.source_card.to_source_card_input(),
-        body.expected_revision,
-        actor,
-    )
-    card = await runtime.service.verify_source_card(card.id, card.revision, actor)
-    return ok(card.model_dump(mode="json"), "创作材料已更新并确认可用")
-
-
-@api_router.post("/source-cards/{card_id}/actions/verify")
-@boundary
-async def verify_source_card(
-    card_id: str,
-    body: RevisionRequest,
-    user: dict = Depends(get_current_user),
-):
-    card = await runtime.service.verify_source_card(
-        card_id, body.expected_revision, actor_from_user(user)
-    )
-    return ok(card.model_dump(mode="json"), "来源卡已核验")
-
-
-@api_router.post("/jobs")
-@boundary
-async def create_job(body: CreateJobRequest, user: dict = Depends(get_current_user)):
     capability = runtime.capabilities()
     if not capability["real_generation_ready"]:
         missing = "、".join(capability.get("missing_configuration") or [])
@@ -691,10 +444,11 @@ async def create_job(body: CreateJobRequest, user: dict = Depends(get_current_us
             "真实短视频链路尚未配置完成" + (f"：{missing}" if missing else "")
         )
     actor = actor_from_user(user)
-    job = await runtime.service.create_job(
-        body.source_card_id,
+    job = await runtime.service.create_direct_job(
+        body.creative_request,
         actor,
         body.generation_settings.to_internal(),
+        verified_materials=body.verified_materials,
     )
     run = await start_run("generate_script", job.id, actor)
     return ok({
@@ -703,7 +457,55 @@ async def create_job(body: CreateJobRequest, user: dict = Depends(get_current_us
         ),
         "task_id": run.task_id,
         "reused": run.reused,
-    }, "视频任务已创建")
+    }, "视频任务已创建，正在生成口播稿")
+
+
+@api_router.post("/jobs/creative-request-with-reference")
+@boundary
+async def create_direct_job_with_reference(
+    creative_request: str = Form(..., min_length=10, max_length=5000),
+    generation_settings: str = Form(default="{}", max_length=10000),
+    verified_materials: str = Form(default="[]", max_length=120000),
+    reference_image: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    capability = runtime.capabilities()
+    if not capability["real_generation_ready"]:
+        missing = "、".join(capability.get("missing_configuration") or [])
+        raise ProviderUnavailable(
+            "真实短视频链路尚未配置完成" + (f"：{missing}" if missing else "")
+        )
+    try:
+        settings_payload = json.loads(generation_settings or "{}")
+        materials_payload = json.loads(verified_materials or "[]")
+        parsed_settings = CreateGenerationSettings.model_validate(settings_payload)
+        if not isinstance(materials_payload, list):
+            raise ValueError("verified_materials must be a list")
+        parsed_materials = [
+            CreativeMaterial.model_validate(item) for item in materials_payload
+        ]
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="生成设置或核对材料格式无效",
+        ) from exc
+    reference_asset = await _store_reference_image(reference_image)
+    actor = actor_from_user(user)
+    job = await runtime.service.create_direct_job(
+        creative_request,
+        actor,
+        parsed_settings.to_internal(),
+        verified_materials=parsed_materials,
+        reference_assets=[reference_asset.model_dump(mode="json")],
+    )
+    run = await start_run("generate_script", job.id, actor)
+    return ok({
+        "job": public_job_payload(
+            await runtime.service.get_job(job.id, actor), user
+        ),
+        "task_id": run.task_id,
+        "reused": run.reused,
+    }, "视频任务已创建，正在生成口播稿")
 
 
 @api_router.get("/jobs")
@@ -830,7 +632,11 @@ async def preview_reference_image(
     user: dict = Depends(get_current_user),
 ):
     job = await runtime.service.view_job(job_id, actor_from_user(user))
-    assets = job.source_card_snapshot.get("reference_assets") or []
+    assets = (
+        job.input_snapshot.reference_assets
+        if job.input_snapshot
+        else job.source_card_snapshot.get("reference_assets") or []
+    )
     if not assets:
         raise HTTPException(status_code=404, detail="该任务没有全局参考图")
     asset = AssetRef.model_validate(assets[0])

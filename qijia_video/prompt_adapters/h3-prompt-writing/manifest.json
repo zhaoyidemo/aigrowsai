@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "version": "1.0.0",
+  "display_name": "H3 Prompt Adapter",
+  "description": "把用户原始多模态创作请求编译成单一 Script Skill 可执行的结构化指令；不生成前置简报、候选角度或视觉方案。",
+  "default": true,
+  "compilation_framework_file": "references/script-compilation.md",
+  "quality_rules": [
+    "用户原始请求是创作意图的最高优先级，不得用预设题材、受众或套路覆盖",
+    "先识别任务、内容、上下文、约束与参考材料，再组织清晰的指令层级",
+    "事实政策只限定可使用的知识，不代替 Script Skill 选择角度和完成写作",
+    "所有分析、取舍、规划和审稿都在一次 Script Skill 调用内部完成",
+    "最终只交付 ScriptDraft，不暴露中间思维、计划或视觉决策"
+  ]
+}

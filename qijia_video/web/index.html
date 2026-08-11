@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>齐家 AI 家庭教育内容工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.29.0">
+  <title>齐家 AI 知识视频工作台</title>
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.31.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
   <header class="topbar">
     <div>
-      <p class="eyebrow">家庭教育内容增长</p>
-      <h1>齐家 AI 家庭教育内容工作台</h1>
-      <p class="subtitle">抖音选题研究 · 来源核验 · 视频生产</p>
+      <p class="eyebrow">知识内容创作与增长</p>
+      <h1>齐家 AI 知识视频工作台</h1>
+      <p class="subtitle">家庭教育选题研究 · 通用知识视频生产</p>
     </div>
     <div class="topbar-actions">
       <a class="back-link" href="/qijia-video/costs">成本与效果</a>
@@ -124,7 +124,7 @@
               </label>
               <label>已核对、可以引用的资料
                 <textarea name="source_material" required minlength="10" maxlength="2000" rows="7" placeholder="粘贴你已核对的书籍摘记、文章要点或专业资料。不要把抖音视频标题直接当作事实。"></textarea>
-                <span class="field-hint">这里的内容才会成为脚本依据；抖音趋势数据不会进入来源卡。</span>
+                <span class="field-hint">这里的内容才会成为脚本依据；抖音趋势数据不会作为已核对材料。</span>
               </label>
               <label>资料链接（可选）
                 <input name="source_url" type="url" maxlength="2000" placeholder="https://">
@@ -136,8 +136,8 @@
               <button id="topic-source-submit" class="button primary" type="submit" data-busy-lock>确认资料并生成脚本</button>
             </form>
           </section>
-          <p id="manual-intake-intro" class="panel-note intake-intro">使用模型已有知识创作 · 不联网 · 脚本确认后按真实旁白时长自动导演</p>
-          <form id="source-card-form" class="form-stack">
+          <p id="manual-intake-intro" class="panel-note intake-intro">写下完整要求，系统直接生成口播稿 · 不联网 · 不生成前置研究简报</p>
+          <form id="creative-request-form" class="form-stack">
             <label class="primary-field">
               <span class="question-line"><span class="question-number">1</span>你想做什么内容？</span>
               <textarea name="creative_request" required minlength="10" maxlength="1800" rows="9" placeholder="例如：黄宗羲，以及“大丈夫行事，论是非不论利害……”这段话。我想解释它的出处、真正含义和今天的价值。"></textarea>
@@ -177,37 +177,8 @@
             <p class="field-hint">系统会逐个镜头判断参考图用于人物、服装、物件、场景还是风格，不会自动照搬全部属性，也不会把图片内容当作事实依据。JPG、PNG 或 WebP，最大 10 MB。</p>
           </section>
 
-          <section class="creation-engine-summary" aria-live="polite">
-            <div>
-              <span>当前创作引擎</span>
-              <strong id="creation-engine-summary">模型知识解读主编 + 动画解说导演</strong>
-            </div>
-            <small>脚本负责把内容讲清楚，导演负责把每一章变成可拍、可读的具体事件。</small>
-          </section>
-
-          <details id="creation-method-choices" class="creation-method-choices" hidden>
-            <summary><strong>切换创作方法</strong><small>仅在存在多种方法时显示</small></summary>
-            <section class="creation-direction" aria-label="创作方法">
-              <label class="creation-setting skill-setting" for="content-skill">
-                <span>知识边界</span>
-                <select id="content-skill" aria-label="知识边界"></select>
-                <small id="content-skill-description">不调用外部检索。</small>
-              </label>
-              <label class="creation-setting script-skill-setting" for="script-skill">
-                <span>脚本主编</span>
-                <select id="script-skill" aria-label="脚本主编"></select>
-                <small id="script-skill-description">负责角度、论证和口播。</small>
-              </label>
-              <label class="creation-setting director-skill-setting" for="director-skill">
-                <span>导演方法</span>
-                <select id="director-skill" aria-label="导演方法"></select>
-                <small id="director-skill-description">负责事件、调度、镜头和连续性。</small>
-              </label>
-            </section>
-          </details>
-
           <div id="manual-intake-actions" class="actions source-form-actions">
-            <button id="source-submit-button" class="button primary" type="submit" form="source-card-form" data-busy-lock>生成脚本</button>
+            <button id="source-submit-button" class="button primary" type="submit" form="creative-request-form" data-busy-lock>生成口播稿</button>
           </div>
 
           <details class="production-specs" aria-labelledby="production-specs-title">
@@ -258,66 +229,6 @@
             </div>
           </details>
 
-          <details id="generation-orchestration" class="generation-orchestration">
-            <summary>
-              <span><strong>创作链路与技术信息</strong><small>版本、职责边界和模型适配 · 可选查看</small></span>
-              <span>查看详情</span>
-            </summary>
-            <div class="generation-orchestration-body">
-              <div class="orchestration-heading">
-                <div>
-                  <p class="step">生成架构</p>
-                  <h3>输入、脚本、导演和模型适配各守一个边界</h3>
-                </div>
-                <span class="orchestration-lock">Pipeline v2 · Director v3</span>
-              </div>
-              <section class="orchestration-core prompt-profile-setting" aria-labelledby="provider-adapter-label">
-                <div class="orchestration-core-heading">
-                  <div>
-                    <span id="provider-adapter-label">最后一公里模型适配</span>
-                    <strong id="provider-adapter-name">正在读取 Provider Adapter</strong>
-                  </div>
-                  <small id="provider-adapter-version">自动匹配</small>
-                </div>
-                <p id="provider-adapter-description">只把已经确定的镜头翻译成 Seedream/Seedance 可执行提示词，不参与选题、脚本或导演决策。</p>
-                <p class="orchestration-selection" aria-live="polite">
-                  <span id="orchestration-content-name">正在读取知识边界</span>
-                  <b>→</b>
-                  <span id="orchestration-script-name">正在读取 Script Skill</span>
-                  <b>→</b>
-                  <span id="orchestration-director-name">正在读取 Director Skill</span>
-                  <b>→</b>
-                  <strong id="orchestration-adapter-summary">Provider Adapter</strong>
-                </p>
-                <ol class="orchestration-priority" aria-label="生成职责边界">
-                  <li>Input Policy 只限定知识边界</li>
-                  <li>Script Skill 只管内容</li>
-                  <li>Director Skill 管事件、调度与镜头</li>
-                  <li>Visual Style 只提供美术语言</li>
-                  <li id="reference-priority-state">参考图属性（未上传）</li>
-                  <li>Adapter 只管模型语法</li>
-                </ol>
-              </section>
-              <div class="orchestration-output">
-                <span class="orchestration-output-label">版本化产物链路</span>
-                <div class="orchestration-output-grid">
-                  <article><span>01</span><strong>ContextPack</strong><small>原始输入与用户材料，不调用外部检索</small></article>
-                  <article><span>02</span><strong>EditorialPlan</strong><small>比较候选角度，只决定怎么讲</small></article>
-                  <article><span>03</span><strong>确认的 ScriptDraft</strong><small>全片唯一内容真相，不夹带画面</small></article>
-                  <article><span>04</span><strong>TTS Timing</strong><small>实际旁白时长约束章节与视频选择</small></article>
-                  <article><span>05</span><strong>VisualBible</strong><small>导演统合事件逻辑、连续性与所选画风</small></article>
-                  <article><span>06</span><strong>ShotContextIR</strong><small>具体事件、主体调度、摄影机与起止状态</small></article>
-                  <article><span>07</span><strong>Provider Prompt</strong><small>最后才编译 Seedream / Seedance 语法</small></article>
-                </div>
-              </div>
-              <p class="orchestration-boundary">任何新 Script Skill 或 Director Skill 都是替换本阶段负责人，不叠加第二套总纲。Visual Style 是可组合的美术约束，不拥有脚本或导演决策；Provider Adapter 最后才翻译为模型语法。</p>
-            </div>
-          </details>
-        </section>
-
-        <section class="panel list-panel">
-          <div class="panel-heading"><div><p class="step">资料库</p><h2>最近创作资料</h2></div></div>
-          <div id="source-card-list" class="card-list"><p class="empty">还没有保存过创作资料。</p></div>
         </section>
       </aside>
 
@@ -378,11 +289,9 @@
               <p id="seedance-price-basis" class="field-hint"></p>
             </details>
           </section>
-          <details id="job-generation-methods" class="job-generation-methods"></details>
           <div id="job-error" class="error-box" hidden></div>
           <section id="script-review" class="review-section" hidden>
             <div class="section-title"><h3>脚本确认</h3><span id="script-review-spec">确认后开始配音与画面生成</span></div>
-            <section id="content-planning-brief" class="content-planning-brief" aria-label="ContextPack 与 EditorialPlan" hidden></section>
             <section class="tts-review-settings" aria-label="本任务配音设置">
               <div class="tts-review-heading">
                 <div><strong>配音试听</strong><span>试听当前开场，确认后用于整条视频</span></div>
@@ -410,16 +319,16 @@
               </div>
               <p id="tts-preview-status" class="field-hint" aria-live="polite">重复播放同一试听不会重复计费。</p>
             </section>
-            <section class="script-document" aria-label="完整视频脚本">
+            <section class="script-document" aria-label="视频口播稿">
               <label class="script-title-field">视频标题
                 <input id="script-video-title" maxlength="200" autocomplete="off">
               </label>
               <div class="script-document-heading">
-                <strong>完整脚本</strong>
+                <strong>口播稿</strong>
                 <span id="script-length-status" class="field-hint" aria-live="polite">只统计会被念出的旁白</span>
               </div>
               <div id="script-beat-editor" class="script-beat-editor"></div>
-              <p class="field-hint script-document-hint">这里只编辑完整旁白和可选屏幕文字。确认后的 ScriptDraft 是内容唯一真相；随后只由所选 Director Skill 建立 VisualBible 与分镜。</p>
+              <p class="field-hint script-document-hint">这里只编辑会被念出的旁白和可选屏幕文字。确认后，系统再根据真实配音时长设计视觉章节。</p>
             </section>
             <section id="script-cost-estimate" class="script-cost-estimate" aria-live="polite">
               <div>
@@ -552,6 +461,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.29.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.31.0"></script>
 </body>
 </html>

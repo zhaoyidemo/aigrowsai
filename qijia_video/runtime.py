@@ -13,8 +13,6 @@ from qijia_video import run_service as task_service
 from qijia_video.contracts import (
     Actor,
     AssetRef,
-    DEFAULT_DIRECTOR_SKILL_ID,
-    DEFAULT_VISUAL_STYLE_ID,
     GenerationSettings,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
@@ -89,7 +87,7 @@ class QijiaVideoRuntime:
         storyboard_provider = OpenRouterStoryboardProvider(
             api_key=settings.OPENROUTER_API_KEY,
             base_url=settings.OPENROUTER_BASE_URL,
-            model=settings.QIJIA_VIDEO_SCRIPT_MODEL,
+            model=settings.QIJIA_VIDEO_DIRECTOR_MODEL,
         )
         tts_provider = VolcengineTtsProvider(
             endpoint=settings.QIJIA_VIDEO_TTS_ENDPOINT,
@@ -214,21 +212,18 @@ class QijiaVideoRuntime:
             missing.append("QIJIA_VIDEO_STORAGE=tos")
         generation_ready = not missing
         generation_defaults = GenerationSettings()
-        public_generation_defaults = generation_defaults.model_dump(mode="json")
-        for private_field in (
-            "seedance_prompt",
-            "script_prompt",
-            "image_count",
-            "shot_count",
-            "prompt_writing_profile_id",
-            "prompt_writing_profile_version",
-        ):
-            public_generation_defaults.pop(private_field, None)
-        public_generation_defaults["director_skill_id"] = DEFAULT_DIRECTOR_SKILL_ID
+        public_generation_defaults = {
+            "visual_style_id": generation_defaults.visual_style_id,
+            "visual_style_version": generation_defaults.visual_style_version,
+            "video_resolution": generation_defaults.video_resolution,
+            "tts_voice_id": generation_defaults.tts_voice_id,
+            "tts_speed_ratio": generation_defaults.tts_speed_ratio,
+            "seedance_model": generation_defaults.seedance_model,
+        }
         return {
             "module": "qijia_video",
-            "mode": "skill-video-platform",
-            "pipeline_version": "v2",
+            "mode": "direct-creative-pipeline",
+            "pipeline_version": "v3",
             "script_provider": self.script_provider.name,
             "script_model": self.script_provider.model,
             "knowledge_mode": "model_knowledge",
@@ -247,11 +242,7 @@ class QijiaVideoRuntime:
             "production_ready": generation_ready and self.storage.name == "tos",
             "missing_configuration": missing,
             "generation_defaults": public_generation_defaults,
-            "content_skills": self.service.content_skills(),
-            "script_skills": self.service.script_skills(),
-            "director_skills": self.service.director_skills(),
             "visual_styles": self.service.visual_styles(),
-            "provider_adapter": self.service.provider_adapter(),
             "douyin_performance": {
                 "ready": self.douyin_performance_provider.configured,
                 "platform": "douyin",

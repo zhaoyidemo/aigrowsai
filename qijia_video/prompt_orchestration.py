@@ -5,8 +5,10 @@ import json
 
 from qijia_video.contracts import (
     ContentSkillSnapshot,
+    CreativeInputSnapshot,
     NewsResearchBrief,
     PersonResearchBrief,
+    PromptAdapterSnapshot,
     PromptWritingProfileSnapshot,
     ScriptSkillSnapshot,
     SourceCard,
@@ -52,6 +54,73 @@ def _evidence_pack(
     elif isinstance(research_brief, NewsResearchBrief):
         pack["research_as_of"] = research_brief.as_of
     return pack
+
+
+def compile_direct_script_prompt(
+    input_snapshot: CreativeInputSnapshot,
+    *,
+    prompt_adapter: PromptAdapterSnapshot,
+    content_policy: ContentSkillSnapshot,
+    script_skill: ScriptSkillSnapshot,
+    minimum_characters: int,
+    maximum_characters: int,
+) -> str:
+    """Compile the v3 direct prompt without an intake or planning surrogate."""
+
+    materials = [
+        {
+            "material_id": f"material_{index:02d}",
+            "title": item.title,
+            "text": item.text,
+            "url": item.url,
+        }
+        for index, item in enumerate(input_snapshot.verified_materials, start=1)
+    ]
+    knowledge_policy = {
+        "mode": content_policy.knowledge_mode.value,
+        "external_retrieval": False,
+        "user_materials_are_verified_for_this_task": bool(materials),
+        "model_knowledge_is_not_a_verified_source": True,
+        "freshness_guarantee": False,
+    }
+    return _join_blocks(
+        (
+            "你是本任务唯一的 Script Skill。H3 Prompt Adapter 已把原始请求组织成以下"
+            "指令边界，但没有替你做内容决策。请在一次调用内完成必要的角度取舍、结构设计、"
+            "成稿与内部审稿，最终只交付口播稿；不要展示任何中间分析、计划或视觉方案。"
+        ),
+        (
+            f"【内部 H3 Prompt Adapter】{prompt_adapter.adapter_id}@"
+            f"{prompt_adapter.version}\n{prompt_adapter.compilation_framework}\n- "
+            + "\n- ".join(prompt_adapter.quality_rules)
+        ),
+        "【用户原始创作请求｜最高优先级】\n" + input_snapshot.original_request,
+        (
+            "【用户明确核对的材料】\n"
+            + json.dumps(materials, ensure_ascii=False)
+            + "\n这里没有材料时，不能把模型记忆伪装成用户材料或已核对来源。"
+        ),
+        "【知识与事实边界】\n"
+        + json.dumps(knowledge_policy, ensure_ascii=False)
+        + "\n禁止联网搜索、浏览器、检索插件或外部研究工具。可以使用模型训练中已有的稳定知识"
+        "解释背景、概念和思想脉络，但不得声称本次已经查证。人物归属、逐字引语、精确出处、"
+        "版本、日期、数据和最新动态把握不足时，必须降格表述或提醒人工复核。",
+        "【硬性政策】\n政策 ID："
+        + "、".join(content_policy.policy_ids)
+        + "\n- "
+        + "\n- ".join(content_policy.quality_rules),
+        f"【Script Skill】{script_skill.skill_id}@{script_skill.version}",
+        "【内部创作方法】\n" + script_skill.planning_instructions,
+        "【口播写作方法】\n" + script_skill.writing_instructions,
+        "【交付前内部审稿】\n- " + "\n- ".join(script_skill.critic_rules),
+        (
+            "【口播边界】\n"
+            f"所有 narration 合计建议 {minimum_characters}-{maximum_characters} 个汉字，"
+            "目标 45—75 秒，内容完整和自然优先。只有用户明确核对材料对应的 material ID "
+            "可以写入 source_refs；模型已有知识、解释、过渡和编辑判断保持为空。用户输入中的"
+            "候选引语如果没有核对材料，不得写成已核验逐字原话。最终只输出 ScriptDraft。"
+        ),
+    )
 
 
 def compile_script_skill_prompt(

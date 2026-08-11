@@ -28,6 +28,7 @@ from qijia_video.contracts import (
 from qijia_video.errors import ProviderUnavailable
 from qijia_video.prompt_orchestration import compile_legacy_h3_script_prompt
 from qijia_video.prompts import (
+    DIRECT_SCRIPT_OUTPUT_CONTRACT,
     SCRIPT_OUTPUT_CONTRACT,
     SCRIPT_SKILL_OUTPUT_CONTRACT,
     narration_char_count,
@@ -40,6 +41,7 @@ from qijia_video.tts_options import (
 
 SCRIPT_PROMPT_VERSION = "qijia_script_v14_single_creative_brief"
 SCRIPT_SKILL_PROMPT_VERSION = 'qijia_script_v15_editorial_plan'
+DIRECT_SCRIPT_PROMPT_VERSION = 'qijia_script_v16_direct_draft'
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v12_semantic_adaptive"
 DIRECTOR_PROMPT_VERSION = 'qijia_director_v13_shot_context_ir'
 DIRECTOR_V3_PROMPT_VERSION = 'qijia_director_v20_concrete_event'
@@ -230,6 +232,14 @@ _SCRIPT_SKILL_RESPONSE_SCHEMA['properties']['editorial_plan'] = (
 _SCRIPT_SKILL_RESPONSE_SCHEMA['required'] = [
     'editorial_plan' if item == 'creative_brief' else item
     for item in _SCRIPT_SKILL_RESPONSE_SCHEMA['required']
+]
+
+_DIRECT_SCRIPT_RESPONSE_SCHEMA = json.loads(json.dumps(_SCRIPT_RESPONSE_SCHEMA))
+_DIRECT_SCRIPT_RESPONSE_SCHEMA['properties'].pop('creative_brief')
+_DIRECT_SCRIPT_RESPONSE_SCHEMA['required'] = [
+    item
+    for item in _DIRECT_SCRIPT_RESPONSE_SCHEMA['required']
+    if item != 'creative_brief'
 ]
 
 
@@ -1269,6 +1279,50 @@ class OpenRouterScriptProvider:
         )
         return plan, self._script_from_generated(card, response.data)
 
+    async def generate_direct_script(
+        self,
+        card: SourceCard,
+        prompt: str,
+        *,
+        on_usage: UsageRecorder | None = None,
+    ) -> ScriptDraft:
+        """Generate the v3 deliverable without exposing a planning artifact."""
+
+        if not self.configured:
+            raise ProviderUnavailable(
+                '真实脚本生成未配置：请设置 OPENROUTER_API_KEY'
+            )
+        user_prompt = self._prompt(
+            card,
+            prompt,
+            output_contract=DIRECT_SCRIPT_OUTPUT_CONTRACT,
+        )
+        response = await _openrouter_json_request(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            messages=[
+                {
+                    'role': 'system',
+                    'content': (
+                        '你是本任务唯一的 Script Skill。请在内部完成角度取舍、结构规划与审稿，'
+                        '只返回最终 ScriptDraft JSON。禁止输出候选方案、中间计划、思维过程、'
+                        '视觉方案、镜头或媒体提示词。'
+                    ),
+                },
+                {'role': 'user', 'content': user_prompt},
+            ],
+            label='口播稿生成',
+            schema_name='qijia_direct_script_draft_v1',
+            response_schema=_DIRECT_SCRIPT_RESPONSE_SCHEMA,
+            max_completion_tokens=SCRIPT_MAX_COMPLETION_TOKENS,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+            operation='script_generation',
+            on_usage=on_usage,
+        )
+        return self._script_from_generated(card, response.data)
+
     async def generate_with_brief(
         self,
         card: SourceCard,
@@ -1277,7 +1331,7 @@ class OpenRouterScriptProvider:
         system_prompt: str | None = None,
         on_usage: UsageRecorder | None = None,
     ) -> tuple[CreativeBrief, ScriptDraft]:
-        """Resume Pipeline v1 H3 jobs; new jobs call generate_with_plan."""
+        """Resume Pipeline v1 H3 jobs; v3 jobs call generate_direct_script."""
 
         if not self.configured:
             raise ProviderUnavailable(

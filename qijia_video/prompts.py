@@ -81,3 +81,10 @@ editorial_plan 必须包含 objective、central_question、candidate_angles、se
 脚本 schema_version 固定为 3.0；字段为 video_title、cover_text、caption、hashtags、beats。beats 通常 4—8 段，最少 3 段、最多 12 段，依次使用 n01、n02……；第一段 role 为 hook，最后一段为 closing，中间使用 suspense、context、reframe、explanation、example 或 application。每段只包含 id、role、narration、on_screen_text、source_refs、quote_ref。
 
 narration 是唯一送入 TTS 的口播，不写 visual_direction 或逐镜头画面。on_screen_text 仅用于 Remotion 后期排版，不需要时为空。source_refs 只能使用 ContextPack 中已经存在的 fact/quote ID；模型已有知识、解释、过渡和编辑判断必须保持为空，绝不能为模型记忆创造来源 ID。只有 ContextPack 中的 verified_quote 才能作为已核验直接引语并填写 quote_ref；用户输入中的候选引语如果没有对应 verified_quote，应按用户提供的观点材料谨慎表述。没有直接引语时 quote_ref 为 null。hashtags 输出 3—5 个不带 # 的词。'''
+
+DIRECT_SCRIPT_OUTPUT_CONTRACT = '''【v3 输出契约】
+只输出一个 ScriptDraft JSON 对象，不要 Markdown，不要输出 EditorialPlan、CreativeBrief、候选角度、分析过程或视觉方案。
+
+schema_version 固定为 3.0；字段为 video_title、cover_text、caption、hashtags、beats。beats 按完整口播的自然语义变化拆分，通常 4—8 段，最少 3 段、最多 12 段，依次使用 n01、n02……；第一段 role 为 hook，最后一段为 closing，中间使用 suspense、context、reframe、explanation、example 或 application。每段只包含 id、role、narration、on_screen_text、source_refs、quote_ref。
+
+narration 是唯一送入 TTS 的口播，不写 visual_direction 或逐镜头画面。on_screen_text 仅用于后期排版，不需要时为空。source_refs 只能使用输入中存在的 material ID；模型已有知识、解释、过渡和编辑判断必须为空。没有已核对的直接引语时 quote_ref 为 null。hashtags 输出 3—5 个不带 # 的词。'''
