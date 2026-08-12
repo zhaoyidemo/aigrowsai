@@ -696,6 +696,99 @@ _DIRECTOR_SHOT_PLAN_RESPONSE_SCHEMA = {
 class _OpenRouterJsonResponse:
     data: dict
     model_id: str
+    requested_model: str
+
+
+@dataclass(frozen=True)
+class _OpenRouterErrorContext:
+    status_code: int
+    message: str
+    model: str
+    request_id: str = ""
+    error_type: str = ""
+    provider_code: str = ""
+    provider_name: str = ""
+    model_slug: str = ""
+    route_summary: str = ""
+    region: str = ""
+    reasons: tuple[str, ...] = ()
+    guardrail_blocked: bool = False
+
+    @property
+    def fallback_eligible(self) -> bool:
+        """Retry only failures that a different provider model can resolve."""
+
+        blocked_types = {
+            "authentication",
+            "payment_required",
+            "invalid_request",
+            "invalid_prompt",
+            "context_length_exceeded",
+            "max_tokens_exceeded",
+            "token_limit_exceeded",
+            "string_too_long",
+            "payload_too_large",
+            "unprocessable",
+            "content_policy_violation",
+            "refusal",
+        }
+        if self.status_code in {400, 401, 402, 413, 422}:
+            return False
+        if self.error_type in blocked_types:
+            return False
+        if self.guardrail_blocked or self.reasons:
+            return False
+        if "violation of provider terms of service" in self.message.casefold():
+            return True
+        if self.error_type in {
+            "permission_denied",
+            "rate_limit_exceeded",
+            "provider_overloaded",
+            "provider_unavailable",
+            "timeout",
+            "server",
+        }:
+            return True
+        if self.status_code in {408, 429, 500, 502, 503, 504, 529}:
+            return True
+        if self.status_code == 403:
+            return True
+        return self.status_code == 404 and "no allowed providers" in self.message.casefold()
+
+    def diagnostic_suffix(self) -> str:
+        parts = [f"model={self.model}"]
+        if self.error_type:
+            parts.append(f"error_type={self.error_type}")
+        if self.provider_code:
+            parts.append(f"provider_code={self.provider_code}")
+        if self.provider_name:
+            parts.append(f"provider={self.provider_name}")
+        if self.model_slug and self.model_slug != self.model:
+            parts.append(f"model_slug={self.model_slug}")
+        if self.route_summary:
+            parts.append(f"route={self.route_summary}")
+        if self.region:
+            parts.append(f"region={self.region}")
+        if self.reasons:
+            parts.append("reasons=" + "|".join(self.reasons))
+        if self.request_id:
+            parts.append(f"request_id={self.request_id}")
+        return "（" + "，".join(parts) + "）"
+
+    def ledger_note(self) -> str:
+        return ("OpenRouter 失败诊断" + self.diagnostic_suffix())[:360]
+
+
+class _OpenRouterRequestError(ProviderUnavailable):
+    def __init__(self, label: str, context: _OpenRouterErrorContext):
+        self.context = context
+        super().__init__(
+            f"OpenRouter {label}返回 HTTP {context.status_code}："
+            f"{context.message[:300]}{context.diagnostic_suffix()}"
+        )
+
+    def short_diagnostic(self) -> str:
+        return f"HTTP {self.context.status_code}{self.context.diagnostic_suffix()}"
 
 
 _STORYBOARD_FALLBACKS = (
@@ -919,6 +1012,86 @@ def _json_object(content: Any) -> dict:
     raise ProviderUnavailable("模型没有返回有效 JSON")
 
 
+def _diagnostic_text(value: Any, max_length: int = 160) -> str:
+    if value is None or isinstance(value, (dict, list, tuple, set)):
+        return ""
+    return " ".join(str(value).split())[:max_length]
+
+
+def _openrouter_error_context(
+    body: Any,
+    *,
+    status_code: int,
+    request_id: str,
+    model: str,
+    fallback_message: str,
+) -> _OpenRouterErrorContext:
+    payload = body if isinstance(body, dict) else {}
+    raw_error = payload.get("error")
+    error = raw_error if isinstance(raw_error, dict) else {}
+    raw_metadata = error.get("metadata")
+    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+    raw_router = payload.get("openrouter_metadata")
+    router = raw_router if isinstance(raw_router, dict) else {}
+    raw_pipeline = router.get("pipeline")
+    pipeline = raw_pipeline if isinstance(raw_pipeline, list) else []
+    guardrail_blocked = bool(metadata.get("patterns"))
+    for raw_stage in pipeline:
+        stage = raw_stage if isinstance(raw_stage, dict) else {}
+        if stage.get("type") != "guardrail":
+            continue
+        raw_data = stage.get("data")
+        data = raw_data if isinstance(raw_data, dict) else {}
+        action = _diagnostic_text(data.get("action"), 40).casefold()
+        summary = _diagnostic_text(stage.get("summary"), 160).casefold()
+        if action in {"block", "blocked", "deny", "denied"} or "block" in summary:
+            guardrail_blocked = True
+            break
+    raw_reasons = metadata.get("reasons")
+    reasons = tuple(
+        item
+        for item in (
+            _diagnostic_text(value, 100)
+            for value in (raw_reasons if isinstance(raw_reasons, list) else [])[:3]
+        )
+        if item
+    )
+    provider_name = _diagnostic_text(metadata.get("provider_name"), 80)
+    if not provider_name:
+        raw_attempts = router.get("attempts")
+        attempts = raw_attempts if isinstance(raw_attempts, list) else []
+        for raw_attempt in reversed(attempts):
+            attempt = raw_attempt if isinstance(raw_attempt, dict) else {}
+            provider_name = _diagnostic_text(attempt.get("provider"), 80)
+            if provider_name:
+                break
+    return _OpenRouterErrorContext(
+        status_code=int(status_code),
+        message=_diagnostic_text(
+            error.get("message")
+            or payload.get("message")
+            or raw_error
+            or fallback_message,
+            500,
+        ) or "未知上游错误",
+        model=model,
+        request_id=request_id,
+        error_type=_diagnostic_text(
+            metadata.get("error_type")
+            or error.get("error_type")
+            or payload.get("error_type"),
+            80,
+        ),
+        provider_code=_diagnostic_text(metadata.get("provider_code"), 100),
+        provider_name=provider_name,
+        model_slug=_diagnostic_text(metadata.get("model_slug"), 120),
+        route_summary=_diagnostic_text(router.get("summary"), 160),
+        region=_diagnostic_text(router.get("region"), 40),
+        reasons=reasons,
+        guardrail_blocked=guardrail_blocked,
+    )
+
+
 def _nonnegative_int(value: Any) -> int:
     try:
         return max(0, int(value or 0))
@@ -1039,6 +1212,7 @@ async def _openrouter_json_request(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "X-Title": "Qijia AI Video Workbench",
+        "X-OpenRouter-Metadata": "enabled",
     }
     payload = {
         "model": model,
@@ -1083,7 +1257,10 @@ async def _openrouter_json_request(
                 note="网络异常后是否计费未知",
             ))
             raise ProviderUnavailable(f"OpenRouter {label}请求失败") from exc
-    request_id = response.headers.get("x-request-id", "")
+    request_id = (
+        response.headers.get("x-request-id", "")
+        or response.headers.get("x-generation-id", "")
+    )
     try:
         body = response.json()
     except ValueError as exc:
@@ -1101,6 +1278,19 @@ async def _openrouter_json_request(
             f"OpenRouter {label}返回了无法读取的响应"
             + (f"；request_id={request_id}" if request_id else "")
         ) from exc
+    if isinstance(body, dict) and not request_id:
+        request_id = _diagnostic_text(body.get("id"), 160)
+    error_context = (
+        _openrouter_error_context(
+            body,
+            status_code=response.status_code,
+            request_id=request_id,
+            model=model,
+            fallback_message=response.reason_phrase,
+        )
+        if response.status_code >= 400
+        else None
+    )
     response_succeeded = bool(
         response.status_code < 400
         and isinstance(body, dict)
@@ -1115,21 +1305,10 @@ async def _openrouter_json_request(
         request_id=request_id,
         http_status_code=response.status_code,
         succeeded=response_succeeded,
+        note=error_context.ledger_note() if error_context else "",
     ))
-    if response.status_code >= 400:
-        try:
-            message = str(
-                body.get("error", {}).get("message")
-                or body.get("message")
-                or response.reason_phrase
-            )
-        except (TypeError, AttributeError):
-            message = response.reason_phrase
-        suffix = f"；request_id={request_id}" if request_id else ""
-        raise ProviderUnavailable(
-            f"OpenRouter {label}返回 HTTP {response.status_code}："
-            f"{message[:500]}{suffix}"
-        )
+    if error_context:
+        raise _OpenRouterRequestError(label, error_context)
     top_level_error = body.get("error") if isinstance(body, dict) else None
     if top_level_error:
         message = (
@@ -1172,6 +1351,7 @@ async def _openrouter_json_request(
         return _OpenRouterJsonResponse(
             data=_json_object(content),
             model_id=str(body.get("model") or model),
+            requested_model=model,
         )
     except ProviderUnavailable as exc:
         if finish_reason == "length":
@@ -1184,6 +1364,33 @@ async def _openrouter_json_request(
             f"OpenRouter {label}{detail}（finish_reason={finish_reason}）"
             + (f"；request_id={request_id}" if request_id else "")
         ) from exc
+
+
+async def _openrouter_json_request_with_fallback(
+    *,
+    model: str,
+    fallback_model: str = "",
+    **request: Any,
+) -> _OpenRouterJsonResponse:
+    """Retry one failed model call without replaying its surrounding workflow."""
+
+    backup = str(fallback_model or "").strip()
+    if backup == model:
+        backup = ""
+    try:
+        return await _openrouter_json_request(model=model, **request)
+    except _OpenRouterRequestError as primary_error:
+        if not backup or not primary_error.context.fallback_eligible:
+            raise
+        try:
+            return await _openrouter_json_request(model=backup, **request)
+        except _OpenRouterRequestError as backup_error:
+            label = str(request.get("label") or "请求")
+            raise ProviderUnavailable(
+                f"OpenRouter {label}主备模型均失败："
+                f"主模型 {primary_error.short_diagnostic()}；"
+                f"备用模型 {backup_error.short_diagnostic()}"
+            ) from backup_error
 
 
 class OpenRouterScriptProvider:
@@ -1839,10 +2046,11 @@ class OpenRouterStoryboardProvider:
                     'image_url': {'url': reference_image_url},
                 },
             ]
-        treatment_response = await _openrouter_json_request(
+        treatment_response = await _openrouter_json_request_with_fallback(
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
+            fallback_model=self.fallback_model,
             messages=[
                 {
                     'role': 'system',
@@ -1919,10 +2127,15 @@ class OpenRouterStoryboardProvider:
             + '\n\n【完整脚本与真实时长】\n'
             + json.dumps(beat_payload, ensure_ascii=False, indent=2)
         )
-        shot_response = await _openrouter_json_request(
+        shot_model = treatment_response.requested_model or self.model
+        shot_fallback_model = (
+            self.fallback_model if shot_model == self.model else self.model
+        )
+        shot_response = await _openrouter_json_request_with_fallback(
             api_key=self.api_key,
             base_url=self.base_url,
-            model=self.model,
+            model=shot_model,
+            fallback_model=shot_fallback_model,
             messages=[
                 {
                     'role': 'system',
@@ -2359,12 +2572,14 @@ class OpenRouterStoryboardProvider:
         api_key: str,
         base_url: str,
         model: str,
+        fallback_model: str = "",
         transport: httpx.AsyncBaseTransport | None = None,
         timeout_seconds: float = 300.0,
     ):
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "https://openrouter.ai/api").strip()
         self.model = str(model or "").strip()
+        self.fallback_model = str(fallback_model or "").strip()
         self.transport = transport
         self.timeout_seconds = max(10.0, float(timeout_seconds))
 

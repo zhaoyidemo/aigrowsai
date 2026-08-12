@@ -1901,6 +1901,9 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            calls[0].headers["X-OpenRouter-Metadata"], "enabled"
+        )
         request_body = json.loads(calls[0].content)
         response_format = request_body["response_format"]["json_schema"]
         self.assertEqual(response_format["name"], "qijia_direct_script_draft_v1")
@@ -2478,6 +2481,233 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bible.director_skill_version, "2.0.0")
         self.assertEqual(assets.motion_grammar, ["单一动作链", "克制跟随"])
         self.assertEqual([shot.beat_ids for shot in plan.shots], groups)
+
+    async def test_quality_director_falls_back_only_failed_call_on_terms_403(self):
+        card = SourceCard(
+            **valid_card().model_dump(mode="json"),
+            id="card-director-fallback",
+            revision=1,
+            status="verified",
+        )
+        script = await TemplateScriptProvider().generate(card)
+        beat_ids = [item.id for item in script.beats]
+        durations = {item.id: 5.0 for item in script.beats}
+        groups = [[beat_ids[0]], beat_ids[1:3], beat_ids[3:]]
+        calls: list[httpx.Request] = []
+        usage_records: list[ProviderUsageRecord] = []
+
+        def context(index: int) -> dict:
+            return {
+                "semantic_goal": f"推进第 {index} 章判断",
+                "concrete_event": (
+                    f"第 {index} 章中，人物在书桌前移动关键物件，"
+                    "同伴调整站位，形成新的明确关系。"
+                ),
+                "blocking": "主角在左侧中景，配角在右后方，关键物件位于两人之间。",
+                "visual_metaphor": "",
+                "subject": "固定造型的主角、配角和同一关键物件",
+                "action": "主角移动物件，配角后退并给出可见反馈",
+                "environment": "空间骨架和右侧窗光固定的书房",
+                "composition": "竖屏中景，人物分居两侧，桌面为焦点",
+                "continuity_handoff": (
+                    "开场建立关系" if index == 1 else "承接上一章结果"
+                ),
+                "start_state": f"第 {index} 章动作尚未发生",
+                "end_state": f"第 {index} 章新关系已经清楚可见",
+                "camera_intent": "胸口高度轻微跟随，停在桌面新关系",
+                "media_rationale": "首章动作连续，后续决定性瞬间可由图片表达",
+                "reference_roles": [],
+            }
+
+        treatment_payload = {
+            "director_treatment": {
+                "visual_thesis": "用同一物件的位置变化承载判断标准的变化。",
+                "audience_experience": "从眼前输赢逐步看到长期判断。",
+                "chapter_progression": ["建立冲突", "显现代价", "完成重构"],
+                "motif_system": ["关键物件", "右侧窗光"],
+                "rhythm_strategy": "开场迅速，中段停顿观察，结尾收束。",
+                "edit_pattern": "动作结果接下一章起始状态。",
+                "style_application": "现代编辑插画，以纸纹和负空间组织关系。",
+            },
+            "visual_bible": {
+                "core_visual_idea": "物件位置改变人物关系。",
+                "visual_world": "统一的现代编辑插画书房。",
+                "recurring_subjects": ["主角", "配角", "关键物件"],
+                "scene_anchors": ["固定书桌", "右侧窗光"],
+                "continuity_rules": ["人物造型固定", "物件位置承接"],
+                "color_material_system": "低饱和纸纹与陶土橙重点色。",
+                "composition_system": "竖屏中景与清楚负空间。",
+                "reference_strategy": "无参考图。",
+                "forbidden_elements": ["可读文字", "随机换脸"],
+            },
+            "asset_bible": {
+                "subjects": ["主角", "配角"],
+                "locations": ["固定书房"],
+                "props": ["关键物件"],
+                "identity_locks": ["主角轮廓、服装与比例固定"],
+                "material_locks": ["纸纹、色块和侧光固定"],
+                "allowed_variations": ["动作、景别和局部构图可变"],
+                "motion_grammar": ["单一动作链", "克制跟随"],
+                "review_criteria": ["事件一眼可读", "人物与材质连续"],
+                "references": [],
+            },
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            body = json.loads(request.content)
+            self.assertEqual(request.headers["X-OpenRouter-Metadata"], "enabled")
+            if len(calls) == 1:
+                self.assertEqual(body["model"], "openai/gpt-5.6-sol")
+                return httpx.Response(
+                    403,
+                    headers={"x-request-id": "or-terms-403"},
+                    json={
+                        "error": {
+                            "code": 403,
+                            "message": (
+                                "The request is prohibited due to a violation "
+                                "of provider Terms Of Service."
+                            ),
+                            "metadata": {
+                                "error_type": "permission_denied",
+                                "provider_code": "terms_violation",
+                                "provider_name": "OpenAI",
+                                "flagged_input": "这段内容不得写入日志或成本账本",
+                            },
+                        },
+                        "openrouter_metadata": {
+                            "requested": "openai/gpt-5.6-sol",
+                            "region": "iad",
+                            "summary": "available=1, attempted=OpenAI",
+                            "attempt": 1,
+                        },
+                    },
+                )
+            self.assertEqual(body["model"], "anthropic/claude-opus-5")
+            schema_name = body["response_format"]["json_schema"]["name"]
+            result = (
+                treatment_payload
+                if schema_name == "qijia_director_treatment_v1"
+                else {
+                    "shots": [
+                        {
+                            "beat_ids": group,
+                            "visual_type": "video" if index == 1 else "image",
+                            "context": context(index),
+                        }
+                        for index, group in enumerate(groups, 1)
+                    ]
+                }
+            )
+            return httpx.Response(200, json={
+                "id": f"director-fallback-{len(calls)}",
+                "model": "anthropic/claude-opus-5-20260723",
+                "choices": [{"message": {"content": json.dumps(
+                    result, ensure_ascii=False
+                )}}],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "total_tokens": 150,
+                    "cost": 0.01,
+                },
+            })
+
+        async def record_usage(usage: ProviderUsageRecord) -> None:
+            usage_records.append(usage)
+
+        provider = OpenRouterStoryboardProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="openai/gpt-5.6-sol",
+            fallback_model="anthropic/claude-opus-5",
+            transport=httpx.MockTransport(handler),
+        )
+        treatment, bible, assets, plan = (
+            await provider.generate_quality_director_plan(
+                script,
+                "【导演方法】动画解说导演@2.0.0",
+                durations,
+                director_skill_id="animated-explainer",
+                director_skill_version="2.0.0",
+                input_hash="c" * 64,
+                on_usage=record_usage,
+            )
+        )
+
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(
+            [json.loads(request.content)["model"] for request in calls],
+            [
+                "openai/gpt-5.6-sol",
+                "anthropic/claude-opus-5",
+                "anthropic/claude-opus-5",
+            ],
+        )
+        self.assertEqual([item.succeeded for item in usage_records], [False, True, True])
+        self.assertEqual(usage_records[0].request_id, "or-terms-403")
+        self.assertIn("error_type=permission_denied", usage_records[0].note)
+        self.assertIn("provider_code=terms_violation", usage_records[0].note)
+        self.assertNotIn("不得写入日志", usage_records[0].note)
+        self.assertEqual(treatment.model_id, "anthropic/claude-opus-5-20260723")
+        self.assertEqual(bible.model_id, "anthropic/claude-opus-5-20260723")
+        self.assertEqual(assets.model_id, "anthropic/claude-opus-5-20260723")
+        self.assertEqual(plan.model_id, "anthropic/claude-opus-5-20260723")
+
+    async def test_quality_director_does_not_bypass_content_guardrail(self):
+        card = SourceCard(
+            **valid_card().model_dump(mode="json"),
+            id="card-director-guardrail",
+            revision=1,
+            status="verified",
+        )
+        script = await TemplateScriptProvider().generate(card)
+        durations = {item.id: 5.0 for item in script.beats}
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(403, json={
+                "error": {
+                    "code": 403,
+                    "message": "Request blocked by content policy",
+                    "metadata": {
+                        "error_type": "content_policy_violation",
+                        "reasons": ["policy category"],
+                        "flagged_input": "不应出现在错误消息中的原始片段",
+                    },
+                },
+                "openrouter_metadata": {
+                    "pipeline": [{
+                        "type": "guardrail",
+                        "name": "content-filter",
+                        "summary": "Blocked by content filter",
+                        "data": {"action": "blocked"},
+                    }],
+                },
+            })
+
+        provider = OpenRouterStoryboardProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="openai/gpt-5.6-sol",
+            fallback_model="anthropic/claude-opus-5",
+            transport=httpx.MockTransport(handler),
+        )
+        with self.assertRaises(ProviderUnavailable) as caught:
+            await provider.generate_quality_director_plan(
+                script,
+                "【导演方法】动画解说导演@2.0.0",
+                durations,
+                director_skill_id="animated-explainer",
+                director_skill_version="2.0.0",
+                input_hash="d" * 64,
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertIn("error_type=content_policy_violation", str(caught.exception))
+        self.assertNotIn("原始片段", str(caught.exception))
 
     async def test_storyboard_normalizes_a_missing_shot_without_second_call(self):
         card = SourceCard(

@@ -88,6 +88,7 @@ class QijiaVideoRuntime:
             api_key=settings.OPENROUTER_API_KEY,
             base_url=settings.OPENROUTER_BASE_URL,
             model=settings.QIJIA_VIDEO_DIRECTOR_MODEL,
+            fallback_model=settings.QIJIA_VIDEO_DIRECTOR_FALLBACK_MODEL,
         )
         tts_provider = VolcengineTtsProvider(
             endpoint=settings.QIJIA_VIDEO_TTS_ENDPOINT,
