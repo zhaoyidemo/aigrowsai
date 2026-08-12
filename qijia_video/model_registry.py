@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 MODEL_REGISTRY_SOURCE = "qijia_video.model_registry"
+PRODUCTION_TEXT_MODEL = "openai/gpt-5.6-sol"
 SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-0-pro-fast-251015"
 SEEDANCE_BALANCED_MODEL = "doubao-seedance-1-5-pro-251215"
 SEEDANCE_FLAGSHIP_MODEL = "doubao-seedance-2-0-260128"
@@ -26,9 +27,9 @@ class ProductionModelRegistry:
 
 
 PRODUCTION_MODELS = ProductionModelRegistry(
-    script="openai/gpt-5.6-sol",
-    director="openai/gpt-5.6-sol",
-    topic_editor="openai/gpt-5.6-sol",
+    script=PRODUCTION_TEXT_MODEL,
+    director=PRODUCTION_TEXT_MODEL,
+    topic_editor=PRODUCTION_TEXT_MODEL,
     image="doubao-seedream-5-0-lite-260128",
     video=SEEDANCE_BALANCED_MODEL,
     tts="seed-tts-2.0",
@@ -36,8 +37,7 @@ PRODUCTION_MODELS = ProductionModelRegistry(
 
 
 MODEL_DISPLAY_NAMES = {
-    "openai/gpt-5.6-sol": "GPT-5.6 Sol",
-    "openai/gpt-5.6-terra": "GPT-5.6 Terra",
+    PRODUCTION_TEXT_MODEL: "GPT-5.6 Sol",
     "doubao-seedream-5-0-lite-260128": "Seedream 5.0 Lite",
     SEEDANCE_EFFICIENT_MODEL: "Seedance 1.0 Pro Fast",
     SEEDANCE_BALANCED_MODEL: "Seedance 1.5 Pro",

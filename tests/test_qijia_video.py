@@ -88,6 +88,7 @@ from qijia_video.infrastructure.script_providers import (
 from qijia_video.model_registry import (
     MODEL_REGISTRY_SOURCE,
     PRODUCTION_MODELS,
+    PRODUCTION_TEXT_MODEL,
 )
 from qijia_video.settings import QijiaVideoSettings
 from qijia_video.infrastructure.storage import (
@@ -263,31 +264,12 @@ class RecordingImageProvider(MockImageProvider):
 
 
 class QijiaVideoContractTests(unittest.TestCase):
-    def test_openrouter_completion_limit_is_selected_by_model_family(self):
-        self.assertEqual(
-            _openrouter_completion_limit_key("openai/gpt-5.6-sol"),
-            "max_completion_tokens",
-        )
-        self.assertEqual(
-            _openrouter_completion_limit_key("openai/gpt-5.6-terra:exacto"),
-            "max_completion_tokens",
-        )
-        self.assertEqual(
-            _openrouter_completion_limit_key("openai/o3"),
-            "max_completion_tokens",
-        )
-        self.assertEqual(
-            _openrouter_completion_limit_key("openai/gpt-4o"),
-            "max_tokens",
-        )
-        self.assertEqual(
-            _openrouter_completion_limit_key("anthropic/claude-opus-5"),
-            "max_tokens",
-        )
-        self.assertEqual(
-            _openrouter_completion_limit_key("x-ai/grok-4.5"),
-            "max_tokens",
-        )
+    def test_openrouter_completion_limit_uses_gateway_standard_parameter(self):
+        for model in (PRODUCTION_TEXT_MODEL, "test/model"):
+            self.assertEqual(
+                _openrouter_completion_limit_key(model),
+                "max_tokens",
+            )
 
     def test_content_skills_are_versioned_workflow_presets_without_prompts(self):
         catalog = default_skill_registry.public_catalog()
@@ -2082,10 +2064,11 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             ["xhigh", "high", "xhigh"],
         )
         self.assertTrue(all(item["model"] == "openai/gpt-5.6-sol" for item in calls))
+        self.assertTrue(all("models" not in item for item in calls))
         self.assertTrue(all("tools" not in item for item in calls))
         self.assertTrue(all("plugins" not in item for item in calls))
         self.assertTrue(all(
-            item["max_completion_tokens"] > 0 and "max_tokens" not in item
+            item["max_tokens"] > 0 and "max_completion_tokens" not in item
             for item in calls
         ))
         self.assertEqual(
@@ -2508,8 +2491,9 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertNotIn("X-Title", request.headers)
             self.assertNotIn("plugins", body)
-            self.assertIn("max_completion_tokens", body)
-            self.assertNotIn("max_tokens", body)
+            self.assertIn("max_tokens", body)
+            self.assertNotIn("max_completion_tokens", body)
+            self.assertNotIn("models", body)
             schema_name = body["response_format"]["json_schema"]["name"]
             if schema_name == "qijia_director_treatment_v1":
                 result = treatment_payload
@@ -2680,6 +2664,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("model_access=listed_for_key", str(caught.exception))
         self.assertIn("attempt=0", str(caught.exception))
+        self.assertIn("系统未切换或调用备用模型", str(caught.exception))
         self.assertIn("candidates=OpenAI", str(caught.exception))
         self.assertIn("selected=none", str(caught.exception))
         self.assertIn("generation_id=or-generation-403", str(caught.exception))
@@ -5993,15 +5978,21 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             retired_environment_fields.isdisjoint(QijiaVideoSettings.model_fields)
         )
         with patch.dict(os.environ, {
-            "QIJIA_VIDEO_SCRIPT_MODEL": "x-ai/grok-4.5",
+            "QIJIA_VIDEO_SCRIPT_MODEL": "ignored/legacy-model",
             "QIJIA_VIDEO_SEEDANCE_MODEL": SEEDANCE_FLAGSHIP_MODEL,
         }):
             loaded = QijiaVideoSettings(_env_file=None)
         self.assertFalse(hasattr(loaded, "QIJIA_VIDEO_SCRIPT_MODEL"))
         self.assertFalse(hasattr(loaded, "QIJIA_VIDEO_SEEDANCE_MODEL"))
-        self.assertEqual(PRODUCTION_MODELS.script, "openai/gpt-5.6-sol")
-        self.assertEqual(PRODUCTION_MODELS.director, "openai/gpt-5.6-sol")
-        self.assertEqual(PRODUCTION_MODELS.topic_editor, "openai/gpt-5.6-sol")
+        self.assertEqual(PRODUCTION_TEXT_MODEL, "openai/gpt-5.6-sol")
+        self.assertEqual(
+            {
+                PRODUCTION_MODELS.script,
+                PRODUCTION_MODELS.director,
+                PRODUCTION_MODELS.topic_editor,
+            },
+            {PRODUCTION_TEXT_MODEL},
+        )
         self.assertEqual(PRODUCTION_MODELS.video, SEEDANCE_BALANCED_MODEL)
 
     def test_api_and_page_require_independent_permission(self):

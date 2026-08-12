@@ -164,7 +164,7 @@ def _safe_nonnegative_int(value: Any) -> int:
 def _usage_snapshot(
     body: Any,
     *,
-    fallback_model: str,
+    requested_model: str,
     request_id: str = "",
     http_status_code: int | None = None,
     succeeded: bool = False,
@@ -187,7 +187,7 @@ def _usage_snapshot(
         usage.get("total_tokens") or input_tokens + output_tokens
     )
     return TopicModelUsage(
-        model=str(payload.get("model") or fallback_model)[:200],
+        model=str(payload.get("model") or requested_model)[:200],
         request_id=str(request_id or payload.get("id") or "")[:200],
         request_count=1,
         succeeded=succeeded,
@@ -325,8 +325,8 @@ class OpenRouterTopicEditor:
                 },
             ],
             "reasoning": {"effort": "medium", "exclude": True},
-            # Grok 4.5 advertises `max_tokens`; with require_parameters enabled,
-            # max_completion_tokens leaves OpenRouter with no eligible endpoint.
+            # Sol's OpenAI routes advertise max_tokens. With require_parameters
+            # enabled, max_completion_tokens would narrow routing to Azure.
             "max_tokens": 6000,
             "response_format": {
                 "type": "json_schema",
@@ -347,7 +347,7 @@ class OpenRouterTopicEditor:
                     _chat_url(self.base_url), headers=headers, json=payload
                 )
             except (httpx.TimeoutException, httpx.RequestError) as exc:
-                usage = _usage_snapshot(None, fallback_model=self.model)
+                usage = _usage_snapshot(None, requested_model=self.model)
                 await _record_usage(on_usage, usage)
                 raise TopicEditorialFailed(
                     "OpenRouter 选题编辑请求失败；是否计费需以供应商账单核对",
@@ -359,7 +359,7 @@ class OpenRouterTopicEditor:
         except ValueError as exc:
             usage = _usage_snapshot(
                 None,
-                fallback_model=self.model,
+                requested_model=self.model,
                 request_id=request_id,
                 http_status_code=response.status_code,
             )
@@ -370,7 +370,7 @@ class OpenRouterTopicEditor:
             ) from exc
         failed_usage = _usage_snapshot(
             body,
-            fallback_model=self.model,
+            requested_model=self.model,
             request_id=request_id,
             http_status_code=response.status_code,
         )
@@ -454,7 +454,7 @@ class OpenRouterTopicEditor:
             )
         succeeded_usage = _usage_snapshot(
             body,
-            fallback_model=self.model,
+            requested_model=self.model,
             request_id=request_id,
             http_status_code=response.status_code,
             succeeded=True,

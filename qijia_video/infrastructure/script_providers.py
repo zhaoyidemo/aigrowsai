@@ -57,14 +57,12 @@ UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
 
 
 def _openrouter_completion_limit_key(model: str) -> str:
-    """Choose the completion limit name advertised by the model family."""
+    """Use the Chat Completions gateway limit accepted by production Sol routes."""
 
-    base_slug = str(model or "").strip().casefold().split(":", 1)[0]
-    provider, separator, model_name = base_slug.partition("/")
-    if separator and provider == "openai" and model_name.startswith(
-        ("gpt-5", "o1", "o3", "o4")
-    ):
-        return "max_completion_tokens"
+    # Keep the argument for the request-builder contract. OpenRouter's Sol
+    # endpoint metadata advertises max_tokens for OpenAI routes; using
+    # max_completion_tokens with require_parameters narrows routing to Azure.
+    del model
     return "max_tokens"
 
 
@@ -787,6 +785,16 @@ class _OpenRouterRequestError(ProviderUnavailable):
             classification = "请求在 OpenRouter Guardrail 阶段被拦截"
         elif context.model_access == "not_listed_for_key":
             classification = "同一 API Key 的可用模型目录未列出该模型"
+        elif (
+            context.status_code == 403
+            and context.route_attempt == 0
+            and bool(context.endpoint_total)
+            and not context.selected_providers
+        ):
+            classification = (
+                "OpenRouter 在选择任何上游前拒绝了当前模型请求；"
+                "系统未切换或调用备用模型"
+            )
         elif context.model_access == "listed_for_key":
             classification = "同一 API Key 已识别该模型，但当前请求仍被拒绝"
         else:
@@ -1362,10 +1370,9 @@ async def _openrouter_json_request(
         },
         "provider": {"require_parameters": True},
     }
-    # OpenRouter filters endpoints when require_parameters=true. OpenAI reasoning
-    # models advertise the OpenAI-native completion limit, while Grok/Anthropic
-    # chat endpoints use max_tokens. Sending the former Grok-specific parameter to
-    # GPT-5.x silently narrowed a four-endpoint model to one eligible route.
+    # OpenRouter filters endpoints when require_parameters=true. Sol's OpenAI
+    # routes advertise max_tokens, while max_completion_tokens narrows the same
+    # model to Azure routes. This remains a single-model request.
     completion_limit_key = _openrouter_completion_limit_key(model)
     payload[completion_limit_key] = max_completion_tokens
     if tools:
