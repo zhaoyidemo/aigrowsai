@@ -23,13 +23,10 @@ class QijiaVideoSettings(BaseSettings):
 
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api"
-    QIJIA_VIDEO_SCRIPT_MODEL: str = "openai/gpt-5.6-sol"
-    QIJIA_VIDEO_DIRECTOR_MODEL: str = "openai/gpt-5.6-sol"
 
     # 家庭教育选题研究：仅使用 TikHub 的抖音读接口。中国大陆默认走 .dev。
     TIKHUB_API_KEY: str = ""
     TIKHUB_BASE_URL: str = "https://api.tikhub.dev"
-    QIJIA_TOPIC_RESEARCH_MODEL: str = ""
     # 当前固定流程按下方基础价计划 13 次，折合约 ¥0.0871，不超过约 ¥0.10。
     # 100 次只是异常保护的请求硬上限，流程不会为了用满它而额外调用。
     QIJIA_TOPIC_TIKHUB_REQUEST_BUDGET: int = 100
@@ -42,14 +39,10 @@ class QijiaVideoSettings(BaseSettings):
     QIJIA_VIDEO_SEEDANCE_BASE_URL: str = (
         "https://ark.cn-beijing.volces.com/api/v3"
     )
-    # Single backend runtime default for new jobs. Each job/request freezes this
-    # value so later environment changes never rewrite existing work.
-    QIJIA_VIDEO_SEEDANCE_MODEL: str = "doubao-seedance-1-5-pro-251215"
     # Legacy fallback price. Model-specific prices below are authoritative for
     # all new requests and allow mixed current / historical cost accounting.
     QIJIA_VIDEO_SEEDANCE_PRICE_PER_MILLION: float = 4.2
     QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION: float = 4.2
-    # Retained only for historical 1.5 Pro tasks and their missing snapshots.
     QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION: float = 8.0
     QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION: float = 46.0
     QIJIA_VIDEO_SEEDANCE_DOWNLOAD_HOSTS: str = (
@@ -58,7 +51,6 @@ class QijiaVideoSettings(BaseSettings):
     QIJIA_VIDEO_SEEDREAM_BASE_URL: str = (
         "https://ark.cn-beijing.volces.com/api/v3"
     )
-    QIJIA_VIDEO_SEEDREAM_MODEL: str = "doubao-seedream-5-0-lite-260128"
     QIJIA_VIDEO_SEEDREAM_SIZE: str = "1440x2560"
     QIJIA_VIDEO_SEEDREAM_DOWNLOAD_HOSTS: str = (
         ".volces.com,.volccdn.com,.byteimg.com"
@@ -77,7 +69,6 @@ class QijiaVideoSettings(BaseSettings):
     QIJIA_VIDEO_TTS_ENDPOINT: str = (
         "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
     )
-    QIJIA_VIDEO_TTS_RESOURCE_ID: str = "seed-tts-2.0"
     # 豆包语音合成官网按量刊例价；套餐、赠送额度与账单优惠不在此估算中。
     QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS: float = 5.0
     # Provider fallback only. Product requests are restricted to the curated

@@ -35,6 +35,11 @@ from qijia_video.infrastructure.script_providers import (
 from qijia_video.infrastructure.storage import storage_from_settings
 from qijia_video.infrastructure.tts_providers import VolcengineTtsProvider
 from qijia_video.infrastructure.video_providers import SeedanceVideoProvider
+from qijia_video.model_registry import (
+    MODEL_REGISTRY_SOURCE,
+    PRODUCTION_MODELS,
+    model_display_name,
+)
 from qijia_video.settings import settings
 from qijia_video.service import QijiaVideoService, TTS_PREVIEW_MAX_CHARACTERS
 from qijia_video.tts_options import (
@@ -44,21 +49,6 @@ from qijia_video.tts_options import (
     TTS_SPEED_TO_PROVIDER_RATE,
     TTS_VOICE_OPTIONS,
 )
-
-
-def _runtime_model_display_name(model_id: str) -> str:
-    """Return a friendly label only when it exactly matches the loaded ID."""
-
-    normalized = str(model_id or "").strip()
-    return {
-        "openai/gpt-5.6-sol": "GPT-5.6 Sol",
-        "openai/gpt-5.6-terra": "GPT-5.6 Terra",
-        "doubao-seedream-5-0-lite-260128": "Seedream 5.0 Lite",
-        SEEDANCE_EFFICIENT_MODEL: "Seedance 1.0 Pro Fast",
-        SEEDANCE_BALANCED_MODEL: "Seedance 1.5 Pro",
-        SEEDANCE_FLAGSHIP_MODEL: "Seedance 2.0",
-        "seed-tts-2.0": "Seed-TTS 2.0",
-    }.get(normalized, normalized or "未配置")
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -97,16 +87,16 @@ class QijiaVideoRuntime:
         script_provider = OpenRouterScriptProvider(
             api_key=settings.OPENROUTER_API_KEY,
             base_url=settings.OPENROUTER_BASE_URL,
-            model=settings.QIJIA_VIDEO_SCRIPT_MODEL,
+            model=PRODUCTION_MODELS.script,
         )
         storyboard_provider = OpenRouterStoryboardProvider(
             api_key=settings.OPENROUTER_API_KEY,
             base_url=settings.OPENROUTER_BASE_URL,
-            model=settings.QIJIA_VIDEO_DIRECTOR_MODEL,
+            model=PRODUCTION_MODELS.director,
         )
         tts_provider = VolcengineTtsProvider(
             endpoint=settings.QIJIA_VIDEO_TTS_ENDPOINT,
-            resource_id=settings.QIJIA_VIDEO_TTS_RESOURCE_ID,
+            resource_id=PRODUCTION_MODELS.tts,
             voice_id=settings.QIJIA_VIDEO_TTS_VOICE_ID,
             api_key=(
                 settings.VOLCENGINE_TTS_API_KEY
@@ -123,7 +113,7 @@ class QijiaVideoRuntime:
         )
         video_provider = SeedanceVideoProvider(
             api_key=settings.ARK_API_KEY,
-            model=settings.QIJIA_VIDEO_SEEDANCE_MODEL,
+            model=PRODUCTION_MODELS.video,
             base_url=settings.QIJIA_VIDEO_SEEDANCE_BASE_URL,
             allowed_download_hosts=tuple(
                 item.strip()
@@ -133,7 +123,7 @@ class QijiaVideoRuntime:
         )
         image_provider = SeedreamImageProvider(
             api_key=settings.ARK_API_KEY,
-            model=settings.QIJIA_VIDEO_SEEDREAM_MODEL,
+            model=PRODUCTION_MODELS.image,
             base_url=settings.QIJIA_VIDEO_SEEDREAM_BASE_URL,
             size=settings.QIJIA_VIDEO_SEEDREAM_SIZE,
             allowed_download_hosts=tuple(
@@ -235,7 +225,7 @@ class QijiaVideoRuntime:
             configured_seedance_model in supported_seedance_models
         )
         if not configured_seedance_supported:
-            missing.append("QIJIA_VIDEO_SEEDANCE_MODEL（不受支持）")
+            missing.append("代码模型目录：video（不受支持）")
             generation_defaults = GenerationSettings()
             active_seedance_model = ""
         else:
@@ -305,40 +295,40 @@ class QijiaVideoRuntime:
             {
                 "key": "script",
                 "stage": "脚本主编",
-                "display_name": _runtime_model_display_name(
+                "display_name": model_display_name(
                     self.script_provider.model
                 ),
                 "model_id": self.script_provider.model,
                 "provider": self.script_provider.name,
                 "detail": "xhigh 初稿 · high 独立审稿 · xhigh 终稿",
-                "configuration_key": "QIJIA_VIDEO_SCRIPT_MODEL",
+                "configuration_source": MODEL_REGISTRY_SOURCE,
             },
             {
                 "key": "director",
                 "stage": "导演视觉开发",
-                "display_name": _runtime_model_display_name(
+                "display_name": model_display_name(
                     self.storyboard_provider.model
                 ),
                 "model_id": self.storyboard_provider.model,
                 "provider": self.storyboard_provider.name,
                 "detail": "xhigh 视觉开发 · xhigh 正式分镜",
-                "configuration_key": "QIJIA_VIDEO_DIRECTOR_MODEL",
+                "configuration_source": MODEL_REGISTRY_SOURCE,
             },
             {
                 "key": "image",
                 "stage": "图片生成",
-                "display_name": _runtime_model_display_name(
+                "display_name": model_display_name(
                     self.image_provider.model
                 ),
                 "model_id": self.image_provider.model,
                 "provider": self.image_provider.name,
                 "detail": f"{self.image_provider.size} 竖屏首帧",
-                "configuration_key": "QIJIA_VIDEO_SEEDREAM_MODEL",
+                "configuration_source": MODEL_REGISTRY_SOURCE,
             },
             {
                 "key": "video",
                 "stage": "视频生成",
-                "display_name": _runtime_model_display_name(
+                "display_name": model_display_name(
                     configured_seedance_model
                 ),
                 "model_id": configured_seedance_model,
@@ -348,19 +338,19 @@ class QijiaVideoRuntime:
                     if configured_seedance_supported
                     else "配置不受支持 · 新任务已阻止"
                 ),
-                "configuration_key": "QIJIA_VIDEO_SEEDANCE_MODEL",
+                "configuration_source": MODEL_REGISTRY_SOURCE,
                 "active_for_new_jobs": configured_seedance_supported,
             },
             {
                 "key": "tts",
                 "stage": "旁白合成",
-                "display_name": _runtime_model_display_name(
+                "display_name": model_display_name(
                     self.tts_provider.resource_id
                 ),
                 "model_id": self.tts_provider.resource_id,
                 "provider": self.tts_provider.name,
                 "detail": "独立旁白音轨 · 默认 Vivi 2.0",
-                "configuration_key": "QIJIA_VIDEO_TTS_RESOURCE_ID",
+                "configuration_source": MODEL_REGISTRY_SOURCE,
             },
         ]
         return {
@@ -464,7 +454,7 @@ class QijiaVideoRuntime:
                 "candidates_per_shot": 1,
                 "chapter_policy": "semantic_adaptive",
                 "max_video_chapters": 3,
-                "model": settings.QIJIA_VIDEO_SEEDREAM_MODEL,
+                "model": self.image_provider.model,
                 "basis": (
                     "每个语义视觉章节生成 1 张；Director Skill 仅在连续动作不可替代时"
                     "把其中最多 3 张作为视频首帧，其余直接动态呈现。"
@@ -477,7 +467,7 @@ class QijiaVideoRuntime:
                     0.0,
                     float(settings.QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS),
                 ),
-                "model": settings.QIJIA_VIDEO_TTS_RESOURCE_ID,
+                "model": self.tts_provider.resource_id,
                 "voices": [dict(item) for item in TTS_VOICE_OPTIONS],
                 "speed_ratios": [
                     {

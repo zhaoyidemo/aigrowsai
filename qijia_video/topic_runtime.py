@@ -18,6 +18,7 @@ from qijia_video.infrastructure.tikhub import (
     evidence_quality_policy,
 )
 from qijia_video.infrastructure.topic_providers import OpenRouterTopicEditor
+from qijia_video.model_registry import PRODUCTION_MODELS
 from qijia_video.settings import settings
 from qijia_video.topic_contracts import TopicResearchRun, TopicResearchStatus
 from qijia_video.topic_service import TopicResearchService
@@ -39,10 +40,6 @@ class TopicRunStart:
 
 class TopicResearchRuntime:
     def __init__(self):
-        model = (
-            settings.QIJIA_TOPIC_RESEARCH_MODEL.strip()
-            or settings.QIJIA_VIDEO_SCRIPT_MODEL.strip()
-        )
         self.data_provider = TikHubDouyinResearchProvider(
             api_key=settings.TIKHUB_API_KEY,
             base_url=settings.TIKHUB_BASE_URL,
@@ -51,7 +48,7 @@ class TopicResearchRuntime:
         self.editor = OpenRouterTopicEditor(
             api_key=settings.OPENROUTER_API_KEY,
             base_url=settings.OPENROUTER_BASE_URL,
-            model=model,
+            model=PRODUCTION_MODELS.topic_editor,
         )
         self.repository = PostgresAggregateRepository()
         self.service = TopicResearchService(

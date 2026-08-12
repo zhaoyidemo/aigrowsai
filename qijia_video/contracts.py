@@ -12,6 +12,12 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
+from qijia_video.model_registry import (
+    DEFAULT_SEEDANCE_MODEL,
+    SEEDANCE_BALANCED_MODEL,
+    SEEDANCE_EFFICIENT_MODEL,
+    SEEDANCE_FLAGSHIP_MODEL,
+)
 from qijia_video.prompts import (
     DEFAULT_SCRIPT_PROMPT,
     DEFAULT_SEEDANCE_PROMPT,
@@ -34,10 +40,6 @@ DEFAULT_PROMPT_ADAPTER_ID = H3_PROMPT_WRITING_PROFILE_ID
 DEFAULT_SCRIPT_SKILL_ID = 'insight-led-scriptwriter'
 DEFAULT_DIRECTOR_SKILL_ID = 'animated-explainer'
 DEFAULT_PROVIDER_ADAPTER_ID = 'seedream-seedance'
-SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-0-pro-fast-251015"
-SEEDANCE_BALANCED_MODEL = "doubao-seedance-1-5-pro-251215"
-SEEDANCE_FLAGSHIP_MODEL = "doubao-seedance-2-0-260128"
-DEFAULT_SEEDANCE_MODEL = SEEDANCE_BALANCED_MODEL
 SeedanceModelId = Literal[
     "doubao-seedance-1-0-pro-fast-251015",
     "doubao-seedance-1-5-pro-251215",

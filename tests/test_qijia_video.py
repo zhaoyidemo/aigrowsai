@@ -3,6 +3,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -84,6 +85,11 @@ from qijia_video.infrastructure.script_providers import (
     STORYBOARD_MAX_COMPLETION_TOKENS,
     _openrouter_completion_limit_key,
 )
+from qijia_video.model_registry import (
+    MODEL_REGISTRY_SOURCE,
+    PRODUCTION_MODELS,
+)
+from qijia_video.settings import QijiaVideoSettings
 from qijia_video.infrastructure.storage import (
     TOS_CONTROL_TIMEOUT_SECONDS,
     TOS_DOWNLOAD_ATTEMPTS,
@@ -5973,6 +5979,31 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         }).to_internal(default_seedance_model=SEEDANCE_BALANCED_MODEL)
         self.assertEqual(explicit_model.seedance_model, SEEDANCE_FLAGSHIP_MODEL)
 
+    def test_concrete_production_models_are_code_owned_not_environment_settings(self):
+        retired_environment_fields = {
+            "QIJIA_VIDEO_RESEARCH_MODEL",
+            "QIJIA_VIDEO_SCRIPT_MODEL",
+            "QIJIA_VIDEO_DIRECTOR_MODEL",
+            "QIJIA_TOPIC_RESEARCH_MODEL",
+            "QIJIA_VIDEO_SEEDREAM_MODEL",
+            "QIJIA_VIDEO_SEEDANCE_MODEL",
+            "QIJIA_VIDEO_TTS_RESOURCE_ID",
+        }
+        self.assertTrue(
+            retired_environment_fields.isdisjoint(QijiaVideoSettings.model_fields)
+        )
+        with patch.dict(os.environ, {
+            "QIJIA_VIDEO_SCRIPT_MODEL": "x-ai/grok-4.5",
+            "QIJIA_VIDEO_SEEDANCE_MODEL": SEEDANCE_FLAGSHIP_MODEL,
+        }):
+            loaded = QijiaVideoSettings(_env_file=None)
+        self.assertFalse(hasattr(loaded, "QIJIA_VIDEO_SCRIPT_MODEL"))
+        self.assertFalse(hasattr(loaded, "QIJIA_VIDEO_SEEDANCE_MODEL"))
+        self.assertEqual(PRODUCTION_MODELS.script, "openai/gpt-5.6-sol")
+        self.assertEqual(PRODUCTION_MODELS.director, "openai/gpt-5.6-sol")
+        self.assertEqual(PRODUCTION_MODELS.topic_editor, "openai/gpt-5.6-sol")
+        self.assertEqual(PRODUCTION_MODELS.video, SEEDANCE_BALANCED_MODEL)
+
     def test_api_and_page_require_independent_permission(self):
         denied = self.client_for({
             "id": 2,
@@ -6026,6 +6057,10 @@ class QijiaVideoPermissionTests(unittest.TestCase):
                 self.assertEqual(
                     runtime_models[key]["model_id"],
                     response.json()["data"][field],
+                )
+                self.assertEqual(
+                    runtime_models[key]["configuration_source"],
+                    MODEL_REGISTRY_SOURCE,
                 )
         self.assertEqual(
             runtime_models["video"]["model_id"],
@@ -6160,7 +6195,7 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         self.assertFalse(video["active_for_new_jobs"])
         self.assertFalse(data["real_generation_ready"])
         self.assertIn(
-            "QIJIA_VIDEO_SEEDANCE_MODEL（不受支持）",
+            "代码模型目录：video（不受支持）",
             data["missing_configuration"],
         )
         self.assertEqual(data["generation_defaults"]["seedance_model"], "")

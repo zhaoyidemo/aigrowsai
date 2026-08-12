@@ -247,7 +247,7 @@ class OpenRouterTopicEditor:
         if not self.api_key:
             errors.append("OPENROUTER_API_KEY")
         if not self.model:
-            errors.append("QIJIA_TOPIC_RESEARCH_MODEL / QIJIA_VIDEO_SCRIPT_MODEL")
+            errors.append("代码模型目录：topic_editor")
         if not (
             parsed.scheme == "https"
             and parsed.netloc
