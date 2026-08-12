@@ -209,7 +209,7 @@ function isNarrationRevisionFailure(job) {
 function generationDefaults() {
   return state.capabilities?.generation_defaults || {
     video_resolution: '1080p',
-    seedance_model: 'doubao-seedance-2-0-260128',
+    seedance_model: '',
     visual_style_id: DEFAULT_VISUAL_STYLE_ID,
     tts_voice_id: 'zh_female_vv_uranus_bigtts', tts_speed_ratio: 1.2,
   };
@@ -309,8 +309,6 @@ function renderVisualStyleSelector(preferredStyleId = '') {
   updateVisualStyleDescription();
 }
 
-const SEEDANCE_EFFICIENT_MODEL = 'doubao-seedance-1-0-pro-fast-251015';
-const SEEDANCE_FLAGSHIP_MODEL = 'doubao-seedance-2-0-260128';
 const DEFAULT_TTS_VOICE_ID = 'zh_female_vv_uranus_bigtts';
 const DEFAULT_TTS_SPEED_RATIO = 1.2;
 const FALLBACK_TTS_VOICES = [
@@ -470,17 +468,7 @@ function narrationPreviewText(script) {
 
 function seedanceModels() {
   const configured = state.capabilities?.seedance_pricing?.models;
-  if (Array.isArray(configured) && configured.length) return configured;
-  return [
-    {
-      id: SEEDANCE_EFFICIENT_MODEL, label: 'Seedance 1.0 Pro Fast',
-      short_label: '1.0 Fast', yuan_per_million_tokens: 4.2, default: false,
-    },
-    {
-      id: SEEDANCE_FLAGSHIP_MODEL, label: 'Seedance 2.0',
-      short_label: '2.0', yuan_per_million_tokens: 46, default: true,
-    },
-  ];
+  return Array.isArray(configured) ? configured : [];
 }
 
 function seedanceModelInfo(modelId) {
@@ -493,7 +481,8 @@ function seedanceModelInfo(modelId) {
 function defaultSeedanceModel() {
   return generationDefaults().seedance_model
     || state.capabilities?.seedance_pricing?.default_model
-    || SEEDANCE_FLAGSHIP_MODEL;
+    || seedanceModels().find((item) => item.default)?.id
+    || '';
 }
 
 function seedanceModelForRequest(job, request, task = null) {
@@ -537,7 +526,41 @@ function updateProductionSpecSummary() {
   const resolution = String($('#video-resolution')?.value || '1080p').toUpperCase();
   const voiceId = normalizedTtsVoiceId($('#tts-voice-id')?.value);
   const speed = normalizedTtsSpeedRatio($('#tts-speed-ratio')?.value).toFixed(1);
-  node.textContent = `${resolution} · 语义自适应分镜 · ${ttsVoiceLabel(voiceId)} ${speed}x`;
+  const videoModel = seedanceModelInfo(defaultSeedanceModel());
+  node.textContent = `${resolution} · ${videoModel?.short_label || 'Seedance'} · ${ttsVoiceLabel(voiceId)} ${speed}x`;
+}
+
+function renderRuntimeModels() {
+  const models = Array.isArray(state.capabilities?.runtime_models)
+    ? state.capabilities.runtime_models
+    : [];
+  const container = $('#runtime-models');
+  const grid = $('#runtime-model-grid');
+  const summary = $('#runtime-model-summary');
+  const note = $('#runtime-model-note');
+  if (!container || !grid || !summary || !note) return;
+  if (!container.dataset.responsiveInitialized) {
+    container.dataset.responsiveInitialized = 'true';
+    if (window.matchMedia('(max-width: 560px)').matches) container.open = false;
+  }
+  if (!models.length) {
+    summary.textContent = '后端未返回模型目录';
+    grid.innerHTML = '<p class="empty">无法确认实际运行模型，请刷新或检查后端版本。</p>';
+    note.textContent = '为避免前后端漂移，页面不会用本地硬编码伪装生产模型。';
+    return;
+  }
+  grid.innerHTML = models.map((model) => `<article class="runtime-model-card" data-runtime-model="${escapeHtml(model.key)}">
+    <span>${escapeHtml(model.stage)}</span>
+    <strong>${escapeHtml(model.display_name)}</strong>
+    <code>${escapeHtml(model.model_id)}</code>
+    <small>${escapeHtml(model.detail)} · ${escapeHtml(model.provider)}</small>
+  </article>`).join('');
+  const script = models.find((item) => item.key === 'script');
+  const video = models.find((item) => item.key === 'video');
+  summary.textContent = [script?.display_name, video?.display_name].filter(Boolean).join(' · ');
+  note.textContent = video?.active_for_new_jobs === false
+    ? `以上模型由 /capabilities 返回；当前视频模型 ${video.model_id} 不受支持，新任务已被后端阻止。`
+    : `以上模型由 /capabilities 返回；新任务视频默认冻结为 ${video?.model_id || '后端当前配置'}，前端不维护第二套生产模型。`;
 }
 
 function setResolutionField(settings) {
@@ -594,10 +617,14 @@ function initializePromptFields() {
 function generationSettingsPayload() {
   const requestedVisualStyle = selectedVisualStyle();
   const videoResolution = $('#video-resolution').value;
+  const seedanceModel = defaultSeedanceModel();
   const ttsVoiceId = normalizedTtsVoiceId($('#tts-voice-id').value);
   const ttsSpeedRatio = normalizedTtsSpeedRatio($('#tts-speed-ratio').value);
   if (!['480p', '720p', '1080p'].includes(videoResolution)) {
     throw new Error('请选择有效的视频画质');
+  }
+  if (!seedanceModel) {
+    throw new Error('后端没有返回可用的视频模型');
   }
   return {
     ...(requestedVisualStyle ? {
@@ -605,7 +632,7 @@ function generationSettingsPayload() {
       visual_style_version: requestedVisualStyle.version,
     } : {}),
     video_resolution: videoResolution,
-    seedance_model: defaultSeedanceModel(),
+    seedance_model: seedanceModel,
     tts_voice_id: ttsVoiceId,
     tts_speed_ratio: ttsSpeedRatio,
   };
@@ -1212,6 +1239,7 @@ function renderCapabilities() {
       : `视频生产待配置：${(data.missing_configuration || []).join('、') || data.renderer?.detail || '配置不完整'}`,
   ];
   node.querySelector('span:last-child').textContent = parts.join(' ｜ ');
+  renderRuntimeModels();
   renderTopicControls();
 }
 
@@ -1737,9 +1765,13 @@ function renderShotInspector(job) {
   );
   const selectedModel = seedanceModelInfo(selectedModelId);
   const modelOptions = seedanceModels().map((model) => {
-    const suffix = model.id === SEEDANCE_FLAGSHIP_MODEL
-      ? ' · 默认高质量'
-      : ' · 经济预览';
+    const suffix = model.default
+      ? ' · 当前默认'
+      : model.tier === 'quality'
+      ? ' · 高质量升级'
+      : model.tier === 'economy'
+      ? ' · 经济预览'
+      : ' · 平衡选择';
     return `<option value="${escapeHtml(model.id)}" ${model.id === selectedModelId ? 'selected' : ''}>${escapeHtml(model.label + suffix)}</option>`;
   }).join('');
   const selectedModelCost = estimatedSeedanceCost(previewRequest, selectedModelId);
@@ -1950,7 +1982,7 @@ function renderShotInspector(job) {
       </label>
       <label class="shot-model-field">生成模型
         <select id="shot-seedance-model" ${canEditAi ? '' : 'disabled'}>${modelOptions}</select>
-        <span class="field-hint">默认使用 Seedance 2.0；只在成本优先的预览场景手动改用 1.0 Pro Fast。</span>
+        <span class="field-hint">默认沿用后端当前生产模型；需要更高质量时可单镜头升级，费用会在提交前显示。</span>
       </label>
       <div class="shot-inspector-actions">
         <button class="button primary" type="button" data-regenerate-shot data-busy-lock ${canEditAi ? '' : 'disabled'}>${regenerateLabel}</button>

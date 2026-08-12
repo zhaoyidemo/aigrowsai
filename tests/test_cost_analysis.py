@@ -12,9 +12,9 @@ from qijia_video.contracts import (
     ProviderTask,
     ProviderTaskState,
     ProviderUsageRecord,
+    SEEDANCE_BALANCED_MODEL,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
-    SEEDANCE_RETIRED_MODEL,
     VideoJob,
 )
 from qijia_video.cost_analysis import (
@@ -497,7 +497,7 @@ class CostAnalysisTests(unittest.TestCase):
                     provider="volcengine-seedance",
                     provider_task_id="task_15",
                     request_fingerprint="e" * 64,
-                    model_id=SEEDANCE_RETIRED_MODEL,
+                    model_id=SEEDANCE_BALANCED_MODEL,
                     state=ProviderTaskState.SUCCEEDED,
                     usage_total_tokens=100000,
                     created_at=NOW_TEXT,
@@ -521,7 +521,7 @@ class CostAnalysisTests(unittest.TestCase):
             now=NOW,
             seedance_model_prices_per_million_tokens={
                 SEEDANCE_EFFICIENT_MODEL: 4.2,
-                SEEDANCE_RETIRED_MODEL: 8,
+                SEEDANCE_BALANCED_MODEL: 8,
                 SEEDANCE_FLAGSHIP_MODEL: 46,
             },
         )
@@ -531,7 +531,7 @@ class CostAnalysisTests(unittest.TestCase):
             {row["model_id"] for row in result["events"]},
             {
                 SEEDANCE_EFFICIENT_MODEL,
-                SEEDANCE_RETIRED_MODEL,
+                SEEDANCE_BALANCED_MODEL,
                 SEEDANCE_FLAGSHIP_MODEL,
             },
         )

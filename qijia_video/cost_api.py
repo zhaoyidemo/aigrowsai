@@ -11,9 +11,9 @@ from fastapi.responses import HTMLResponse
 from qijia_video.auth import get_current_user, require_permission
 from qijia_video.cost_analysis import build_cost_analysis
 from qijia_video.contracts import (
+    SEEDANCE_BALANCED_MODEL,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
-    SEEDANCE_RETIRED_MODEL,
 )
 from qijia_video.errors import QijiaVideoError
 from qijia_video.runtime import actor_from_user, runtime
@@ -92,7 +92,7 @@ async def cost_analysis(
             SEEDANCE_EFFICIENT_MODEL: (
                 settings.QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION
             ),
-            SEEDANCE_RETIRED_MODEL: (
+            SEEDANCE_BALANCED_MODEL: (
                 settings.QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION
             ),
             SEEDANCE_FLAGSHIP_MODEL: (

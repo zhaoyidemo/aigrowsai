@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 知识视频工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.31.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.33.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -106,6 +106,14 @@
       <button class="production-view-tab active" type="button" role="tab" aria-selected="true" data-production-pane="create">新建视频</button>
       <button class="production-view-tab" type="button" role="tab" aria-selected="false" data-production-pane="jobs">视频任务 <span id="production-task-count">0</span></button>
     </div>
+    <details id="runtime-models" class="runtime-models" open>
+      <summary>
+        <span><strong>当前生产模型</strong><small>由后端运行时返回，新任务按这里显示的模型冻结</small></span>
+        <span id="runtime-model-summary">正在读取实际配置…</span>
+      </summary>
+      <div id="runtime-model-grid" class="runtime-model-grid" aria-live="polite"></div>
+      <p id="runtime-model-note" class="runtime-model-note">前端不单独维护生产模型名称。</p>
+    </details>
     <div class="workspace-grid">
       <aside class="left-column" data-production-column="create">
         <section class="panel">
@@ -471,6 +479,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.32.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.33.0"></script>
 </body>
 </html>

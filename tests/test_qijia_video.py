@@ -42,9 +42,10 @@ from qijia_video.contracts import (
     ProviderTaskState,
     ProviderTask,
     ProviderUsageRecord,
+    DEFAULT_SEEDANCE_MODEL,
+    SEEDANCE_BALANCED_MODEL,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
-    SEEDANCE_RETIRED_MODEL,
     VideoJob,
     VisualGenerationRequest,
     content_hash,
@@ -753,7 +754,8 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(settings.image_count, 0)
         self.assertEqual(settings.shot_count, 0)
         self.assertEqual(settings.video_resolution, "1080p")
-        self.assertEqual(settings.seedance_model, SEEDANCE_FLAGSHIP_MODEL)
+        self.assertEqual(settings.seedance_model, DEFAULT_SEEDANCE_MODEL)
+        self.assertEqual(settings.seedance_model, SEEDANCE_BALANCED_MODEL)
         self.assertEqual(
             settings.tts_voice_id,
             "zh_female_vv_uranus_bigtts",
@@ -830,33 +832,33 @@ class QijiaVideoContractTests(unittest.TestCase):
             content_hash(payload),
         )
 
-    def test_unsubmitted_retired_seedance_requests_migrate_without_touching_paid_tasks(self):
-        retired_request = VisualGenerationRequest(
+    def test_seedance_15_jobs_keep_their_frozen_model_without_hidden_fallback(self):
+        balanced_request = VisualGenerationRequest(
             request_id="shot_01",
-            prompt="旧模型未提交成功的镜头",
-            model_id=SEEDANCE_RETIRED_MODEL,
+            prompt="测试期默认模型镜头",
+            model_id=SEEDANCE_BALANCED_MODEL,
             resolution="1080p",
         )
         base_payload = {
-            "id": "retired-seedance-job",
+            "id": "balanced-seedance-job",
             "state": "failed",
             "source_card_id": "card_01",
             "source_card_revision": 1,
             "source_card_snapshot": {},
             "generation_settings": {
-                "seedance_model": SEEDANCE_RETIRED_MODEL,
+                "seedance_model": SEEDANCE_BALANCED_MODEL,
             },
-            "visual_requests": [retired_request.model_dump(mode="json")],
+            "visual_requests": [balanced_request.model_dump(mode="json")],
         }
 
         unsubmitted = VideoJob.model_validate(base_payload)
         self.assertEqual(
             unsubmitted.generation_settings.seedance_model,
-            SEEDANCE_EFFICIENT_MODEL,
+            SEEDANCE_BALANCED_MODEL,
         )
         self.assertEqual(
             unsubmitted.visual_requests[0].model_id,
-            SEEDANCE_EFFICIENT_MODEL,
+            SEEDANCE_BALANCED_MODEL,
         )
 
         new_draft = VideoJob(
@@ -866,31 +868,31 @@ class QijiaVideoContractTests(unittest.TestCase):
                 if key not in {"generation_settings", "visual_requests"}
             },
             generation_settings=GenerationSettings(
-                seedance_model=SEEDANCE_RETIRED_MODEL,
+                seedance_model=SEEDANCE_BALANCED_MODEL,
             ),
         )
         self.assertEqual(
             new_draft.generation_settings.seedance_model,
-            SEEDANCE_EFFICIENT_MODEL,
+            SEEDANCE_BALANCED_MODEL,
         )
 
         submitted_payload = dict(base_payload)
         submitted_payload["video_tasks"] = [{
             "provider": "volcengine-seedance",
             "provider_task_id": "paid_task_01",
-            "request_fingerprint": retired_request.fingerprint(),
-            "request_id": retired_request.request_id,
-            "model_id": SEEDANCE_RETIRED_MODEL,
+            "request_fingerprint": balanced_request.fingerprint(),
+            "request_id": balanced_request.request_id,
+            "model_id": SEEDANCE_BALANCED_MODEL,
             "state": "running",
         }]
         submitted = VideoJob.model_validate(submitted_payload)
         self.assertEqual(
             submitted.generation_settings.seedance_model,
-            SEEDANCE_RETIRED_MODEL,
+            SEEDANCE_BALANCED_MODEL,
         )
         self.assertEqual(
             submitted.visual_requests[0].model_id,
-            SEEDANCE_RETIRED_MODEL,
+            SEEDANCE_BALANCED_MODEL,
         )
 
     def test_default_seedance_prompt_is_only_a_visual_style(self):
@@ -3383,7 +3385,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(job.director_skill_snapshot.version, "2.1.0")
         self.assertEqual(job.provider_adapter_snapshot.version, "2.0.0")
-        self.assertEqual(job.generation_settings.seedance_model, SEEDANCE_FLAGSHIP_MODEL)
+        self.assertEqual(job.generation_settings.seedance_model, SEEDANCE_BALANCED_MODEL)
 
         job = await self.service.generate_script(job.id, self.actor)
         self.assertEqual(job.state, JobState.SCRIPT_REVIEW_REQUIRED)
@@ -4769,7 +4771,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("最高且唯一视觉基准", versions[1].request.prompt)
         self.assertIn("不要生成对白、音乐、音效和旁白", versions[1].request.prompt)
         self.assertIsNotNone(versions[1].request.seed)
-        self.assertEqual(versions[0].request.model_id, SEEDANCE_FLAGSHIP_MODEL)
+        self.assertEqual(versions[0].request.model_id, SEEDANCE_BALANCED_MODEL)
         self.assertEqual(versions[1].request.model_id, SEEDANCE_FLAGSHIP_MODEL)
         selected = next(
             item for item in job.visual_requests if item.request_id == shot_id
@@ -5771,7 +5773,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(requests), 3)
         self.assertTrue(all(
             request.resolution == "1080p"
-            and request.model_id == SEEDANCE_FLAGSHIP_MODEL
+            and request.model_id == SEEDANCE_BALANCED_MODEL
             and 8 <= request.duration_seconds <= 10
             for request in requests
         ))
@@ -5956,11 +5958,20 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         internal = qijia_api.CreateGenerationSettings.model_validate({
             "visual_style_id": "paper-collage-explainer",
             "visual_style_version": "1.1.0",
-        }).to_internal()
+        }).to_internal(default_seedance_model=SEEDANCE_BALANCED_MODEL)
         self.assertEqual(internal.visual_style_id, "paper-collage-explainer")
         self.assertEqual(internal.visual_style_version, "1.1.0")
+        self.assertEqual(internal.seedance_model, SEEDANCE_BALANCED_MODEL)
         self.assertEqual(internal.script_skill_id, "insight-led-scriptwriter")
         self.assertEqual(internal.director_skill_id, "")
+        runtime_default = qijia_api.CreateGenerationSettings().to_internal(
+            default_seedance_model=SEEDANCE_EFFICIENT_MODEL,
+        )
+        self.assertEqual(runtime_default.seedance_model, SEEDANCE_EFFICIENT_MODEL)
+        explicit_model = qijia_api.CreateGenerationSettings.model_validate({
+            "seedance_model": SEEDANCE_FLAGSHIP_MODEL,
+        }).to_internal(default_seedance_model=SEEDANCE_BALANCED_MODEL)
+        self.assertEqual(explicit_model.seedance_model, SEEDANCE_FLAGSHIP_MODEL)
 
     def test_api_and_page_require_independent_permission(self):
         denied = self.client_for({
@@ -5994,7 +6005,35 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         )
         self.assertEqual(
             response.json()["data"]["generation_defaults"]["seedance_model"],
-            SEEDANCE_FLAGSHIP_MODEL,
+            SEEDANCE_BALANCED_MODEL,
+        )
+        runtime_models = {
+            item["key"]: item
+            for item in response.json()["data"]["runtime_models"]
+        }
+        self.assertEqual(
+            set(runtime_models),
+            {"script", "director", "image", "video", "tts"},
+        )
+        for key, field in (
+            ("script", "script_model"),
+            ("director", "director_model"),
+            ("image", "image_model"),
+            ("video", "video_model"),
+            ("tts", "tts_model"),
+        ):
+            with self.subTest(runtime_model=key):
+                self.assertEqual(
+                    runtime_models[key]["model_id"],
+                    response.json()["data"][field],
+                )
+        self.assertEqual(
+            runtime_models["video"]["model_id"],
+            response.json()["data"]["generation_defaults"]["seedance_model"],
+        )
+        self.assertEqual(
+            response.json()["data"]["seedance_pricing"]["default_model"],
+            SEEDANCE_BALANCED_MODEL,
         )
         self.assertNotIn(
             "seedance_prompt",
@@ -6054,14 +6093,22 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         self.assertTrue(tts_pricing["preview_cost_confirmation_required"])
         self.assertEqual(
             response.json()["data"]["seedance_pricing"]["yuan_per_million_tokens"],
-            4.2,
+            8.0,
         )
         self.assertEqual(
             [
                 item["yuan_per_million_tokens"]
                 for item in response.json()["data"]["seedance_pricing"]["models"]
             ],
-            [4.2, 46.0],
+            [4.2, 8.0, 46.0],
+        )
+        self.assertEqual(
+            [
+                item["id"]
+                for item in response.json()["data"]["seedance_pricing"]["models"]
+                if item["default"]
+            ],
+            [SEEDANCE_BALANCED_MODEL],
         )
         self.assertEqual(
             response.json()["data"]["seedream_pricing"]["candidates_per_shot"],
@@ -6087,6 +6134,40 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         )
         self.assertNotIn("frame_evaluator", response.json()["data"])
         self.assertEqual(allowed.get("/qijia-video").status_code, 200)
+
+    def test_unsupported_runtime_video_model_is_exposed_and_never_disguised(self):
+        allowed = self.client_for({
+            "id": 3,
+            "username": "editor",
+            "role": "member",
+            "permissions": ["qijia_video"],
+        })
+        original_model = qijia_api.runtime.video_provider.model
+        unsupported_model = "doubao-seedance-unknown"
+        try:
+            qijia_api.runtime.video_provider.model = unsupported_model
+            response = allowed.get("/api/qijia-video/capabilities")
+        finally:
+            qijia_api.runtime.video_provider.model = original_model
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        video = next(
+            item for item in data["runtime_models"] if item["key"] == "video"
+        )
+        self.assertEqual(data["video_model"], unsupported_model)
+        self.assertEqual(video["model_id"], unsupported_model)
+        self.assertFalse(video["active_for_new_jobs"])
+        self.assertFalse(data["real_generation_ready"])
+        self.assertIn(
+            "QIJIA_VIDEO_SEEDANCE_MODEL（不受支持）",
+            data["missing_configuration"],
+        )
+        self.assertEqual(data["generation_defaults"]["seedance_model"], "")
+        self.assertEqual(data["seedance_pricing"]["default_model"], "")
+        self.assertFalse(any(
+            item["default"] for item in data["seedance_pricing"]["models"]
+        ))
 
 
 if __name__ == "__main__":

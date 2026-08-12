@@ -4,4 +4,4 @@
 """
 
 MODULE_NAME = "qijia_video"
-MODULE_VERSION = "1.31.0"
+MODULE_VERSION = "1.33.0"

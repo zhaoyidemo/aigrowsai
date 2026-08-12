@@ -147,6 +147,21 @@ button:focus-visible { outline: 3px solid rgba(49,95,86,.2); outline-offset: 2px
 .panel h3 { font-size: 16px; }
 .panel-note, .empty { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .intake-intro { margin: -2px 0 16px; max-width: 42em; }
+.runtime-models { margin: 0 0 18px; border: 1px solid #c9d8d3; border-radius: 10px; background: #f3f8f6; }
+.runtime-models > summary { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 11px 12px; cursor: pointer; list-style: none; }
+.runtime-models > summary::-webkit-details-marker { display: none; }
+.runtime-models > summary > span:first-child { display: grid; gap: 2px; }
+.runtime-models > summary strong { color: #294b43; font-size: 13px; }
+.runtime-models > summary small { color: #667872; font-size: 9px; line-height: 1.45; }
+.runtime-models > summary > span:last-child { color: #315f56; font-size: 10px; font-weight: 750; text-align: right; }
+.runtime-model-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; border-top: 1px solid #d6e1dd; padding: 10px 10px 0; }
+.runtime-model-card { min-width: 0; border: 1px solid #d8e2de; border-radius: 8px; padding: 9px; background: rgba(255,255,255,.78); }
+.runtime-model-card > span, .runtime-model-card > strong, .runtime-model-card > code, .runtime-model-card > small { display: block; }
+.runtime-model-card > span { color: #6b7975; font-size: 9px; font-weight: 750; letter-spacing: .05em; }
+.runtime-model-card > strong { margin-top: 4px; color: #2d4942; font-size: 12px; line-height: 1.35; }
+.runtime-model-card > code { margin-top: 5px; overflow-wrap: anywhere; color: #53615d; font-size: 9px; line-height: 1.4; }
+.runtime-model-card > small { margin-top: 5px; color: #77827f; font-size: 9px; line-height: 1.4; }
+.runtime-model-note { margin: 8px 11px 10px; color: #5e716b; font-size: 9px; line-height: 1.5; }
 .production-view-tabs { display: none; }
 .creation-choice { display: grid; gap: 9px; margin-top: 18px; }
 .visual-style-setting { min-width: 0; }
@@ -702,6 +717,7 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
 .cost-pricing-row a:hover { text-decoration: underline; }
 .cost-note-list { display: grid; gap: 8px; margin: 0; padding-left: 18px; color: #596267; font-size: 10px; line-height: 1.6; }
 @media (max-width: 900px) {
+  .runtime-model-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .topic-workspace-grid { grid-template-columns: 1fr; }
   .production-view-tabs { display: flex; gap: 4px; margin: 0 0 12px; border: 1px solid #d8d4cb; border-radius: 10px; padding: 4px; background: #ece9e1; }
   .production-view-tab { flex: 1; min-height: 40px; border: 0; border-radius: 7px; color: #68716f; background: transparent; cursor: pointer; font-size: 12px; font-weight: 720; }
@@ -720,6 +736,9 @@ video { display: block; width: min(100%, 420px); max-height: 70vh; margin: 0 aut
   .storyboard-layout.inspector-open { grid-template-columns: minmax(0, 1fr) minmax(250px, 300px); }
 }
 @media (max-width: 560px) {
+  .runtime-models > summary { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .runtime-models > summary > span:last-child { text-align: left; }
+  .runtime-model-grid { grid-template-columns: 1fr; }
   .video-quality-setting { grid-template-columns: 1fr; }
   .creation-choice-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
   .creation-choice-heading small { text-align: left; }

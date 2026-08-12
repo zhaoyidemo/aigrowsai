@@ -14,9 +14,9 @@ from qijia_video.contracts import (
     Actor,
     AssetRef,
     GenerationSettings,
+    SEEDANCE_BALANCED_MODEL,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
-    SEEDANCE_RETIRED_MODEL,
 )
 from qijia_video.cost_analysis import USD_TO_CNY_RATE
 from qijia_video.errors import InvalidTransition
@@ -44,6 +44,21 @@ from qijia_video.tts_options import (
     TTS_SPEED_TO_PROVIDER_RATE,
     TTS_VOICE_OPTIONS,
 )
+
+
+def _runtime_model_display_name(model_id: str) -> str:
+    """Return a friendly label only when it exactly matches the loaded ID."""
+
+    normalized = str(model_id or "").strip()
+    return {
+        "openai/gpt-5.6-sol": "GPT-5.6 Sol",
+        "openai/gpt-5.6-terra": "GPT-5.6 Terra",
+        "doubao-seedream-5-0-lite-260128": "Seedream 5.0 Lite",
+        SEEDANCE_EFFICIENT_MODEL: "Seedance 1.0 Pro Fast",
+        SEEDANCE_BALANCED_MODEL: "Seedance 1.5 Pro",
+        SEEDANCE_FLAGSHIP_MODEL: "Seedance 2.0",
+        "seed-tts-2.0": "Seed-TTS 2.0",
+    }.get(normalized, normalized or "未配置")
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -169,7 +184,7 @@ class QijiaVideoRuntime:
                 SEEDANCE_EFFICIENT_MODEL: (
                     settings.QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION
                 ),
-                SEEDANCE_RETIRED_MODEL: (
+                SEEDANCE_BALANCED_MODEL: (
                     settings.QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION
                 ),
                 SEEDANCE_FLAGSHIP_MODEL: (
@@ -210,22 +225,155 @@ class QijiaVideoRuntime:
         # the real Web workflow (on Railway or a developer machine).
         if self.storage.name != "tos":
             missing.append("QIJIA_VIDEO_STORAGE=tos")
+        supported_seedance_models = {
+            SEEDANCE_EFFICIENT_MODEL,
+            SEEDANCE_BALANCED_MODEL,
+            SEEDANCE_FLAGSHIP_MODEL,
+        }
+        configured_seedance_model = self.video_provider.model
+        configured_seedance_supported = (
+            configured_seedance_model in supported_seedance_models
+        )
+        if not configured_seedance_supported:
+            missing.append("QIJIA_VIDEO_SEEDANCE_MODEL（不受支持）")
+            generation_defaults = GenerationSettings()
+            active_seedance_model = ""
+        else:
+            generation_defaults = GenerationSettings(
+                seedance_model=configured_seedance_model,
+            )
+            active_seedance_model = configured_seedance_model
         generation_ready = not missing
-        generation_defaults = GenerationSettings()
         public_generation_defaults = {
             "visual_style_id": generation_defaults.visual_style_id,
             "visual_style_version": generation_defaults.visual_style_version,
             "video_resolution": generation_defaults.video_resolution,
             "tts_voice_id": generation_defaults.tts_voice_id,
             "tts_speed_ratio": generation_defaults.tts_speed_ratio,
-            "seedance_model": generation_defaults.seedance_model,
+            "seedance_model": active_seedance_model,
         }
+        seedance_prices = {
+            SEEDANCE_EFFICIENT_MODEL: max(
+                0.0,
+                float(settings.QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION),
+            ),
+            SEEDANCE_BALANCED_MODEL: max(
+                0.0,
+                float(settings.QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION),
+            ),
+            SEEDANCE_FLAGSHIP_MODEL: max(
+                0.0,
+                float(settings.QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION),
+            ),
+        }
+        seedance_catalog = [
+            {
+                "id": SEEDANCE_EFFICIENT_MODEL,
+                "label": "Seedance 1.0 Pro Fast",
+                "short_label": "1.0 Fast",
+                "yuan_per_million_tokens": seedance_prices[
+                    SEEDANCE_EFFICIENT_MODEL
+                ],
+                "tier": "economy",
+                "default": active_seedance_model
+                == SEEDANCE_EFFICIENT_MODEL,
+            },
+            {
+                "id": SEEDANCE_BALANCED_MODEL,
+                "label": "Seedance 1.5 Pro",
+                "short_label": "1.5 Pro",
+                "yuan_per_million_tokens": seedance_prices[
+                    SEEDANCE_BALANCED_MODEL
+                ],
+                "tier": "balanced",
+                "default": active_seedance_model
+                == SEEDANCE_BALANCED_MODEL,
+            },
+            {
+                "id": SEEDANCE_FLAGSHIP_MODEL,
+                "label": "Seedance 2.0",
+                "short_label": "2.0",
+                "yuan_per_million_tokens": seedance_prices[
+                    SEEDANCE_FLAGSHIP_MODEL
+                ],
+                "tier": "quality",
+                "default": active_seedance_model
+                == SEEDANCE_FLAGSHIP_MODEL,
+            },
+        ]
+        runtime_models = [
+            {
+                "key": "script",
+                "stage": "脚本主编",
+                "display_name": _runtime_model_display_name(
+                    self.script_provider.model
+                ),
+                "model_id": self.script_provider.model,
+                "provider": self.script_provider.name,
+                "detail": "xhigh 初稿 · high 独立审稿 · xhigh 终稿",
+                "configuration_key": "QIJIA_VIDEO_SCRIPT_MODEL",
+            },
+            {
+                "key": "director",
+                "stage": "导演视觉开发",
+                "display_name": _runtime_model_display_name(
+                    self.storyboard_provider.model
+                ),
+                "model_id": self.storyboard_provider.model,
+                "provider": self.storyboard_provider.name,
+                "detail": "xhigh 视觉开发 · xhigh 正式分镜",
+                "configuration_key": "QIJIA_VIDEO_DIRECTOR_MODEL",
+            },
+            {
+                "key": "image",
+                "stage": "图片生成",
+                "display_name": _runtime_model_display_name(
+                    self.image_provider.model
+                ),
+                "model_id": self.image_provider.model,
+                "provider": self.image_provider.name,
+                "detail": f"{self.image_provider.size} 竖屏首帧",
+                "configuration_key": "QIJIA_VIDEO_SEEDREAM_MODEL",
+            },
+            {
+                "key": "video",
+                "stage": "视频生成",
+                "display_name": _runtime_model_display_name(
+                    configured_seedance_model
+                ),
+                "model_id": configured_seedance_model,
+                "provider": self.video_provider.name,
+                "detail": (
+                    "测试期默认 · 无声生成 · 每任务冻结"
+                    if configured_seedance_supported
+                    else "配置不受支持 · 新任务已阻止"
+                ),
+                "configuration_key": "QIJIA_VIDEO_SEEDANCE_MODEL",
+                "active_for_new_jobs": configured_seedance_supported,
+            },
+            {
+                "key": "tts",
+                "stage": "旁白合成",
+                "display_name": _runtime_model_display_name(
+                    self.tts_provider.resource_id
+                ),
+                "model_id": self.tts_provider.resource_id,
+                "provider": self.tts_provider.name,
+                "detail": "独立旁白音轨 · 默认 Vivi 2.0",
+                "configuration_key": "QIJIA_VIDEO_TTS_RESOURCE_ID",
+            },
+        ]
         return {
             "module": "qijia_video",
             "mode": "quality-first-creative-pipeline",
             "pipeline_version": "v4",
             "script_provider": self.script_provider.name,
             "script_model": self.script_provider.model,
+            "director_model": self.storyboard_provider.model,
+            "image_model": self.image_provider.model,
+            "video_model": configured_seedance_model,
+            "tts_model": self.tts_provider.resource_id,
+            "runtime_models": runtime_models,
             "knowledge_mode": "model_knowledge",
             "external_retrieval": False,
             "storyboard_provider": self.storyboard_provider.name,
@@ -289,43 +437,19 @@ class QijiaVideoRuntime:
             },
             "seedance_pricing": {
                 "currency": "CNY",
-                "yuan_per_million_tokens": max(
+                "yuan_per_million_tokens": seedance_prices.get(
+                    active_seedance_model,
                     0.0,
-                    float(
-                        settings.QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION
-                    ),
                 ),
-                "default_model": SEEDANCE_FLAGSHIP_MODEL,
+                "default_model": active_seedance_model,
                 "economy_model": SEEDANCE_EFFICIENT_MODEL,
-                "models": [
-                    {
-                        "id": SEEDANCE_EFFICIENT_MODEL,
-                        "label": "Seedance 1.0 Pro Fast",
-                        "short_label": "1.0 Fast",
-                        "yuan_per_million_tokens": max(
-                            0.0,
-                            float(
-                                settings.QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION
-                            ),
-                        ),
-                        "default": False,
-                    },
-                    {
-                        "id": SEEDANCE_FLAGSHIP_MODEL,
-                        "label": "Seedance 2.0",
-                        "short_label": "2.0",
-                        "yuan_per_million_tokens": max(
-                            0.0,
-                            float(
-                                settings.QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION
-                            ),
-                        ),
-                        "default": True,
-                    },
-                ],
+                "quality_model": SEEDANCE_FLAGSHIP_MODEL,
+                "models": seedance_catalog,
                 "basis": (
                     "1.0 Pro Fast 无声视频 "
                     f"¥{float(settings.QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION):g}"
+                    "/百万 tokens；1.5 Pro 无声视频 "
+                    f"¥{float(settings.QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION):g}"
                     "/百万 tokens；2.0 无视频输入 "
                     f"¥{float(settings.QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION):g}"
                     "/百万 tokens；均为按量刊例价估算，实际账单以火山方舟为准"
@@ -386,7 +510,7 @@ class QijiaVideoRuntime:
                 (
                     "新任务按完整脚本中的语义变化规划视觉章节，不再凑固定镜头数；"
                     "图片为默认媒介，连续动作不可替代时最多安排 3 段 AI 视频，"
-                    "复杂镜头可单独升级 Seedance 2.0"
+                    "测试期默认 Seedance 1.5 Pro，复杂镜头可单独升级 Seedance 2.0"
                 ),
                 "参考图约束其中已定义的视觉属性；无参考图时由所选视觉表现完整定义画风",
                 "最终由 Remotion 按任务所选的 480P、720P 或 1080P 画质合成竖屏成片",

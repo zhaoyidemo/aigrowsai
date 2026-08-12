@@ -11,7 +11,7 @@
 - OpenRouter 传输层：按模型家族编译完成长度参数；OpenAI GPT-5.x 使用 `max_completion_tokens`，Grok/Anthropic 兼容路径使用 `max_tokens`。结构化输出直接依赖模型端严格 JSON Schema，不再叠加 `response-healing` 插件；`require_parameters` 只筛选真正支持这些参数的同模型端点。
 - Visual Style：三套风格只定义资产、材质、造型、色彩、构图、运动语法和验收标准，不选择论点，也不改写导演事件。
 - H3 Provider Adapter：只在脚本与导演之后工作，把参考图职责整理为多模态 Context IR，并把冻结的导演产物编译为 Seedream/Seedance 自然语言提示词；不参与脚本创作。
-- 媒体生产：先生成三张视觉开发样片，由编辑锁定一张，再为未上传自有素材的章节调用 Seedream 5 Lite 和默认 Seedance 2.0。样片确认是正式批量生成前唯一新增的人工质量门。
+- 媒体生产：先生成三张视觉开发样片，由编辑锁定一张，再为未上传自有素材的章节调用 Seedream 5 Lite 和测试期默认 Seedance 1.5 Pro。样片确认是正式批量生成前唯一新增的人工质量门。
 
 两种纸艺 Visual Style 与 H3 Provider Adapter 借鉴了 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 的多模态提示词结构、参考职责分离、纸张拼贴与纸艺定格方法；这里只借鉴方法，不耦合 MiniMax 模型，也不新增 MiniMax API Key。`animated-explainer@2.1.0` 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中具体事件、调度、摄影机与连续性原则，不引入其研究、脚本、语音或 CLI 链路。
 
@@ -39,7 +39,7 @@
   → 图片为默认媒介；仅在连续动作不可替代时使用视频，全片最多 3 段但不要求凑满
   → H3 Provider Adapter 编译三张 Seedream 视觉开发样片 → 人工锁定一张
   → 按文字分镜连续上传自有图片 / 视频，并一次确认视觉与素材安排
-  → H3 Provider Adapter 只为未上传素材的章节编译 Seedream 5 Lite / Seedance 2.0 提示词
+  → H3 Provider Adapter 只为未上传素材的章节编译 Seedream 5 Lite / Seedance 1.5 Pro 提示词
   → Remotion 合成 480P / 720P / 1080P 竖屏成片（新任务默认 1080P）
   → 人工混合制作：逐镜头保留 AI，或连续上传自有图片 / 视频并暂存修改
   → 一次应用全部待处理镜头，只重新合成和自动质检 1 次
@@ -106,12 +106,12 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 - TikHub：选题研究和抖音效果回流都逐次保存成功/失败、端点和请求 ID，按成功请求规划价估算；原始美元金额在报表中固定按 `1 USD = ¥6.7` 换算。
 - OpenRouter：选题编辑、脚本生成和分镜生成逐次保存 Token，并使用非流式响应内的 `usage.cost` 作为供应商回传金额；记录动作先于下游 JSON 和质量门禁，报表按固定汇率换算人民币。
 - Seedream：按成功生成图片数保存当次 CNY 单价快照；失败或结果未知的请求保留为待对账。
-- Seedance：v4 新任务默认使用 2.0 无声模型；1.0 Pro Fast 只作为编辑主动选择的经济预览选项。每次请求冻结模型，并按该模型的 `usage.total_tokens` 和 CNY 刊例价保存成本快照。1.5 Pro 仅用于兼容已取得 Provider Task ID 的历史任务；从未取得任务 ID 的失败请求会安全迁移到 1.0 Pro Fast。未知提交也保留为待对账。
+- Seedance：测试期由后端 `QIJIA_VIDEO_SEEDANCE_MODEL` 唯一决定新任务默认模型，当前为 1.5 Pro 无声模式；1.0 Pro Fast 是更低成本选项，2.0 是单镜头高质量升级选项。前端从 `/capabilities` 读取同一值并展示，不维护第二套默认。每次请求冻结模型，并按该模型的 `usage.total_tokens` 和 CNY 刊例价保存成本快照；失败不会偷偷切换模型，未知提交保留为待对账。
 - 豆包语音：逐个实际合成请求保存发送字符数，按当次 CNY 单价快照估算；音频返回后即入账，不受后续本地音频处理结果影响。
 
 报表只显示人民币，“已计成本”统一计算为：`供应商回传金额 + 有计价依据的估算`。所有原始 USD 成本固定按 `1 USD = ¥6.7` 换算，底层账本仍保存供应商原始币种和金额，便于对账。供应商未回传金额、Token 缺失或网络结果未知的调用显示为“待对账”，不会按 0 元伪装成完整成本。页面提供团队效果、10 倍目标进度、视频排行、时间趋势、供应商、生产阶段、创建人、每项内容、最近调用明细，以及成本与效果两份 CSV 导出。
 
-默认估算依据为 TikHub 选题研究及短链解析 `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、TikHub 抖音效果回流 `$0.002/成功请求`（`¥0.0134/成功请求`）、Seedream `¥0.22/张`、Seedance 1.0 Pro Fast 无声视频 `¥4.2/百万 tokens`、Seedance 1.5 Pro 历史无声视频 `¥8/百万 tokens`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。OpenRouter 的供应商响应金额同样按固定汇率换算。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) 和[火山引擎豆包大模型计价](https://www.volcengine.com/product/doubao/)为准。
+默认估算依据为 TikHub 选题研究及短链解析 `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、TikHub 抖音效果回流 `$0.002/成功请求`（`¥0.0134/成功请求`）、Seedream `¥0.22/张`、Seedance 1.0 Pro Fast 无声视频 `¥4.2/百万 tokens`、Seedance 1.5 Pro 无声视频 `¥8/百万 tokens`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。OpenRouter 的供应商响应金额同样按固定汇率换算。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) 和[火山引擎豆包大模型计价](https://www.volcengine.com/product/doubao/)为准。
 
 范围刻意只包含模型与数据 API，不包含 Railway、TOS、带宽、人工、税费和购买积分手续费。账本上线前的脚本与分镜没有持久化 OpenRouter `usage`，无法可靠反推；历史图片、视频和语音仅在有保存产物或 Token 时按当前配置补算，并明确标记为历史估算。
 
@@ -212,7 +212,7 @@ node --test tests/qijia_video_frontend.test.js
 npm.cmd run typecheck --prefix video_renderer
 ```
 
-真实部署验收至少包括：登录，用统一创作请求检查 `pipeline_version=v4`、原始输入逐字冻结、`skill_snapshot=null`、`prompt_adapter_snapshot=null` 且没有外部检索；确认脚本产生“初稿 xhigh、独立审稿 high、主编重写 xhigh”三条 OpenRouter 用量记录。人工确认脚本后，核对两阶段 Director 产物、三张视觉样片和样片选择门；确认样片前不得出现正式首帧或 Seedance 请求。随后验证自有素材跳过对应 AI 生成、Seedance 2.0 默认、Remotion 成片、发布包、成本数据、服务重启恢复及 v1/v2/v3 历史任务读取。
+真实部署验收至少包括：登录，确认创建页“当前生产模型”与 `/capabilities.runtime_models` 完全一致；用统一创作请求检查 `pipeline_version=v4`、原始输入逐字冻结、`skill_snapshot=null`、`prompt_adapter_snapshot=null` 且没有外部检索；确认脚本产生“初稿 xhigh、独立审稿 high、主编重写 xhigh”三条 OpenRouter 用量记录。人工确认脚本后，核对两阶段 Director 产物、三张视觉样片和样片选择门；确认样片前不得出现正式首帧或 Seedance 请求。随后验证自有素材跳过对应 AI 生成、测试期 Seedance 1.5 Pro 默认且方舟真实可提交、Remotion 成片、发布包、成本数据、服务重启恢复及 v1/v2/v3 历史任务读取。
 
 ## 数据边界
 

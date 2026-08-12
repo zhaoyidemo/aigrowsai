@@ -9,9 +9,9 @@ from typing import Callable
 from qijia_video.contracts import (
     BEIJING_TZ,
     ProviderUsageRecord,
+    SEEDANCE_BALANCED_MODEL,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
-    SEEDANCE_RETIRED_MODEL,
     VideoJob,
 )
 from qijia_video.topic_contracts import TopicResearchRun
@@ -550,7 +550,7 @@ def build_video_job_cost_summary(
 
     model_prices = {
         SEEDANCE_EFFICIENT_MODEL: 4.2,
-        SEEDANCE_RETIRED_MODEL: 8.0,
+        SEEDANCE_BALANCED_MODEL: 8.0,
         SEEDANCE_FLAGSHIP_MODEL: 46.0,
     }
     model_prices.update({
@@ -940,7 +940,7 @@ def build_cost_analysis(
     cutoff = current - timedelta(days=safe_days) if safe_days else None
     model_prices = {
         SEEDANCE_EFFICIENT_MODEL: 4.2,
-        SEEDANCE_RETIRED_MODEL: 8.0,
+        SEEDANCE_BALANCED_MODEL: 8.0,
         SEEDANCE_FLAGSHIP_MODEL: 46.0,
     }
     model_prices.update({
@@ -1163,9 +1163,9 @@ def build_cost_analysis(
                 "source": "https://www.volcengine.com/product/doubao/",
             },
             {
-                "provider": "Seedance 1.5 Pro（历史）",
+                "provider": "Seedance 1.5 Pro",
                 "rate": (
-                    f"¥{model_prices[SEEDANCE_RETIRED_MODEL]:g}/百万 tokens"
+                    f"¥{model_prices[SEEDANCE_BALANCED_MODEL]:g}/百万 tokens"
                     "（无声视频）"
                 ),
                 "currency": "CNY",

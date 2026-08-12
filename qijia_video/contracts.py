@@ -35,8 +35,9 @@ DEFAULT_SCRIPT_SKILL_ID = 'insight-led-scriptwriter'
 DEFAULT_DIRECTOR_SKILL_ID = 'animated-explainer'
 DEFAULT_PROVIDER_ADAPTER_ID = 'seedream-seedance'
 SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-0-pro-fast-251015"
-SEEDANCE_RETIRED_MODEL = "doubao-seedance-1-5-pro-251215"
+SEEDANCE_BALANCED_MODEL = "doubao-seedance-1-5-pro-251215"
 SEEDANCE_FLAGSHIP_MODEL = "doubao-seedance-2-0-260128"
+DEFAULT_SEEDANCE_MODEL = SEEDANCE_BALANCED_MODEL
 SeedanceModelId = Literal[
     "doubao-seedance-1-0-pro-fast-251015",
     "doubao-seedance-1-5-pro-251215",
@@ -1203,9 +1204,9 @@ class GenerationSettings(ContractModel):
     video_resolution: Literal["480p", "720p", "1080p"] = "1080p"
     tts_voice_id: TtsVoiceId = DEFAULT_TTS_VOICE_ID
     tts_speed_ratio: TtsSpeedRatio = DEFAULT_TTS_SPEED_RATIO
-    # Quality-first tasks use Seedance 2.0 by default. 1.0 Pro Fast remains
-    # available as an explicit preview/cost-saving choice.
-    seedance_model: SeedanceModelId = SEEDANCE_FLAGSHIP_MODEL
+    # Testing defaults to the lower-cost Seedance 1.5 Pro model. The model ID
+    # is frozen per job so a later production upgrade cannot rewrite history.
+    seedance_model: SeedanceModelId = DEFAULT_SEEDANCE_MODEL
     image_count: int = Field(
         default=0,
         ge=0,
@@ -1961,7 +1962,7 @@ class VideoJob(ContractModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_legacy_generation_settings(cls, value: Any) -> Any:
-        """Preserve paid history while migrating requests never submitted."""
+        """Fill fields absent from persisted jobs without changing their model."""
         if not isinstance(value, dict):
             return value
         raw_settings = value.get("generation_settings")
@@ -1986,47 +1987,11 @@ class VideoJob(ContractModel):
             # Existing jobs were synthesized at the provider's normal speed.
             additions["tts_speed_ratio"] = LEGACY_TTS_SPEED_RATIO
 
-        def provider_task_id(item: Any) -> str:
-            if isinstance(item, dict):
-                return str(item.get("provider_task_id") or "").strip()
-            return str(getattr(item, "provider_task_id", "") or "").strip()
-
-        submitted_tasks = list(value.get("video_tasks") or [])
-        for version in value.get("visual_versions") or []:
-            task = (
-                version.get("task")
-                if isinstance(version, dict)
-                else getattr(version, "task", None)
-            )
-            if task is not None:
-                submitted_tasks.append(task)
-        migrate_unsubmitted_retired_model = (
-            settings.get("seedance_model") == SEEDANCE_RETIRED_MODEL
-            and not any(provider_task_id(item) for item in submitted_tasks)
-        )
-        if not additions and not migrate_unsubmitted_retired_model:
+        if not additions:
             return value
         normalized = dict(value)
         normalized_settings = dict(settings)
         normalized_settings.update(additions)
-        if migrate_unsubmitted_retired_model:
-            # 1.5 Pro remains valid so paid historical tasks stay pollable. Only
-            # requests without a provider task ID are safe to move and resubmit.
-            normalized_settings["seedance_model"] = SEEDANCE_EFFICIENT_MODEL
-            normalized_requests: list[Any] = []
-            for request in value.get("visual_requests") or []:
-                request_data = (
-                    request.model_dump(mode="python")
-                    if isinstance(request, BaseModel)
-                    else dict(request) if isinstance(request, dict) else request
-                )
-                if (
-                    isinstance(request_data, dict)
-                    and request_data.get("model_id") == SEEDANCE_RETIRED_MODEL
-                ):
-                    request_data["model_id"] = SEEDANCE_EFFICIENT_MODEL
-                normalized_requests.append(request_data)
-            normalized["visual_requests"] = normalized_requests
         normalized["generation_settings"] = normalized_settings
         return normalized
 

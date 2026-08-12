@@ -50,6 +50,20 @@ test('video creation uses model knowledge without external retrieval', () => {
   assert.match(app, /job\.pipeline_version === 'v3'[\s\S]*'直接创作'/);
 });
 
+test('runtime model visibility is backend-driven and includes exact model ids', () => {
+  assert.match(page, /id="runtime-models"[^>]*open/);
+  assert.match(page, /id="runtime-model-grid"/);
+  assert.match(page, /由后端运行时返回，新任务按这里显示的模型冻结/);
+  assert.match(app, /state\.capabilities\?\.runtime_models/);
+  assert.match(app, /model\.model_id/);
+  assert.match(app, /renderRuntimeModels\(\)/);
+  assert.match(app, /前端不维护第二套生产模型/);
+  assert.doesNotMatch(app, /doubao-seedance-[0-9]/);
+  assert.match(app, /后端没有返回可用的视频模型/);
+  assert.match(app, /matchMedia\('\(max-width: 560px\)'\)\.matches/);
+  assert.match(app, /container\.open = false/);
+});
+
 test('creator selects only visual style while internal roles stay server-owned', () => {
   assert.match(page, /id="visual-style"/);
   assert.match(app, /DEFAULT_VISUAL_STYLE_ID = 'content-skill-default'/);
@@ -386,7 +400,7 @@ test('AI shots are visible storyboard cards with isolated version controls', () 
   assert.match(app, /data-select-version/);
   assert.match(app, /用这张首帧换一版/);
   assert.match(app, /id="shot-seedance-model"/);
-  assert.match(app, /默认使用 Seedance 2\.0/);
+  assert.match(app, /默认沿用后端当前生产模型/);
   assert.match(app, /seedance_model: seedanceModel/);
   assert.match(app, /刊例价预估约/);
   assert.match(app, /first_frame_candidate_id/);

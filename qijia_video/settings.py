@@ -42,9 +42,9 @@ class QijiaVideoSettings(BaseSettings):
     QIJIA_VIDEO_SEEDANCE_BASE_URL: str = (
         "https://ark.cn-beijing.volces.com/api/v3"
     )
-    # Provider fallback for legacy requests without a frozen model. New tasks
-    # always send the model stored in GenerationSettings/VisualGenerationRequest.
-    QIJIA_VIDEO_SEEDANCE_MODEL: str = "doubao-seedance-2-0-260128"
+    # Single backend runtime default for new jobs. Each job/request freezes this
+    # value so later environment changes never rewrite existing work.
+    QIJIA_VIDEO_SEEDANCE_MODEL: str = "doubao-seedance-1-5-pro-251215"
     # Legacy fallback price. Model-specific prices below are authoritative for
     # all new requests and allow mixed current / historical cost accounting.
     QIJIA_VIDEO_SEEDANCE_PRICE_PER_MILLION: float = 4.2

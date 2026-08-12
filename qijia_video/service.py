@@ -48,9 +48,9 @@ from qijia_video.contracts import (
     ProviderUsageRecord,
     QualityReport,
     RenderManifest,
+    SEEDANCE_BALANCED_MODEL,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
-    SEEDANCE_RETIRED_MODEL,
     ScriptDraft,
     ScriptBeat,
     ScriptReview,
@@ -443,14 +443,14 @@ class QijiaVideoService:
         if rate is not None and rate > 0:
             model_label = {
                 SEEDANCE_EFFICIENT_MODEL: "Seedance 1.0 Pro Fast",
-                SEEDANCE_RETIRED_MODEL: "Seedance 1.5 Pro",
+                SEEDANCE_BALANCED_MODEL: "Seedance 1.5 Pro",
                 SEEDANCE_FLAGSHIP_MODEL: "Seedance 2.0",
             }.get(task.model_id, "Seedance")
             billing_mode = (
                 "无声视频"
                 if task.model_id in {
                     SEEDANCE_EFFICIENT_MODEL,
-                    SEEDANCE_RETIRED_MODEL,
+                    SEEDANCE_BALANCED_MODEL,
                 }
                 else "无视频输入"
             )
@@ -4189,8 +4189,8 @@ class QijiaVideoService:
                 task.request_fingerprint == fingerprint
                 and task.model_id in {
                     SEEDANCE_EFFICIENT_MODEL,
+                    SEEDANCE_BALANCED_MODEL,
                     SEEDANCE_FLAGSHIP_MODEL,
-                    SEEDANCE_RETIRED_MODEL,
                 }
             ):
                 return task.model_id
@@ -5613,6 +5613,7 @@ class QijiaVideoService:
             requested_model = self._seedance_model_for_request(job, current)
         if requested_model not in {
             SEEDANCE_EFFICIENT_MODEL,
+            SEEDANCE_BALANCED_MODEL,
             SEEDANCE_FLAGSHIP_MODEL,
         }:
             raise QualityGateFailed("不支持的 Seedance 生成模型")

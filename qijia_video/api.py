@@ -25,10 +25,10 @@ from qijia_video import run_service
 from qijia_video.contracts import (
     AssetRef,
     CreativeMaterial,
+    DEFAULT_SEEDANCE_MODEL,
     DEFAULT_VISUAL_STYLE_ID,
     GenerationSettings,
     PreGenerationMediaMode,
-    SEEDANCE_FLAGSHIP_MODEL,
     SeedanceModelId,
     ScriptDraft,
 )
@@ -167,10 +167,19 @@ class CreateGenerationSettings(StrictRequest):
     video_resolution: Literal["480p", "720p", "1080p"] = "1080p"
     tts_voice_id: TtsVoiceId = "zh_female_vv_uranus_bigtts"
     tts_speed_ratio: TtsSpeedRatio = 1.2
-    seedance_model: SeedanceModelId = SEEDANCE_FLAGSHIP_MODEL
+    # None means "use the model loaded by the backend runtime". The browser
+    # normally submits that same value from /capabilities for an auditable
+    # frozen job, while non-browser callers cannot drift to a second default.
+    seedance_model: SeedanceModelId | None = None
 
-    def to_internal(self) -> GenerationSettings:
-        return GenerationSettings.model_validate(self.model_dump(mode="json"))
+    def to_internal(
+        self,
+        *,
+        default_seedance_model: str = DEFAULT_SEEDANCE_MODEL,
+    ) -> GenerationSettings:
+        payload = self.model_dump(mode="json", exclude_none=True)
+        payload["seedance_model"] = self.seedance_model or default_seedance_model
+        return GenerationSettings.model_validate(payload)
 
 
 class ScriptUpdateRequest(RevisionRequest):
@@ -449,7 +458,9 @@ async def create_direct_job(
     job = await runtime.service.create_direct_job(
         body.creative_request,
         actor,
-        body.generation_settings.to_internal(),
+        body.generation_settings.to_internal(
+            default_seedance_model=runtime.video_provider.model,
+        ),
         verified_materials=body.verified_materials,
     )
     run = await start_run("generate_script", job.id, actor)
@@ -496,7 +507,9 @@ async def create_direct_job_with_reference(
     job = await runtime.service.create_direct_job(
         creative_request,
         actor,
-        parsed_settings.to_internal(),
+        parsed_settings.to_internal(
+            default_seedance_model=runtime.video_provider.model,
+        ),
         verified_materials=parsed_materials,
         reference_assets=[reference_asset.model_dump(mode="json")],
     )
