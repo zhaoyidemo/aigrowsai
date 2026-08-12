@@ -7,7 +7,7 @@
 ## v4 职责边界
 
 - Script Skill：`insight-led-scriptwriter@1.0.0` 直接读取原始请求与用户材料。`openai/gpt-5.6-sol` 先以 `xhigh` 写初稿，再以独立上下文 `high` 审稿，最后由同一主编以 `xhigh` 重写；唯一业务交付是 `ScriptDraft`，不包含视觉决策。
-- Director Skill：脚本人工确认且 TTS 完成后，`animated-explainer@2.0.0` 优先使用 `openai/gpt-5.6-sol xhigh` 分两次调用。第一阶段锁定 `DirectorTreatment + VisualBible + AssetBible`，第二阶段只生成服从这些产物的 `StoryboardPlan + ShotContextIR`；仅当上游发生可容灾的供应商拒绝或故障时，同一 OpenRouter Key 才切换到 `anthropic/claude-opus-5 xhigh`，不会重跑脚本或 TTS。
+- Director Skill：脚本人工确认且 TTS 完成后，`animated-explainer@2.0.0` 固定使用 `openai/gpt-5.6-sol xhigh` 分两次调用。第一阶段锁定 `DirectorTreatment + VisualBible + AssetBible`，第二阶段只生成服从这些产物的 `StoryboardPlan + ShotContextIR`。内部 Director Skill、Visual Style 与阶段规则只进入 system message，user message 只承载脚本、真实时长和可选参考图；任何 403 都在原模型调用处终止，不通过切换模型掩盖。
 - Visual Style：三套风格只定义资产、材质、造型、色彩、构图、运动语法和验收标准，不选择论点，也不改写导演事件。
 - H3 Provider Adapter：只在脚本与导演之后工作，把参考图职责整理为多模态 Context IR，并把冻结的导演产物编译为 Seedream/Seedance 自然语言提示词；不参与脚本创作。
 - 媒体生产：先生成三张视觉开发样片，由编辑锁定一张，再为未上传自有素材的章节调用 Seedream 5 Lite 和默认 Seedance 2.0。样片确认是正式批量生成前唯一新增的人工质量门。
