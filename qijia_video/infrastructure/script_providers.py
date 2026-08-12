@@ -27,6 +27,7 @@ from qijia_video.contracts import (
     content_hash,
     timestamp,
 )
+from qijia_video.director_prompting import assert_provider_neutral_runtime_prompt
 from qijia_video.errors import ProviderUnavailable
 from qijia_video.prompt_orchestration import compile_legacy_h3_script_prompt
 from qijia_video.prompts import (
@@ -44,15 +45,27 @@ from qijia_video.tts_options import (
 SCRIPT_PROMPT_VERSION = "qijia_script_v14_single_creative_brief"
 SCRIPT_SKILL_PROMPT_VERSION = 'qijia_script_v15_editorial_plan'
 DIRECT_SCRIPT_PROMPT_VERSION = 'qijia_script_v16_direct_draft'
-QUALITY_SCRIPT_PROMPT_VERSION = 'qijia_script_v20_writer_critic_revision'
+QUALITY_SCRIPT_PROMPT_VERSION = 'qijia_script_v21_provider_neutral'
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v12_semantic_adaptive"
 DIRECTOR_PROMPT_VERSION = 'qijia_director_v13_shot_context_ir'
 DIRECTOR_V3_PROMPT_VERSION = 'qijia_director_v20_concrete_event'
-DIRECTOR_QUALITY_PROMPT_VERSION = 'qijia_director_v30_treatment_then_shots'
+DIRECTOR_QUALITY_PROMPT_VERSION = 'qijia_director_v31_provider_neutral'
 OPENROUTER_REASONING_EFFORT = "high"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 STORYBOARD_MAX_COMPLETION_TOKENS = 128_000
 UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
+
+
+def _openrouter_completion_limit_key(model: str) -> str:
+    """Choose the completion limit name advertised by the model family."""
+
+    base_slug = str(model or "").strip().casefold().split(":", 1)[0]
+    provider, separator, model_name = base_slug.partition("/")
+    if separator and provider == "openai" and model_name.startswith(
+        ("gpt-5", "o1", "o3", "o4")
+    ):
+        return "max_completion_tokens"
+    return "max_tokens"
 
 
 _CREATIVE_BRIEF_RESPONSE_SCHEMA = {
@@ -1171,7 +1184,7 @@ async def _openrouter_model_access_diagnostic(
 
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "X-Title": "Qijia AI Video Workbench",
+        "X-OpenRouter-Title": "Qijia AI Video Workbench",
     }
     timeout = min(15.0, max(5.0, float(timeout_seconds)))
     try:
@@ -1332,17 +1345,13 @@ async def _openrouter_json_request(
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "X-Title": "Qijia AI Video Workbench",
+        "X-OpenRouter-Title": "Qijia AI Video Workbench",
         "X-OpenRouter-Metadata": "enabled",
     }
     payload = {
         "model": model,
         "messages": messages,
-        # Reasoning tokens share this ceiling with the visible answer. OpenRouter's
-        # Grok endpoints currently advertise `max_tokens`, and `require_parameters`
-        # rejects the otherwise preferred `max_completion_tokens` before routing.
         "reasoning": {"effort": reasoning_effort, "exclude": True},
-        "max_tokens": max_completion_tokens,
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -1351,9 +1360,14 @@ async def _openrouter_json_request(
                 "schema": response_schema,
             },
         },
-        "plugins": [{"id": "response-healing"}],
         "provider": {"require_parameters": True},
     }
+    # OpenRouter filters endpoints when require_parameters=true. OpenAI reasoning
+    # models advertise the OpenAI-native completion limit, while Grok/Anthropic
+    # chat endpoints use max_tokens. Sending the former Grok-specific parameter to
+    # GPT-5.x silently narrowed a four-endpoint model to one eligible route.
+    completion_limit_key = _openrouter_completion_limit_key(model)
+    payload[completion_limit_key] = max_completion_tokens
     if tools:
         payload["tools"] = tools
     if tools and tool_choice is not None:
@@ -1875,8 +1889,8 @@ class OpenRouterScriptProvider:
                 {
                     'role': 'system',
                     'content': (
-                        '你是唯一的脚本主编。用户原始表达直接抵达你，没有研究简报、'
-                        'Content Policy、EvidencePolicy 或视觉方法介入。写出判断鲜明、'
+                        '你是这篇作品的脚本主编。直接理解用户原始表达与其主动提供的'
+                        '材料，完成必要取舍。写出判断鲜明、'
                         '论证持续推进、适合真实朗读的完整作品，只返回 ScriptDraft JSON。'
                     ),
                 },
@@ -2131,25 +2145,27 @@ class OpenRouterStoryboardProvider:
             '职责；不得默认继承全部属性。references 中 reference_id 固定写 '
             'global_reference，并明确 preserve、allow_change 与 forbidden_transfer。'
             if reference_image_url
-            else '本次没有参考图，asset_bible.references 必须为空数组。'
+            else '本次没有参考图，返回结果中的 references 必须为空数组。'
         )
         treatment_system_prompt = (
-            '你是唯一的 Animated Explainer Director。当前只做视觉开发：'
-            '建立导演处理、视觉世界和可复用资产，不写脚本、不拆镜头、'
-            '不写 Seedream/Seedance 提示词。\n\n'
+            '你是知识短视频视觉导演。当前只做全片视觉开发：建立导演处理、'
+            '视觉世界和可复用资产，不写脚本，也不拆分具体章节。\n\n'
             + director_instruction
             + '\n\n'
             '【第一阶段：视觉开发】先不要拆镜头。根据完整口播和真实时长，建立一条'
-            '能够随论证推进的视觉命题，而不是逐句配图。交付 DirectorTreatment、'
-            'VisualBible 与 AssetBible：锁定重复主体、场景、道具、材质、视觉母题、'
-            '章节递进、剪辑节奏和所选风格特有的 MotionGrammar 与 ReviewCriteria。'
-            '具体事件将在第二阶段设计，本阶段不得输出 shots 或供应商提示词。\n\n'
-            '参考素材采用 H3 Context-IR 的职责分离方法。'
+            '能够随论证推进的视觉命题，而不是逐句配图。锁定重复主体、场景、道具、'
+            '材质、视觉母题、章节递进、剪辑节奏、运动规则和验收标准。具体事件将在'
+            '第二阶段设计，本阶段不要拆分具体章节。\n\n'
+            '参考素材采用职责分离：'
             + reference_instruction
         )
+        try:
+            assert_provider_neutral_runtime_prompt(treatment_system_prompt)
+        except ValueError as exc:
+            raise ProviderUnavailable('导演运行时指令编译失败') from exc
         treatment_input = json.dumps(
             {
-                'input_type': 'director_treatment',
+                'input_type': 'visual_development',
                 'reference_image_attached': bool(reference_image_url),
                 'script_beats': beat_payload,
             },
@@ -2225,23 +2241,27 @@ class OpenRouterStoryboardProvider:
 
         shot_system_prompt = (
             '你仍是同一位导演。严格服从已经锁定的视觉方案和资产，'
-            '现在只交付具体、可读、可生产的 ShotContextIR 章节。\n\n'
+            '现在只交付具体、可读、可生产的视觉章节。\n\n'
             + director_instruction
             + '\n\n'
-            '【第二阶段：正式分镜】下面的 DirectorTreatment、VisualBible 与 AssetBible '
-            '已经锁定，不能重新发明视觉世界。根据完整口播与真实 TTS 时长，自主合并'
+            '【第二阶段：正式分镜】下面的全片视觉方案、视觉规则与资产规则已经锁定，'
+            '不能重新发明视觉世界。根据完整口播与真实旁白时长，自主合并'
             '相邻 beats，设计 3—12 个具体事件章节；每个 beat_id 必须且只能出现一次并'
             '保持顺序。每章写清 concrete_event、blocking、主体、动作、环境、构图、'
             '起止状态、连续性承接和可执行摄影机。图片是默认媒介；仅在连续动作不可'
             '替代、对应旁白不超过十秒且八秒内能完成时使用 video，全片最多三段。'
-            '只返回 shots，不重复输出视觉方案，不写供应商提示词。'
+            '只返回章节结果，不重复输出已经锁定的视觉方案。'
         )
+        try:
+            assert_provider_neutral_runtime_prompt(shot_system_prompt)
+        except ValueError as exc:
+            raise ProviderUnavailable('导演运行时指令编译失败') from exc
         shot_input = json.dumps(
             {
-                'input_type': 'director_shot_plan',
-                'locked_director_treatment': treatment.model_dump(mode='json'),
-                'locked_visual_bible': visual_bible.model_dump(mode='json'),
-                'locked_asset_bible': asset_bible.model_dump(mode='json'),
+                'input_type': 'chapter_planning',
+                'locked_visual_direction': treatment.model_dump(mode='json'),
+                'locked_visual_world': visual_bible.model_dump(mode='json'),
+                'locked_assets': asset_bible.model_dump(mode='json'),
                 'script_beats': beat_payload,
             },
             ensure_ascii=False,

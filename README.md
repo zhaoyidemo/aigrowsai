@@ -6,13 +6,14 @@
 
 ## v4 职责边界
 
-- Script Skill：`insight-led-scriptwriter@1.0.0` 直接读取原始请求与用户材料。`openai/gpt-5.6-sol` 先以 `xhigh` 写初稿，再以独立上下文 `high` 审稿，最后由同一主编以 `xhigh` 重写；唯一业务交付是 `ScriptDraft`，不包含视觉决策。
-- Director Skill：脚本人工确认且 TTS 完成后，`animated-explainer@2.0.0` 固定使用 `openai/gpt-5.6-sol xhigh` 分两次调用。第一阶段锁定 `DirectorTreatment + VisualBible + AssetBible`，第二阶段只生成服从这些产物的 `StoryboardPlan + ShotContextIR`。内部 Director Skill、Visual Style 与阶段规则只进入 system message，user message 只承载脚本、真实时长和可选参考图；任何 403 都在原模型调用处终止，不通过切换模型掩盖。
+- Script Skill：`insight-led-scriptwriter@1.1.0` 直接读取原始请求与用户材料。`openai/gpt-5.6-sol` 先以 `xhigh` 写初稿，再以独立上下文 `high` 审稿，最后由同一主编以 `xhigh` 重写；唯一业务交付是 `ScriptDraft`，不包含视觉决策。
+- Director Skill：脚本人工确认且 TTS 完成后，`animated-explainer@2.1.0` 固定使用 `openai/gpt-5.6-sol xhigh` 分两次调用。第一阶段锁定 `DirectorTreatment + VisualBible + AssetBible`，第二阶段只生成服从这些产物的 `StoryboardPlan + ShotContextIR`。人类可读的 Skill 文档、来源说明与媒体平台语法不会进入模型请求；运行时只编译创作规则、视觉风格、脚本、真实时长和可选参考图。任何 403 都在原模型调用处终止，不通过切换模型掩盖。
+- OpenRouter 传输层：按模型家族编译完成长度参数；OpenAI GPT-5.x 使用 `max_completion_tokens`，Grok/Anthropic 兼容路径使用 `max_tokens`。结构化输出直接依赖模型端严格 JSON Schema，不再叠加 `response-healing` 插件；`require_parameters` 只筛选真正支持这些参数的同模型端点。
 - Visual Style：三套风格只定义资产、材质、造型、色彩、构图、运动语法和验收标准，不选择论点，也不改写导演事件。
 - H3 Provider Adapter：只在脚本与导演之后工作，把参考图职责整理为多模态 Context IR，并把冻结的导演产物编译为 Seedream/Seedance 自然语言提示词；不参与脚本创作。
 - 媒体生产：先生成三张视觉开发样片，由编辑锁定一张，再为未上传自有素材的章节调用 Seedream 5 Lite 和默认 Seedance 2.0。样片确认是正式批量生成前唯一新增的人工质量门。
 
-两种纸艺 Visual Style 与 H3 Provider Adapter 借鉴了 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 的多模态提示词结构、参考职责分离、纸张拼贴与纸艺定格方法；这里只借鉴方法，不耦合 MiniMax 模型，也不新增 MiniMax API Key。`animated-explainer@2.0.0` 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中具体事件、调度、摄影机与连续性原则，不引入其研究、脚本、语音或 CLI 链路。
+两种纸艺 Visual Style 与 H3 Provider Adapter 借鉴了 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 的多模态提示词结构、参考职责分离、纸张拼贴与纸艺定格方法；这里只借鉴方法，不耦合 MiniMax 模型，也不新增 MiniMax API Key。`animated-explainer@2.1.0` 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中具体事件、调度、摄影机与连续性原则，不引入其研究、脚本、语音或 CLI 链路。
 
 生产新任务只冻结 `input_snapshot`、`script_skill_snapshot`、`director_skill_snapshot`、`visual_style_snapshot` 与 `provider_adapter_snapshot`；`skill_snapshot` 和 `prompt_adapter_snapshot` 必须为空。Content Skill 与旧 H3 Script Adapter 只用于读取、恢复 v1/v2/v3 历史任务，不进入 v4 创建链路。只有 Visual Style 是公开选择，目录接口为 `GET /api/qijia-video/visual-styles`。
 

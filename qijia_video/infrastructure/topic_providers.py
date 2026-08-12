@@ -307,7 +307,7 @@ class OpenRouterTopicEditor:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "X-Title": "Qijia AI Topic Research",
+            "X-OpenRouter-Title": "Qijia AI Topic Research",
         }
         payload = {
             "model": self.model,

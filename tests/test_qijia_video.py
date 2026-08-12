@@ -61,6 +61,7 @@ from qijia_video.errors import (
 from qijia_video.director_skill_registry import (
     default_director_skill_registry,
 )
+from qijia_video.director_prompting import compile_director_instruction
 from qijia_video.infrastructure.memory_repository import InMemoryAggregateRepository
 from qijia_video.infrastructure.media import FfmpegMediaPackager
 from qijia_video.infrastructure.image_providers import (
@@ -80,6 +81,7 @@ from qijia_video.infrastructure.script_providers import (
     SCRIPT_MAX_COMPLETION_TOKENS,
     SCRIPT_PROMPT_VERSION,
     STORYBOARD_MAX_COMPLETION_TOKENS,
+    _openrouter_completion_limit_key,
 )
 from qijia_video.infrastructure.storage import (
     TOS_CONTROL_TIMEOUT_SECONDS,
@@ -254,6 +256,32 @@ class RecordingImageProvider(MockImageProvider):
 
 
 class QijiaVideoContractTests(unittest.TestCase):
+    def test_openrouter_completion_limit_is_selected_by_model_family(self):
+        self.assertEqual(
+            _openrouter_completion_limit_key("openai/gpt-5.6-sol"),
+            "max_completion_tokens",
+        )
+        self.assertEqual(
+            _openrouter_completion_limit_key("openai/gpt-5.6-terra:exacto"),
+            "max_completion_tokens",
+        )
+        self.assertEqual(
+            _openrouter_completion_limit_key("openai/o3"),
+            "max_completion_tokens",
+        )
+        self.assertEqual(
+            _openrouter_completion_limit_key("openai/gpt-4o"),
+            "max_tokens",
+        )
+        self.assertEqual(
+            _openrouter_completion_limit_key("anthropic/claude-opus-5"),
+            "max_tokens",
+        )
+        self.assertEqual(
+            _openrouter_completion_limit_key("x-ai/grok-4.5"),
+            "max_tokens",
+        )
+
     def test_content_skills_are_versioned_workflow_presets_without_prompts(self):
         catalog = default_skill_registry.public_catalog()
         self.assertEqual(
@@ -337,6 +365,42 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertIn("具体事件", director.scene_design_rules)
         self.assertIn("blocking", director.shot_design_rules)
         self.assertIn("图片是默认媒介", director.media_rules)
+        old_snapshot = director.snapshot().model_copy(update={
+            "version": "2.0.0",
+            "workflow_instructions": (
+                "先建立视觉世界。Provider Adapter 再输出 Seedream、Seedance Prompt。\n"
+                "方法来源：GitHub s1dashu/director。"
+            ),
+            "shot_design_rules": (
+                director.shot_design_rules
+                + "\n不写负向 Prompt 或供应商名称。"
+            ),
+            "critic_rules": [
+                *director.critic_rules,
+                "Visual Style 不得覆盖 DirectorTreatment、VisualBible 与 AssetBible。",
+            ],
+        })
+        old_compiled = compile_director_instruction(
+            old_snapshot,
+            visual_style=collage.snapshot(),
+            has_reference_image=False,
+        )
+        self.assertIn("【工作目标】", old_compiled)
+        self.assertIn("具体事件", old_compiled)
+        for internal_term in (
+            "Seedream",
+            "Seedance",
+            "Provider Adapter",
+            "Director Skill",
+            "Script Skill",
+            "H3",
+            "GitHub",
+            "s1dashu",
+            "供应商",
+            "下游",
+            "Prompt",
+        ):
+            self.assertNotIn(internal_term, old_compiled)
         maximum_shot = StoryboardShot(
             shot_id="shot_01",
             segment_id="n01",
@@ -1790,9 +1854,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(
             response_format["json_schema"]["schema"]["additionalProperties"]
         )
-        self.assertEqual(
-            request_body["plugins"], [{"id": "response-healing"}]
-        )
+        self.assertNotIn("plugins", request_body)
         self.assertNotIn("tools", request_body)
         self.assertNotIn("tool_choice", request_body)
         self.assertNotIn("max_tool_calls", request_body)
@@ -1808,6 +1870,11 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("max_completion_tokens", request_body)
         self.assertNotIn("temperature", request_body)
+        self.assertEqual(
+            calls[0].headers["X-OpenRouter-Title"],
+            "Qijia AI Video Workbench",
+        )
+        self.assertNotIn("X-Title", calls[0].headers)
         prompt = request_body["messages"][1]["content"]
         self.assertIn("唯一的 H3 Creative Director", prompt)
         self.assertIn("【不可变原始输入】", prompt)
@@ -2008,6 +2075,11 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(all(item["model"] == "openai/gpt-5.6-sol" for item in calls))
         self.assertTrue(all("tools" not in item for item in calls))
+        self.assertTrue(all("plugins" not in item for item in calls))
+        self.assertTrue(all(
+            item["max_completion_tokens"] > 0 and "max_tokens" not in item
+            for item in calls
+        ))
         self.assertEqual(
             [item["response_format"]["json_schema"]["name"] for item in calls],
             [
@@ -2422,6 +2494,14 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             body = json.loads(request.content)
             calls.append(body)
+            self.assertEqual(
+                request.headers["X-OpenRouter-Title"],
+                "Qijia AI Video Workbench",
+            )
+            self.assertNotIn("X-Title", request.headers)
+            self.assertNotIn("plugins", body)
+            self.assertIn("max_completion_tokens", body)
+            self.assertNotIn("max_tokens", body)
             schema_name = body["response_format"]["json_schema"]["name"]
             if schema_name == "qijia_director_treatment_v1":
                 result = treatment_payload
@@ -2454,10 +2534,10 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         treatment, bible, assets, plan = (
             await provider.generate_quality_director_plan(
                 script,
-                "【导演方法】动画解说导演@2.0.0",
+                "【导演方法】动画解说导演",
                 durations,
                 director_skill_id="animated-explainer",
-                director_skill_version="2.0.0",
+                director_skill_version="2.1.0",
                 input_hash="b" * 64,
             )
         )
@@ -2475,18 +2555,32 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         second_schema = calls[1]["response_format"]["json_schema"]["schema"]
         self.assertNotIn("shots", first_schema["properties"])
         self.assertEqual(set(second_schema["properties"]), {"shots"})
-        self.assertIn("【导演方法】动画解说导演@2.0.0", calls[0]["messages"][0]["content"])
+        self.assertIn("【导演方法】动画解说导演", calls[0]["messages"][0]["content"])
         self.assertIn("先不要拆镜头", calls[0]["messages"][0]["content"])
         self.assertIn("已经锁定，不能重新发明视觉世界", calls[1]["messages"][0]["content"])
+        for body in calls:
+            system_prompt = body["messages"][0]["content"]
+            for internal_term in (
+                "Seedream",
+                "Seedance",
+                "Provider Adapter",
+                "Director Skill",
+                "Script Skill",
+                "H3",
+                "供应商",
+                "下游",
+                "Prompt",
+            ):
+                self.assertNotIn(internal_term, system_prompt)
         treatment_input = json.loads(calls[0]["messages"][1]["content"])
         shot_input = json.loads(calls[1]["messages"][1]["content"])
-        self.assertEqual(treatment_input["input_type"], "director_treatment")
+        self.assertEqual(treatment_input["input_type"], "visual_development")
         self.assertFalse(treatment_input["reference_image_attached"])
-        self.assertEqual(shot_input["input_type"], "director_shot_plan")
+        self.assertEqual(shot_input["input_type"], "chapter_planning")
         self.assertNotIn("【导演方法】", calls[0]["messages"][1]["content"])
         self.assertNotIn("【导演方法】", calls[1]["messages"][1]["content"])
         self.assertEqual(treatment.input_hash, "b" * 64)
-        self.assertEqual(bible.director_skill_version, "2.0.0")
+        self.assertEqual(bible.director_skill_version, "2.1.0")
         self.assertEqual(assets.motion_grammar, ["单一动作链", "克制跟随"])
         self.assertEqual([shot.beat_ids for shot in plan.shots], groups)
 
@@ -3287,7 +3381,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.script_skill_snapshot.skill_id,
             "insight-led-scriptwriter",
         )
-        self.assertEqual(job.director_skill_snapshot.version, "2.0.0")
+        self.assertEqual(job.director_skill_snapshot.version, "2.1.0")
         self.assertEqual(job.provider_adapter_snapshot.version, "2.0.0")
         self.assertEqual(job.generation_settings.seedance_model, SEEDANCE_FLAGSHIP_MODEL)
 
@@ -3467,7 +3561,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.director_skill_snapshot.skill_id,
             "animated-explainer",
         )
-        self.assertEqual(job.director_skill_snapshot.version, "2.0.0")
+        self.assertEqual(job.director_skill_snapshot.version, "2.1.0")
         self.assertEqual(job.director_skill_snapshot.mode, "animated_explainer")
         self.assertEqual(
             job.provider_adapter_snapshot.adapter_id,
@@ -3499,15 +3593,24 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(job.editorial_plan)
         self.assertIsNone(job.creative_brief)
         compiled = self.service._storyboard_base_style(job)
-        self.assertIn("【唯一视觉负责人】", compiled)
-        self.assertIn("已确认脚本是内容唯一真相", compiled)
+        self.assertIn("【工作目标】", compiled)
+        self.assertIn("已确认脚本", compiled)
         self.assertIn("高级编辑纸张拼贴", compiled)
-        self.assertIn("【导演方法】动画解说导演@2.0.0", compiled)
-        self.assertIn("【独立 Visual Style】编辑纸张拼贴@2.0.0", compiled)
-        self.assertIn("VisualBible", compiled)
-        self.assertIn("ShotContextIR", compiled)
-        self.assertNotIn("H3", compiled)
-        self.assertNotIn("EditorialPlan", compiled)
+        self.assertIn("【工作方式】", compiled)
+        self.assertIn("【视觉语言｜编辑纸张拼贴】", compiled)
+        for internal_term in (
+            "Seedream",
+            "Seedance",
+            "Provider Adapter",
+            "Director Skill",
+            "Script Skill",
+            "H3",
+            "供应商",
+            "下游",
+            "Prompt",
+            "EditorialPlan",
+        ):
+            self.assertNotIn(internal_term, compiled)
 
         job = await self.service.approve_script(
             job.id, job.revision, job.script_hash, self.actor
@@ -3648,7 +3751,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 shot.narration_excerpt for shot in job.storyboard_plan.shots
             ),
         )
-        self.assertIn("【唯一视觉负责人】", director.director_instruction)
+        self.assertIn("【工作目标】", director.director_instruction)
         self.assertNotIn("EditorialPlan", director.director_instruction)
 
     async def test_model_knowledge_generation_never_calls_research_provider(self):
@@ -3710,7 +3813,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"external_retrieval": false', provider.generated_prompt)
         self.assertIn("禁止联网搜索", provider.generated_prompt)
         self.assertIn(
-            "【Script Skill】insight-led-scriptwriter@1.0.0",
+            "【Script Skill】insight-led-scriptwriter@1.1.0",
             provider.generated_prompt,
         )
         self.assertNotIn("openrouter:web_search", provider.generated_prompt)
@@ -4265,14 +4368,14 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             set(provider.reference_image_urls),
             {"local://qijia-video/reference-images/test.png"},
         )
-        self.assertIn("【参考素材边界】", storyboard_provider.base_style)
+        self.assertIn("【参考素材】", storyboard_provider.base_style)
         self.assertIn("reference_roles", storyboard_provider.base_style)
-        self.assertIn("【唯一视觉负责人】", storyboard_provider.base_style)
+        self.assertIn("【工作目标】", storyboard_provider.base_style)
         self.assertNotIn("CreativeBrief", storyboard_provider.base_style)
-        self.assertIn("【导演方法】", storyboard_provider.base_style)
+        self.assertIn("【工作方式】", storyboard_provider.base_style)
         self.assertIn("高级编辑纸张拼贴", storyboard_provider.base_style)
         self.assertTrue(all(
-            "输入参考图只承担本镜头 ShotContextIR.reference_roles" in prompt
+            "输入参考图只承担本章节 reference_roles" in prompt
             for prompt in provider.prompts
         ))
         self.assertTrue(all(
@@ -5629,7 +5732,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(provider.prompt.startswith("你是本任务唯一的 Script Skill"))
         self.assertIn("【用户原始创作请求｜最高优先级】", provider.prompt)
         self.assertIn("【用户明确核对的材料】", provider.prompt)
-        self.assertIn("【Script Skill】insight-led-scriptwriter@1.0.0", provider.prompt)
+        self.assertIn("【Script Skill】insight-led-scriptwriter@1.1.0", provider.prompt)
         self.assertIn('"external_retrieval": false', provider.prompt)
         self.assertIn("禁止联网搜索", provider.prompt)
         self.assertIn("【硬性政策】", provider.prompt)
@@ -5648,12 +5751,21 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(tts_provider.speed_ratio, 1.1)
         self.assertEqual(job.narration_manifest.speed_ratio, 1.1)
-        self.assertIn("【唯一视觉负责人】", storyboard_provider.base_style)
+        self.assertIn("【工作目标】", storyboard_provider.base_style)
         self.assertIn("精致手工纸艺定格", storyboard_provider.base_style)
-        self.assertIn("VisualBible", storyboard_provider.base_style)
-        self.assertIn("ShotContextIR", storyboard_provider.base_style)
-        self.assertNotIn("H3", storyboard_provider.base_style)
-        self.assertNotIn("EditorialPlan", storyboard_provider.base_style)
+        for internal_term in (
+            "Seedream",
+            "Seedance",
+            "Provider Adapter",
+            "Director Skill",
+            "Script Skill",
+            "H3",
+            "供应商",
+            "下游",
+            "Prompt",
+            "EditorialPlan",
+        ):
+            self.assertNotIn(internal_term, storyboard_provider.base_style)
         requests = job.visual_requests
         self.assertGreaterEqual(len(requests), 1)
         self.assertLessEqual(len(requests), 3)

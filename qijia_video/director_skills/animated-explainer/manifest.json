@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "display_name": "动画解说导演",
   "description": "先建立视觉命题、资产圣经和风格运动规则，再把确认口播与真实 TTS 时长导演成具体、连续、可生产的视觉事件。",
   "default": true,
@@ -11,7 +11,7 @@
     "concept_explainer",
     "book_explainer"
   ],
-  "workflow_file": "SKILL.md",
+  "workflow_file": "references/runtime-workflow.md",
   "scene_design_file": "references/scene-design.md",
   "shot_design_file": "references/shot-design.md",
   "continuity_file": "references/continuity.md",
@@ -24,8 +24,8 @@
     "摄影机位置、方向、运动路径、停止位置和结束景别必须可执行",
     "不得虚构脚本没有陈述的历史事件、人物行动、对白或因果",
     "图片是默认媒介；只有八秒内可完成的连续动作或状态变化才使用视频，全片最多三段",
-    "Visual Style 只约束媒介、材质、色彩和造型，不得替代导演决策"
-    ,"DirectorTreatment、VisualBible 与 AssetBible 必须先于逐镜头计划锁定，正式分镜不得重新发明视觉世界"
+    "视觉风格只约束媒介、材质、色彩和造型，不得替代导演决策"
+    ,"全片视觉方案、视觉规则与资产规则必须先于逐章计划锁定，正式分镜不得重新发明视觉世界"
     ,"人物、场景、道具、材质和参考图职责必须具有可检查的连续性标准"
   ]
 }

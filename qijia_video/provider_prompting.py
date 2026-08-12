@@ -115,7 +115,7 @@ def compile_style_frame_prompt(
             '必须排除：' + '；'.join(bible.forbidden_elements[:5])
             if bible.forbidden_elements else ''
         ),
-        '用户原始参考图不会在视觉开发样片阶段再次发送给图片模型。',
+        '本样片不使用参考图，仅依据上述视觉方案独立呈现最终成片质感。',
         '画面必须像最终成片中的一个成熟镜头，主体行动一眼可读，底部保留字幕安全区。'
         '不要可读文字、Logo、水印、界面、色板、标注线或无关装饰。',
     )
@@ -141,7 +141,7 @@ def compile_image_provider_prompt(
         )
         if has_reference_image and not reference:
             reference = (
-                '输入参考图只承担本镜头 ShotContextIR.reference_roles 已声明的职责；'
+                '输入参考图只承担本章节 reference_roles 已声明的职责；'
                 '不得自动继承未声明的人物、场景、物件、构图或风格属性。'
             )
         return _join(

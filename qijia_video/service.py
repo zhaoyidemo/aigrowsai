@@ -114,7 +114,10 @@ from qijia_video.prompt_adapter_registry import (
     PromptAdapterRegistry,
     default_prompt_adapter_registry,
 )
-from qijia_video.director_prompting import compile_director_instruction
+from qijia_video.director_prompting import (
+    DIRECTOR_RUNTIME_PROMPT_VERSION,
+    compile_director_instruction,
+)
 from qijia_video.director_skill_registry import (
     DirectorSkillRegistry,
     DirectorSkillRegistryError,
@@ -2548,9 +2551,21 @@ class QijiaVideoService:
             if not job.script:
                 raise InvalidTransition('缺少已确认脚本')
             timings = cls._director_timing_map(job)
+            visual_style = job.visual_style_snapshot
             return content_hash({
                 'script_hash': content_hash(job.script),
-                'director_instruction': cls._storyboard_base_style(job),
+                'director_runtime_prompt_version': DIRECTOR_RUNTIME_PROMPT_VERSION,
+                'director_method': {
+                    'skill_id': job.director_skill_snapshot.skill_id,
+                    'version': job.director_skill_snapshot.version,
+                    'manifest_hash': job.director_skill_snapshot.manifest_hash,
+                },
+                'visual_style': {
+                    'style_id': visual_style.style_id if visual_style else '',
+                    'version': visual_style.version if visual_style else '',
+                    'manifest_hash': visual_style.manifest_hash if visual_style else '',
+                },
+                'has_reference_image': cls._has_reference_image(job),
                 'narration_timings': [
                     {
                         'beat_id': item.id,
@@ -2585,10 +2600,10 @@ class QijiaVideoService:
         if director_v3:
             if not job.script or not job.director_skill_snapshot:
                 raise InvalidTransition('Director v3 任务缺少确认脚本或导演快照')
-            expected_hash = self._storyboard_input_hash(job)
             expected_ids = [item.id for item in job.script.beats]
             timings = self._director_timing_map(job)
             if job.storyboard_plan:
+                artifact_hash = job.storyboard_plan.input_hash
                 returned_ids = [
                     beat_id
                     for shot in job.storyboard_plan.shots
@@ -2596,17 +2611,17 @@ class QijiaVideoService:
                 ]
                 if (
                     job.storyboard_plan.schema_version != '3.0'
-                    or job.storyboard_plan.input_hash != expected_hash
+                    or not artifact_hash
                     or returned_ids != expected_ids
                     or not job.visual_bible
-                    or job.visual_bible.input_hash != expected_hash
+                    or job.visual_bible.input_hash != artifact_hash
                     or (
                         director_v4
                         and (
                             not job.director_treatment
-                            or job.director_treatment.input_hash != expected_hash
+                            or job.director_treatment.input_hash != artifact_hash
                             or not job.asset_bible
-                            or job.asset_bible.input_hash != expected_hash
+                            or job.asset_bible.input_hash != artifact_hash
                         )
                     )
                     or job.visual_bible.director_skill_id
@@ -2615,9 +2630,10 @@ class QijiaVideoService:
                     != job.director_skill_snapshot.version
                 ):
                     raise QualityGateFailed(
-                        '已保存 Director v3 方案与当前脚本、时长或 Skill 不一致'
+                        '已保存导演方案的脚本覆盖、方法版本或产物绑定不一致'
                     )
                 return job
+            expected_hash = self._storyboard_input_hash(job)
             self._report(
                 progress,
                 message=(

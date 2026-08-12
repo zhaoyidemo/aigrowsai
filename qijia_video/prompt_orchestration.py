@@ -25,6 +25,24 @@ def _join_blocks(*blocks: str) -> str:
     )
 
 
+def _quality_method_text(value: str) -> str:
+    """Translate frozen pre-v4 architecture names into creative instructions."""
+
+    result = str(value or "")
+    for old, new in (
+        ("H3 Prompt Adapter", "提示词适配层"),
+        ("Content Policy", "内容政策层"),
+        ("EvidencePolicy", "证据政策层"),
+        ("CreativeBrief", "创作提纲"),
+        ("EditorialPlan", "编辑计划"),
+        ("Script Skill", "脚本方法"),
+        ("模型提示词", "媒体生成说明"),
+        ("TTS", "配音"),
+    ):
+        result = result.replace(old, new)
+    return result
+
+
 def _evidence_pack(
     card: SourceCard,
     research_brief: PersonResearchBrief | NewsResearchBrief | None = None,
@@ -81,16 +99,21 @@ def compile_quality_script_prompt(
     )
     return _join_blocks(
         (
-            "你是这条视频唯一的脚本主编。用户原始表达未经任何摘要、分类、研究或"
+            "你是这条视频的脚本主编。用户原始表达未经任何摘要、分类、研究或"
             "提示词适配，必须直接成为创作起点。完成内容取舍并写出一篇真正成立的"
             "口播作品；不要展示计划、候选角度或思维过程，也不要设计任何画面。"
         ),
         "【用户原始创作请求｜原文】\n" + input_snapshot.original_request,
         "【用户主动提供的内容资料】\n" + material_block,
-        f"【Script Skill】{script_skill.skill_id}@{script_skill.version}",
-        "【内部选题与论证方法】\n" + script_skill.planning_instructions,
-        "【口播写作方法】\n" + script_skill.writing_instructions,
-        "【作品质量标准】\n- " + "\n- ".join(script_skill.critic_rules),
+        "【选题与论证方法】\n" + _quality_method_text(
+            script_skill.planning_instructions
+        ),
+        "【口播写作方法】\n" + _quality_method_text(
+            script_skill.writing_instructions
+        ),
+        "【作品质量标准】\n- " + "\n- ".join(
+            _quality_method_text(item) for item in script_skill.critic_rules
+        ),
         (
             "【交付要求】\n"
             f"完整 narration 建议 {minimum_characters}—{maximum_characters} 个汉字，"
