@@ -7,10 +7,10 @@ import uuid
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from qijia_video.contracts import (
     AssetBible,
@@ -50,11 +50,12 @@ QUALITY_SCRIPT_PROMPT_VERSION = 'qijia_script_v21_provider_neutral'
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v12_semantic_adaptive"
 DIRECTOR_PROMPT_VERSION = 'qijia_director_v13_shot_context_ir'
 DIRECTOR_V3_PROMPT_VERSION = 'qijia_director_v20_concrete_event'
-DIRECTOR_QUALITY_PROMPT_VERSION = 'qijia_director_v32_locked_chapter_slots'
+DIRECTOR_QUALITY_PROMPT_VERSION = 'qijia_director_v33_domain_contract'
 OPENROUTER_REASONING_EFFORT = "high"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 STORYBOARD_MAX_COMPLETION_TOKENS = 128_000
 UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
+ModelT = TypeVar('ModelT', bound=BaseModel)
 
 
 def _openrouter_completion_limit_key(model: str) -> str:
@@ -448,127 +449,93 @@ _SHOT_CONTEXT_RESPONSE_SCHEMA['properties']['reference_roles'] = {
     'items': {'type': 'string'},
 }
 
-_VISUAL_BIBLE_RESPONSE_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'core_visual_idea': {'type': 'string'},
-        'visual_world': {'type': 'string'},
-        'recurring_subjects': {'type': 'array', 'items': {'type': 'string'}},
-        'scene_anchors': {'type': 'array', 'items': {'type': 'string'}},
-        'continuity_rules': {'type': 'array', 'items': {'type': 'string'}},
-        'color_material_system': {'type': 'string'},
-        'composition_system': {'type': 'string'},
-        'reference_strategy': {'type': 'string'},
-        'forbidden_elements': {'type': 'array', 'items': {'type': 'string'}},
-    },
-    'required': [
-        'core_visual_idea',
-        'visual_world',
-        'recurring_subjects',
-        'scene_anchors',
-        'continuity_rules',
-        'color_material_system',
-        'composition_system',
-        'reference_strategy',
-        'forbidden_elements',
-    ],
-    'additionalProperties': False,
-}
+_SCHEMA_ANNOTATION_KEYS = {'default', 'description', 'examples', 'title'}
 
-_MULTIMODAL_REFERENCE_RESPONSE_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'reference_id': {'type': 'string'},
-        'roles': {
-            'type': 'array',
-            'minItems': 1,
-            'maxItems': 6,
-            'items': {
-                'type': 'string',
-                'enum': [
-                    'identity',
-                    'wardrobe',
-                    'object',
-                    'location',
-                    'style',
-                    'composition',
-                ],
-            },
-        },
-        'applies_to': {'type': 'array', 'items': {'type': 'string'}},
-        'retention_level': {
-            'type': 'string',
-            'enum': ['strict', 'strong', 'inspiration'],
-        },
-        'preserve': {'type': 'array', 'items': {'type': 'string'}},
-        'allow_change': {'type': 'array', 'items': {'type': 'string'}},
-        'forbidden_transfer': {'type': 'array', 'items': {'type': 'string'}},
-    },
-    'required': [
-        'reference_id',
-        'roles',
-        'applies_to',
-        'retention_level',
-        'preserve',
-        'allow_change',
-        'forbidden_transfer',
-    ],
-    'additionalProperties': False,
-}
 
-_DIRECTOR_TREATMENT_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'visual_thesis': {'type': 'string'},
-        'audience_experience': {'type': 'string'},
-        'chapter_progression': {'type': 'array', 'items': {'type': 'string'}},
-        'motif_system': {'type': 'array', 'items': {'type': 'string'}},
-        'rhythm_strategy': {'type': 'string'},
-        'edit_pattern': {'type': 'string'},
-        'style_application': {'type': 'string'},
-    },
-    'required': [
-        'visual_thesis',
-        'audience_experience',
-        'chapter_progression',
-        'motif_system',
-        'rhythm_strategy',
-        'edit_pattern',
-        'style_application',
-    ],
-    'additionalProperties': False,
-}
+def _inline_schema_refs(value: Any, definitions: dict[str, Any]) -> Any:
+    """Inline Pydantic definitions and remove non-contract annotations."""
 
-_ASSET_BIBLE_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'subjects': {'type': 'array', 'items': {'type': 'string'}},
-        'locations': {'type': 'array', 'items': {'type': 'string'}},
-        'props': {'type': 'array', 'items': {'type': 'string'}},
-        'identity_locks': {'type': 'array', 'items': {'type': 'string'}},
-        'material_locks': {'type': 'array', 'items': {'type': 'string'}},
-        'allowed_variations': {'type': 'array', 'items': {'type': 'string'}},
-        'motion_grammar': {'type': 'array', 'items': {'type': 'string'}},
-        'review_criteria': {'type': 'array', 'items': {'type': 'string'}},
-        'references': {
-            'type': 'array',
-            'maxItems': 8,
-            'items': _MULTIMODAL_REFERENCE_RESPONSE_SCHEMA,
+    if isinstance(value, list):
+        return [_inline_schema_refs(item, definitions) for item in value]
+    if not isinstance(value, dict):
+        return value
+    reference = value.get('$ref')
+    if isinstance(reference, str) and reference.startswith('#/$defs/'):
+        name = reference.removeprefix('#/$defs/')
+        resolved = deepcopy(definitions[name])
+        resolved.update({key: item for key, item in value.items() if key != '$ref'})
+        return _inline_schema_refs(resolved, definitions)
+    return {
+        key: _inline_schema_refs(item, definitions)
+        for key, item in value.items()
+        if key not in _SCHEMA_ANNOTATION_KEYS
+    }
+
+
+def _domain_output_schema(
+    model_type: type[BaseModel],
+    required_fields: tuple[str, ...],
+) -> dict:
+    """Compile provider JSON Schema from the canonical domain contract."""
+
+    source = model_type.model_json_schema()
+    definitions = dict(source.get('$defs') or {})
+    properties = dict(source.get('properties') or {})
+    return {
+        'type': 'object',
+        'properties': {
+            field: _inline_schema_refs(deepcopy(properties[field]), definitions)
+            for field in required_fields
         },
-    },
-    'required': [
-        'subjects',
-        'locations',
-        'props',
-        'identity_locks',
-        'material_locks',
-        'allowed_variations',
-        'motion_grammar',
-        'review_criteria',
-        'references',
-    ],
-    'additionalProperties': False,
-}
+        'required': list(required_fields),
+        'additionalProperties': False,
+    }
+
+
+_VISUAL_BIBLE_FIELDS = (
+    'core_visual_idea',
+    'visual_world',
+    'recurring_subjects',
+    'scene_anchors',
+    'continuity_rules',
+    'color_material_system',
+    'composition_system',
+    'reference_strategy',
+    'forbidden_elements',
+)
+_DIRECTOR_TREATMENT_FIELDS = (
+    'visual_thesis',
+    'audience_experience',
+    'chapter_progression',
+    'motif_system',
+    'rhythm_strategy',
+    'edit_pattern',
+    'style_application',
+)
+_ASSET_BIBLE_FIELDS = (
+    'subjects',
+    'locations',
+    'props',
+    'identity_locks',
+    'material_locks',
+    'allowed_variations',
+    'motion_grammar',
+    'review_criteria',
+    'references',
+)
+
+_VISUAL_BIBLE_RESPONSE_SCHEMA = _domain_output_schema(
+    VisualBible,
+    _VISUAL_BIBLE_FIELDS,
+)
+_DIRECTOR_TREATMENT_SCHEMA = _domain_output_schema(
+    DirectorTreatment,
+    _DIRECTOR_TREATMENT_FIELDS,
+)
+_ASSET_BIBLE_SCHEMA = _domain_output_schema(
+    AssetBible,
+    _ASSET_BIBLE_FIELDS,
+)
 
 _DIRECTOR_TREATMENT_RESPONSE_SCHEMA = {
     'type': 'object',
@@ -607,58 +574,40 @@ _DIRECTOR_RESPONSE_SCHEMA = {
     'additionalProperties': False,
 }
 
-_SHOT_CONTEXT_V3_RESPONSE_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        key: {'type': 'string'}
-        for key in (
-            'semantic_goal',
-            'concrete_event',
-            'blocking',
-            'visual_metaphor',
-            'subject',
-            'action',
-            'environment',
-            'composition',
-            'continuity_handoff',
-            'start_state',
-            'end_state',
-            'camera_intent',
-            'media_rationale',
-        )
-    },
-    'required': [
-        'semantic_goal',
-        'concrete_event',
-        'blocking',
-        'visual_metaphor',
-        'subject',
-        'action',
-        'environment',
+_SHOT_CONTEXT_V3_FIELDS = (
+    'semantic_goal',
+    'concrete_event',
+    'blocking',
+    'visual_metaphor',
+    'subject',
+    'action',
+    'environment',
+    'composition',
+    'continuity_handoff',
+    'start_state',
+    'end_state',
+    'camera_intent',
+    'media_rationale',
+    'reference_roles',
+)
+_SHOT_CONTEXT_V3_RESPONSE_SCHEMA = _domain_output_schema(
+    ShotContextIR,
+    _SHOT_CONTEXT_V3_FIELDS,
+)
+for _required_event_field in ('concrete_event', 'blocking'):
+    _SHOT_CONTEXT_V3_RESPONSE_SCHEMA['properties'][_required_event_field][
+        'minLength'
+    ] = 1
+_SHOT_CONTEXT_V3_RESPONSE_SCHEMA['properties']['reference_roles']['items'] = {
+    'type': 'string',
+    'enum': [
+        'identity',
+        'wardrobe',
+        'object',
+        'location',
+        'style',
         'composition',
-        'continuity_handoff',
-        'start_state',
-        'end_state',
-        'camera_intent',
-        'media_rationale',
-        'reference_roles',
     ],
-    'additionalProperties': False,
-}
-_SHOT_CONTEXT_V3_RESPONSE_SCHEMA['properties']['reference_roles'] = {
-    'type': 'array',
-    'items': {
-        'type': 'string',
-            'enum': [
-                'identity',
-                'wardrobe',
-                'object',
-                'location',
-                'style',
-                'composition',
-            ],
-    },
-    'maxItems': 8,
 }
 
 _DIRECTOR_V3_RESPONSE_SCHEMA = {
@@ -726,6 +675,39 @@ def _director_shot_plan_response_schema(chapter_ids: list[str]) -> dict:
         'required': ['chapters'],
         'additionalProperties': False,
     }
+
+
+def _validation_error_fields(exc: ValidationError) -> str:
+    """Return bounded field/type diagnostics without echoing model content."""
+
+    fields: list[str] = []
+    for item in exc.errors(include_input=False, include_url=False)[:8]:
+        location = '.'.join(str(part) for part in item.get('loc') or ())
+        error_type = str(item.get('type') or 'validation_error')
+        fields.append(f'{location or "root"}:{error_type}')
+    return '、'.join(fields) or 'root:validation_error'
+
+
+def _validate_director_artifact(
+    model_type: type[ModelT],
+    raw: Any,
+    metadata: dict[str, Any],
+    *,
+    artifact_name: str,
+) -> ModelT:
+    """Validate one Director artifact with safe, actionable diagnostics."""
+
+    if not isinstance(raw, dict):
+        raise ProviderUnavailable(
+            f'Director 第一阶段的 {artifact_name} 不是 JSON 对象'
+        )
+    try:
+        return model_type.model_validate({**raw, **metadata})
+    except ValidationError as exc:
+        raise ProviderUnavailable(
+            f'Director 第一阶段的 {artifact_name} 不符合领域契约'
+            f'（fields={_validation_error_fields(exc)}）'
+        ) from exc
 
 
 @dataclass(frozen=True)
@@ -2190,6 +2172,12 @@ class OpenRouterStoryboardProvider:
             '材质、视觉母题、章节递进、剪辑节奏、运动规则和验收标准。'
             'chapter_progression 的每一项对应第二阶段的一个视觉章节；数量必须落在输入给定'
             '范围内，本阶段只锁定每章的叙事任务，不设计具体事件、调度或摄影机。\n\n'
+            '【完整交付要求】必须同时交付三组可以直接约束下一阶段的结果：'
+            '全片视觉方案要写清视觉命题、观众体验、章节递进、重复母题、节奏、剪辑和风格落地；'
+            '全片视觉规则要写清视觉世界、重复主体、场景锚点、连续性、色彩材质、构图、参考策略和禁用元素；'
+            '资产规则要列出可复用人物、地点、道具、身份锁、材质锁、允许变化、运动规则和至少两条可判定的验收标准。'
+            '所有必填文字和必填列表都必须有实质内容，不得用“同上”“保持一致”“按脚本”代替；'
+            '没有参考图时 references 必须是空数组。\n\n'
             '参考素材采用职责分离：'
             + reference_instruction
         )
@@ -2231,7 +2219,7 @@ class OpenRouterStoryboardProvider:
                 {'role': 'user', 'content': treatment_user_content},
             ],
             label='导演视觉开发',
-            schema_name='qijia_director_treatment_v2',
+            schema_name='qijia_director_treatment_v3',
             response_schema=_director_treatment_response_schema(
                 max_director_chapters
             ),
@@ -2243,34 +2231,41 @@ class OpenRouterStoryboardProvider:
             reasoning_effort='xhigh',
         )
         now = timestamp()
-        try:
-            treatment = DirectorTreatment.model_validate({
-                **dict(treatment_response.data.get('director_treatment') or {}),
+        treatment = _validate_director_artifact(
+            DirectorTreatment,
+            treatment_response.data.get('director_treatment'),
+            {
                 'schema_version': '1.0',
                 'model_id': treatment_response.model_id,
                 'input_hash': input_hash,
                 'created_at': now,
-            })
-            visual_bible = VisualBible.model_validate({
-                **dict(treatment_response.data.get('visual_bible') or {}),
+            },
+            artifact_name='DirectorTreatment',
+        )
+        visual_bible = _validate_director_artifact(
+            VisualBible,
+            treatment_response.data.get('visual_bible'),
+            {
                 'schema_version': '1.0',
                 'director_skill_id': director_skill_id,
                 'director_skill_version': director_skill_version,
                 'model_id': treatment_response.model_id,
                 'input_hash': input_hash,
                 'created_at': now,
-            })
-            asset_bible = AssetBible.model_validate({
-                **dict(treatment_response.data.get('asset_bible') or {}),
+            },
+            artifact_name='VisualBible',
+        )
+        asset_bible = _validate_director_artifact(
+            AssetBible,
+            treatment_response.data.get('asset_bible'),
+            {
                 'schema_version': '1.0',
                 'model_id': treatment_response.model_id,
                 'input_hash': input_hash,
                 'created_at': now,
-            })
-        except (TypeError, ValidationError) as exc:
-            raise ProviderUnavailable(
-                'Director 第一阶段没有交付完整的视觉方案与资产圣经'
-            ) from exc
+            },
+            artifact_name='AssetBible',
+        )
         if bool(asset_bible.references) != bool(reference_image_url):
             raise ProviderUnavailable('Director 返回的参考素材职责与实际输入不一致')
         if reference_image_url and any(
@@ -2336,7 +2331,7 @@ class OpenRouterStoryboardProvider:
                 {'role': 'user', 'content': shot_input},
             ],
             label='导演正式分镜',
-            schema_name='qijia_director_shot_plan_v2',
+            schema_name='qijia_director_shot_plan_v3',
             response_schema=_director_shot_plan_response_schema(chapter_ids),
             max_completion_tokens=STORYBOARD_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,

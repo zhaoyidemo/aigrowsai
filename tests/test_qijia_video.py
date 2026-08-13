@@ -24,6 +24,7 @@ from qijia_video.contracts import (
     CreativeBrief,
     CreativeInputSnapshot,
     CreativeRequestInput,
+    DirectorTreatment,
     GenerationSettings,
     JobState,
     NewsResearchBrief,
@@ -83,9 +84,13 @@ from qijia_video.infrastructure.script_providers import (
     SCRIPT_MAX_COMPLETION_TOKENS,
     SCRIPT_PROMPT_VERSION,
     STORYBOARD_MAX_COMPLETION_TOKENS,
+    _ASSET_BIBLE_SCHEMA,
+    _SHOT_CONTEXT_V3_RESPONSE_SCHEMA,
+    _VISUAL_BIBLE_RESPONSE_SCHEMA,
     _director_shot_plan_response_schema,
     _director_treatment_response_schema,
     _openrouter_completion_limit_key,
+    _validate_director_artifact,
 )
 from qijia_video.model_registry import (
     MODEL_REGISTRY_SOURCE,
@@ -2435,6 +2440,87 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bible.director_skill_id, "animated-explainer")
         self.assertEqual(bible.input_hash, "a" * 64)
 
+    def test_quality_director_provider_schema_matches_domain_contract(self):
+        first_stage = _director_treatment_response_schema(4)
+        treatment = first_stage["properties"]["director_treatment"]["properties"]
+        visual_bible = first_stage["properties"]["visual_bible"]["properties"]
+        asset_bible = first_stage["properties"]["asset_bible"]["properties"]
+
+        self.assertEqual(
+            treatment["chapter_progression"],
+            {
+                "items": {"type": "string"},
+                "maxItems": 4,
+                "minItems": 3,
+                "type": "array",
+            },
+        )
+        self.assertEqual(treatment["visual_thesis"]["minLength"], 1)
+        self.assertEqual(treatment["visual_thesis"]["maxLength"], 1200)
+        self.assertEqual(treatment["motif_system"]["minItems"], 1)
+        self.assertEqual(treatment["motif_system"]["maxItems"], 12)
+        self.assertEqual(visual_bible["recurring_subjects"]["minItems"], 1)
+        self.assertEqual(visual_bible["continuity_rules"]["minItems"], 2)
+        self.assertEqual(visual_bible["continuity_rules"]["maxItems"], 16)
+        self.assertEqual(asset_bible["subjects"]["minItems"], 1)
+        self.assertEqual(asset_bible["review_criteria"]["minItems"], 2)
+        self.assertEqual(asset_bible["review_criteria"]["maxItems"], 20)
+        self.assertEqual(asset_bible["references"]["maxItems"], 8)
+        self.assertEqual(
+            asset_bible["references"]["items"]["properties"]["roles"]["items"][
+                "enum"
+            ],
+            ["identity", "wardrobe", "object", "location", "style", "composition"],
+        )
+        serialized = json.dumps(first_stage, ensure_ascii=False)
+        self.assertNotIn('"$ref"', serialized)
+        self.assertNotIn('"$defs"', serialized)
+
+        context = _SHOT_CONTEXT_V3_RESPONSE_SCHEMA["properties"]
+        self.assertEqual(context["semantic_goal"]["minLength"], 1)
+        self.assertEqual(context["semantic_goal"]["maxLength"], 600)
+        self.assertEqual(context["concrete_event"]["minLength"], 1)
+        self.assertEqual(context["concrete_event"]["maxLength"], 1000)
+        self.assertEqual(context["blocking"]["minLength"], 1)
+        self.assertEqual(context["reference_roles"]["maxItems"], 8)
+        self.assertEqual(
+            set(_VISUAL_BIBLE_RESPONSE_SCHEMA["properties"]),
+            set(first_stage["properties"]["visual_bible"]["properties"]),
+        )
+        self.assertEqual(
+            set(_ASSET_BIBLE_SCHEMA["properties"]),
+            set(first_stage["properties"]["asset_bible"]["properties"]),
+        )
+
+    def test_quality_director_validation_names_bad_artifact_and_field_safely(self):
+        raw = {
+            "visual_thesis": "不得出现在错误消息里的模型原文",
+            "audience_experience": "逐步理解同一选择的长期后果。",
+            "chapter_progression": ["建立冲突", "显现代价", "完成重构"],
+            "motif_system": [],
+            "rhythm_strategy": "开场迅速，中段停顿，结尾收束。",
+            "edit_pattern": "动作结果承接下一章。",
+            "style_application": "以统一纸张材质承载视觉叙事。",
+        }
+
+        with self.assertRaises(ProviderUnavailable) as caught:
+            _validate_director_artifact(
+                DirectorTreatment,
+                raw,
+                {
+                    "schema_version": "1.0",
+                    "model_id": "test/director",
+                    "input_hash": "f" * 64,
+                    "created_at": timestamp(),
+                },
+                artifact_name="DirectorTreatment",
+            )
+
+        message = str(caught.exception)
+        self.assertIn("DirectorTreatment", message)
+        self.assertIn("motif_system", message)
+        self.assertNotIn("不得出现在错误消息", message)
+
     async def test_openrouter_quality_director_locks_world_before_shots(self):
         card = SourceCard(
             **valid_card().model_dump(mode="json"),
@@ -2516,7 +2602,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("max_completion_tokens", body)
             self.assertNotIn("models", body)
             schema_name = body["response_format"]["json_schema"]["name"]
-            if schema_name == "qijia_director_treatment_v2":
+            if schema_name == "qijia_director_treatment_v3":
                 result = treatment_payload
             else:
                 result = {
@@ -2562,7 +2648,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [item["response_format"]["json_schema"]["name"] for item in calls],
-            ["qijia_director_treatment_v2", "qijia_director_shot_plan_v2"],
+            ["qijia_director_treatment_v3", "qijia_director_shot_plan_v3"],
         )
         first_schema = calls[0]["response_format"]["json_schema"]["schema"]
         second_schema = calls[1]["response_format"]["json_schema"]["schema"]
@@ -2574,6 +2660,8 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(chapter_schema["properties"]), set(expected_chapter_ids))
         self.assertIn("【导演方法】动画解说导演", calls[0]["messages"][0]["content"])
         self.assertIn("先不要拆镜头", calls[0]["messages"][0]["content"])
+        self.assertIn("【完整交付要求】", calls[0]["messages"][0]["content"])
+        self.assertIn("至少两条可判定的验收标准", calls[0]["messages"][0]["content"])
         self.assertIn("已经锁定，不能重新发明视觉世界", calls[1]["messages"][0]["content"])
         for body in calls:
             system_prompt = body["messages"][0]["content"]
