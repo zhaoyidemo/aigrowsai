@@ -285,10 +285,10 @@ function visualStylePreviewKey(styleId) {
 
 function visualStylePreviewAsset(styleId) {
   const assets = {
-    [DEFAULT_VISUAL_STYLE_ID]: '/qijia-video/assets/style-previews/modern-editorial.webp?v=1.37.0',
-    'paper-collage-explainer': '/qijia-video/assets/style-previews/paper-collage.webp?v=1.37.0',
-    'papercraft-stop-motion': '/qijia-video/assets/style-previews/papercraft-stop-motion.webp?v=1.37.0',
-    'stylized-3d-animation': '/qijia-video/assets/style-previews/stylized-3d-animation.webp?v=1.37.0',
+    [DEFAULT_VISUAL_STYLE_ID]: '/qijia-video/assets/style-previews/modern-editorial.webp?v=1.38.0',
+    'paper-collage-explainer': '/qijia-video/assets/style-previews/paper-collage.webp?v=1.38.0',
+    'papercraft-stop-motion': '/qijia-video/assets/style-previews/papercraft-stop-motion.webp?v=1.38.0',
+    'stylized-3d-animation': '/qijia-video/assets/style-previews/stylized-3d-animation.webp?v=1.38.0',
   };
   return assets[styleId] || assets[DEFAULT_VISUAL_STYLE_ID];
 }
@@ -557,37 +557,87 @@ function updateProductionSpecSummary() {
   node.textContent = `${resolution} · ${videoModel?.short_label || 'Seedance'} · ${ttsVoiceLabel(voiceId)} ${speed}x`;
 }
 
-function renderRuntimeModels() {
-  const models = Array.isArray(state.capabilities?.runtime_models)
-    ? state.capabilities.runtime_models
-    : [];
-  const container = $('#runtime-models');
-  const grid = $('#runtime-model-grid');
-  const summary = $('#runtime-model-summary');
-  const note = $('#runtime-model-note');
-  if (!container || !grid || !summary || !note) return;
+function capabilityReference(capability) {
+  const id = String(capability?.id || '');
+  const version = String(capability?.version || '');
+  return [id, version].filter(Boolean).join('@');
+}
+
+function capabilityKindLabel(kind) {
+  return {
+    script_skill: 'Script Skill',
+    director_skill: 'Director Skill',
+    visual_style: 'Visual Style',
+    provider_adapter: 'H3 Provider Adapter',
+    legacy_content_skill: '历史 Content Skill',
+    legacy_script_prompt_adapter: '历史 H3 Script Adapter',
+    legacy_prompt_writing_profile: '历史 H3 Prompt Profile',
+  }[kind] || kind;
+}
+
+function renderPipelineCapabilities(capabilities) {
+  if (!Array.isArray(capabilities) || !capabilities.length) return '';
+  return `<div class="pipeline-node-capabilities">${capabilities.map((capability) => `
+    <code title="${escapeHtml(capability.description)}">${escapeHtml(capabilityKindLabel(capability.kind))} · ${escapeHtml(capability.display_name)} · ${escapeHtml(capabilityReference(capability))}</code>
+  `).join('')}</div>`;
+}
+
+function renderPipelineModels(models) {
+  if (!Array.isArray(models) || !models.length) return '';
+  return `<div class="pipeline-node-models">${models.map((model) => `
+    <code title="${escapeHtml(model.role)}">${escapeHtml(model.display_name)} · ${escapeHtml(model.model_id)}</code>
+  `).join('')}</div>`;
+}
+
+function renderPipelineTools(tools) {
+  if (!Array.isArray(tools) || !tools.length) return '';
+  return `<div class="pipeline-node-models">${tools.map((tool) => `
+    <code>${escapeHtml(tool.name)} · ${escapeHtml(tool.role)}</code>
+  `).join('')}</div>`;
+}
+
+function renderProductionPipeline() {
+  const pipeline = state.capabilities?.production_pipeline;
+  const nodes = Array.isArray(pipeline?.nodes) ? pipeline.nodes : [];
+  const container = $('#production-pipeline');
+  const list = $('#production-pipeline-list');
+  const summary = $('#production-pipeline-summary');
+  const note = $('#production-pipeline-note');
+  if (!container || !list || !summary || !note) return;
   if (!container.dataset.responsiveInitialized) {
     container.dataset.responsiveInitialized = 'true';
     if (window.matchMedia('(max-width: 560px)').matches) container.open = false;
   }
-  if (!models.length) {
-    summary.textContent = '后端未返回模型目录';
-    grid.innerHTML = '<p class="empty">无法确认实际运行模型，请刷新或检查后端版本。</p>';
-    note.textContent = '为避免前后端漂移，页面不会用本地硬编码伪装生产模型。';
+  if (!nodes.length) {
+    summary.textContent = '后端未返回生产架构';
+    list.innerHTML = '<li class="empty">无法确认实际链路，请刷新或检查后端版本。</li>';
+    note.textContent = '为避免前后端漂移，页面不会用本地硬编码伪装 AI 同事、Skill 或模型。';
     return;
   }
-  grid.innerHTML = models.map((model) => `<article class="runtime-model-card" data-runtime-model="${escapeHtml(model.key)}">
-    <span>${escapeHtml(model.stage)}</span>
-    <strong>${escapeHtml(model.display_name)}</strong>
-    <code>${escapeHtml(model.model_id)}</code>
-    <small>${escapeHtml(model.detail)} · ${escapeHtml(model.provider)}</small>
-  </article>`).join('');
-  const script = models.find((item) => item.key === 'script');
-  const video = models.find((item) => item.key === 'video');
-  summary.textContent = [script?.display_name, video?.display_name].filter(Boolean).join(' · ');
-  note.textContent = video?.active_for_new_jobs === false
-    ? `以上模型由 /capabilities 返回；当前视频模型 ${video.model_id} 不受支持，新任务已被后端阻止。`
-    : `以上模型由 /capabilities 返回；新任务视频默认冻结为 ${video?.model_id || '后端当前配置'}，前端不维护第二套生产模型。`;
+  if (container.dataset.jobId !== job.id) {
+    container.dataset.jobId = job.id;
+    container.open = job.state === 'failed';
+  }
+  list.innerHTML = nodes.map((node) => `<li class="production-pipeline-node ${escapeHtml(node.category)}" data-pipeline-node="${escapeHtml(node.id)}">
+    <div class="pipeline-node-heading">
+      <span class="pipeline-node-order">${String(Number(node.order) || '').padStart(2, '0')}</span>
+      <span class="pipeline-node-category">${escapeHtml(node.category_label)}</span>
+    </div>
+    <strong>${escapeHtml(node.name)}</strong>
+    <span>${escapeHtml(node.owner)}</span>
+    ${renderPipelineCapabilities(node.capabilities)}
+    ${renderPipelineModels(node.models)}
+    ${renderPipelineTools(node.tools)}
+    <small>${escapeHtml(node.detail)}</small>
+    <div class="pipeline-node-calls">${escapeHtml(node.planned_calls)}</div>
+  </li>`).join('');
+  const aiColleagues = nodes.filter((node) => node.category === 'ai_colleague').length;
+  const methods = nodes.filter((node) => node.category === 'creative_method').length;
+  const modelStages = nodes.filter((node) => node.category === 'production_model').length;
+  const toolStages = nodes.filter((node) => node.category === 'production_tool').length;
+  const gates = nodes.filter((node) => node.human_gate).length;
+  summary.textContent = `${nodes.length} 步 · ${aiColleagues} 位 AI 同事 · ${methods} 个方法 · ${modelStages} 个生成阶段 · ${toolStages} 个工具阶段 · ${gates} 个人工门`;
+  note.textContent = `架构 v${pipeline.pipeline_version || '—'} 由 /capabilities 实时返回；模型、Skill 与 Adapter 均由后端注册表解析，页面只负责解释，不提供第二套配置。`;
 }
 
 function setResolutionField(settings) {
@@ -1273,7 +1323,7 @@ function renderCapabilities() {
       : '选题研究未配置（不影响视频创作）',
   ];
   node.querySelector('span:last-child').textContent = parts.join(' ｜ ');
-  renderRuntimeModels();
+  renderProductionPipeline();
   renderTopicControls();
   updateCreationIntake();
 }
@@ -1390,6 +1440,145 @@ function requestSignature(request) {
 function activeJobTaskRunning(job) {
   const task = taskForJob(job);
   return !!task && !['done', 'failed'].includes(task.status);
+}
+
+const executionStatusLabels = {
+  pending: '尚未开始',
+  running: '进行中',
+  waiting: '等待你',
+  completed: '已完成',
+  failed: '失败',
+  skipped: '本任务跳过',
+};
+
+function effectiveExecutionStatus(node, job) {
+  const task = taskForJob(job);
+  const taskStage = String(task?.progress_meta?.stage || '');
+  const ownsTaskStage = (node.progress_stages || []).includes(taskStage);
+  if (ownsTaskStage && task?.status === 'failed') return 'failed';
+  if (ownsTaskStage && activeJobTaskRunning(job)) return 'running';
+  return node.status || 'pending';
+}
+
+function executionMetricText(actual) {
+  const parts = [];
+  const requests = Math.max(0, Number(actual?.request_count) || 0);
+  const tokens = Math.max(0, Number(actual?.total_tokens) || 0);
+  const unpriced = Math.max(0, Number(actual?.unpriced_request_count) || 0);
+  if (requests) parts.push(`${formatInteger(requests, '0')} 次请求`);
+  if (tokens) parts.push(`${formatTokens(tokens)} tokens`);
+  if (actual?.known_cost_cny !== null && actual?.known_cost_cny !== undefined) {
+    parts.push(formatCny(actual.known_cost_cny));
+  }
+  if (unpriced) parts.push(`${formatInteger(unpriced, '0')} 次待账单`);
+  return parts.join(' · ') || '尚无实际调用';
+}
+
+function executionFact(label, values, {code = false, full = false} = {}) {
+  const items = (Array.isArray(values) ? values : [values])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  if (!items.length) return '';
+  const tag = code ? 'code' : 'small';
+  return `<div class="execution-fact ${full ? 'full' : ''}">
+    <span>${escapeHtml(label)}</span>
+    ${items.map((value) => `<${tag}>${escapeHtml(value)}</${tag}>`).join('')}
+  </div>`;
+}
+
+function executionCapabilityFacts(capabilities) {
+  return (capabilities || []).map((capability) => {
+    const source = capability.source === 'job_frozen_snapshot'
+      ? '本任务冻结'
+      : '当前注册表';
+    return `${capabilityKindLabel(capability.kind)}：${capability.display_name} · ${capabilityReference(capability)} · ${source}`;
+  });
+}
+
+function executionModelFacts(node) {
+  const actual = Array.isArray(node.actual?.models) ? node.actual.models : [];
+  if (actual.length) {
+    return {
+      label: '本次实际模型',
+      values: actual.map((model) => `${model.display_name} · ${model.model_id}`),
+    };
+  }
+  return {
+    label: '当前计划模型',
+    values: (node.models || []).map(
+      (model) => `${model.display_name} · ${model.model_id} · ${model.provider}`,
+    ),
+  };
+}
+
+function renderJobExecutionTrace(job) {
+  const container = $('#job-execution-trace');
+  const list = $('#job-execution-list');
+  const summary = $('#job-execution-summary');
+  const note = $('#job-execution-note');
+  if (!container || !list || !summary || !note) return;
+  const trace = job?.execution_trace;
+  const nodes = Array.isArray(trace?.nodes) ? trace.nodes : [];
+  if (!nodes.length) {
+    summary.textContent = '实际轨迹尚未加载';
+    list.innerHTML = '<li class="empty">正在读取任务详情；如果持续为空，请刷新任务。</li>';
+    note.textContent = '任务列表只返回摘要，打开任务后才读取冻结快照、产物和费用账本。';
+    return;
+  }
+  const rendered = nodes.map((node) => {
+    const status = effectiveExecutionStatus(node, job);
+    const statusLabel = executionStatusLabels[status] || node.status_label || status;
+    const actual = node.actual || {};
+    const modelFacts = executionModelFacts(node);
+    const tools = (node.tools || []).map(
+      (tool) => `${tool.name} · ${tool.role}`,
+    );
+    const expanded = ['running', 'waiting', 'failed'].includes(status);
+    return `<li class="job-execution-node ${escapeHtml(status)}" data-execution-node="${escapeHtml(node.id)}">
+      <details class="execution-node-details" ${expanded ? 'open' : ''}>
+        <summary>
+          <span class="execution-node-title">
+            <span>${escapeHtml(node.category_label)} · ${escapeHtml(node.owner)}</span>
+            <strong>${String(Number(node.order) || '').padStart(2, '0')} · ${escapeHtml(node.name)}</strong>
+            <small>${escapeHtml(actual.output_summary || node.output)}</small>
+          </span>
+          <span class="execution-node-metrics">
+            <span class="execution-status">${escapeHtml(statusLabel)}</span>
+            <small>${escapeHtml(executionMetricText(actual))}</small>
+          </span>
+        </summary>
+        <div class="execution-node-body">
+          ${executionFact('本次能力', executionCapabilityFacts(node.capabilities), {code: true})}
+          ${executionFact(modelFacts.label, modelFacts.values, {code: true})}
+          ${executionFact('生产工具', tools, {code: true})}
+          ${executionFact('输入', node.input)}
+          ${executionFact('实际输出', actual.output_summary || node.output)}
+          ${executionFact('职责与方法', node.detail, {full: true})}
+          ${executionFact('调用设计', node.planned_calls, {full: true})}
+        </div>
+      </details>
+    </li>`;
+  });
+  list.innerHTML = rendered.join('');
+  const statuses = nodes.map((node) => effectiveExecutionStatus(node, job));
+  if (statuses.includes('failed')) container.open = true;
+  const handled = statuses.filter((status) => ['completed', 'skipped'].includes(status)).length;
+  const requests = nodes.reduce(
+    (total, node) => total + Math.max(0, Number(node.actual?.request_count) || 0),
+    0,
+  );
+  const costs = nodes
+    .map((node) => node.actual?.known_cost_cny)
+    .filter((value) => value !== null && value !== undefined)
+    .reduce((total, value) => total + Math.max(0, Number(value) || 0), 0);
+  summary.textContent = [
+    `已处理 ${handled}/${nodes.length} 步`,
+    requests ? `实际 ${formatInteger(requests, '0')} 次请求` : '',
+    costs ? `已计 ${formatCny(costs)}` : '',
+  ].filter(Boolean).join(' · ');
+  note.textContent = trace.matches_current_pipeline === false
+    ? `这是 v${trace.pipeline_version || '—'} 历史任务；能力与模型优先采用任务冻结快照和实际产物，不用当前默认值冒充历史事实。`
+    : '状态来自任务聚合，能力来自任务冻结快照，调用与成本来自用量账本；运行中的阶段会叠加后台任务实时进度。';
 }
 
 function currentTaskForShot(job, request) {
@@ -2847,6 +3036,7 @@ function renderDetail() {
   $('#current-action').textContent = copy.current;
   $('#stage-elapsed').textContent = `总 ${elapsedText(task)} · 当前 ${phaseElapsedText(task)}`;
   $('#next-action').textContent = copy.next;
+  renderJobExecutionTrace(job);
   renderSeedanceUsage(job);
   renderShotStoryboard(job);
   const error = $('#job-error');
@@ -2945,18 +3135,22 @@ function renderDetail() {
 async function loadAll({selectJobId = ''} = {}) {
   const listedJobs = await api('GET', '/jobs');
   const jobs = [...listedJobs];
-  if (selectJobId && !jobs.some((item) => item.id === selectJobId)) {
+  const previousJobId = state.selectedJob?.id || '';
+  const targetId = selectJobId || previousJobId || jobs[0]?.id || '';
+  let selectedJob = jobs.find((item) => item.id === targetId) || null;
+  if (targetId) {
     try {
-      const linkedJob = await api('GET', `/jobs/${encodeURIComponent(selectJobId)}`);
-      jobs.unshift(linkedJob);
+      const detailedJob = await api('GET', `/jobs/${encodeURIComponent(targetId)}`);
+      const index = jobs.findIndex((item) => item.id === detailedJob.id);
+      if (index >= 0) jobs[index] = detailedJob;
+      else jobs.unshift(detailedJob);
+      selectedJob = detailedJob;
     } catch {
-      // The list remains usable when a stale or inaccessible deep link is opened.
+      // Keep a visible list summary when a stale or inaccessible detail link is opened.
     }
   }
   state.jobs = jobs;
-  const previousJobId = state.selectedJob?.id || '';
-  const targetId = selectJobId || state.selectedJob?.id;
-  state.selectedJob = targetId ? jobs.find((item) => item.id === targetId) || null : jobs[0] || null;
+  state.selectedJob = selectedJob;
   if (selectJobId && state.selectedJob) switchProductionPane('jobs');
   if (previousJobId !== (state.selectedJob?.id || '')) {
     clearTtsPreview();

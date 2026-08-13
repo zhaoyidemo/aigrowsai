@@ -72,18 +72,42 @@ test('video creation uses model knowledge without external retrieval', () => {
   assert.match(app, /job\.pipeline_version === 'v3'[\s\S]*'直接创作'/);
 });
 
-test('runtime model visibility is backend-driven and includes exact model ids', () => {
-  assert.match(page, /id="runtime-models"[^>]*open/);
-  assert.match(page, /id="runtime-model-grid"/);
-  assert.match(page, /由后端运行时返回，新任务按这里显示的模型冻结/);
-  assert.match(app, /state\.capabilities\?\.runtime_models/);
+test('production pipeline visibility is backend-driven and names real collaborators', () => {
+  assert.match(page, /id="production-pipeline"[^>]*open/);
+  assert.match(page, /id="production-pipeline-list"/);
+  assert.match(page, /当前真实生产链路/);
+  assert.match(page, /AI 同事、创作方法、生产模型、工具和人工质量门均由后端返回/);
+  assert.match(app, /state\.capabilities\?\.production_pipeline/);
+  assert.match(app, /renderProductionPipeline\(\)/);
+  assert.match(app, /capabilityReference\(capability\)/);
   assert.match(app, /model\.model_id/);
-  assert.match(app, /renderRuntimeModels\(\)/);
-  assert.match(app, /前端不维护第二套生产模型/);
+  assert.match(app, /Skill 与 Adapter 均由后端注册表解析/);
   assert.doesNotMatch(app, /doubao-seedance-[0-9]/);
-  assert.match(app, /后端没有返回可用的视频模型/);
+  assert.match(app, /后端未返回生产架构/);
   assert.match(app, /matchMedia\('\(max-width: 560px\)'\)\.matches/);
   assert.match(app, /container\.open = false/);
+  assert.match(styles, /\.production-pipeline-node\.ai_colleague/);
+  assert.match(styles, /\.production-pipeline-node\.creative_method/);
+  assert.match(styles, /\.production-pipeline-node\.production_model/);
+  assert.match(styles, /\.production-pipeline-node\.production_tool/);
+});
+
+test('job detail exposes frozen skills, actual models, usage and live execution state', () => {
+  assert.match(page, /id="job-execution-trace"/);
+  assert.doesNotMatch(page, /id="job-execution-trace"[^>]*open/);
+  assert.match(page, /来自本任务冻结快照、生成产物和费用账本/);
+  assert.match(app, /job\?\.execution_trace/);
+  assert.match(app, /capability\.source === 'job_frozen_snapshot'/);
+  assert.match(app, /node\.actual\?\.request_count/);
+  assert.match(app, /node\.actual\?\.known_cost_cny/);
+  assert.match(app, /task\?\.progress_meta\?\.stage/);
+  assert.match(app, /renderJobExecutionTrace\(job\)/);
+  assert.match(app, /container\.open = job\.state === 'failed'/);
+  assert.match(app, /任务列表只返回摘要/);
+  assert.match(app, /legacy_content_skill: '历史 Content Skill'/);
+  assert.match(app, /不用当前默认值冒充历史事实/);
+  assert.match(styles, /\.job-execution-node\.running/);
+  assert.match(styles, /\.execution-node-body/);
 });
 
 test('creator selects only visual style while internal roles stay server-owned', () => {
@@ -220,7 +244,7 @@ test('team cost and Douyin performance dashboard has explicit audited refresh ac
   assert.match(costsApi, /row\["can_refresh"\]/);
   assert.match(costsApi, /runtime\.capabilities\(\)\.get\("douyin_performance"/);
   assert.match(app, /new URLSearchParams\(window\.location\.search\)\.get\('job'\)/);
-  assert.match(app, /api\('GET', `\/jobs\/\$\{encodeURIComponent\(selectJobId\)\}`\)/);
+  assert.match(app, /api\('GET', `\/jobs\/\$\{encodeURIComponent\(targetId\)\}`\)/);
   assert.match(costsApp, /exportCsv/);
   assert.match(costsApp, /URL\.createObjectURL/);
   assert.match(costsApp, /\^\[\\t\\r\\n \]\*\[=\+\\-@\]/);

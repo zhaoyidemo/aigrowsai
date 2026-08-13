@@ -213,7 +213,7 @@ node --test tests/qijia_video_frontend.test.js
 npm.cmd run typecheck --prefix video_renderer
 ```
 
-真实部署验收至少包括：登录后默认进入视频生产，确认创建页“当前生产模型”与 `/capabilities.runtime_models` 完全一致，并验证选题未配置不会锁死脚本入口；用统一创作请求检查 `pipeline_version=v4`、原始输入逐字冻结、`skill_snapshot=null`、`prompt_adapter_snapshot=null` 且没有外部检索；确认脚本产生“初稿 xhigh、独立审稿 high、主编重写 xhigh、终稿验收 high”四条 OpenRouter 用量记录，终审哈希与最终脚本一致。人工确认脚本后，核对逐段实测 TTS 时间轴、两阶段 Director 产物、独立审片结果、三张同事件视觉样片和样片选择门；确认样片前不得出现正式首帧或 Seedance 请求。随后验证自有素材跳过对应 AI 生成、测试期 Seedance 1.5 Pro 默认且方舟真实可提交、Remotion 成片、发布包、成本数据、服务重启恢复及 v1/v2/v3 历史任务读取。
+真实部署验收至少包括：登录后默认进入视频生产，确认创建页“当前真实生产链路”与 `/capabilities.production_pipeline` 完全一致，并验证任务详情中的冻结 Skill、实际模型、调用次数、成本与产物均来自任务轨迹而非前端硬编码；验证选题未配置不会锁死脚本入口。用统一创作请求检查 `pipeline_version=v4`、原始输入逐字冻结、`skill_snapshot=null`、`prompt_adapter_snapshot=null` 且没有外部检索；确认脚本产生“初稿 xhigh、独立审稿 high、主编重写 xhigh、终稿验收 high”四条 OpenRouter 用量记录，终审哈希与最终脚本一致。人工确认脚本后，核对逐段实测 TTS 时间轴、两阶段 Director 产物、独立审片结果、三张同事件视觉样片和样片选择门；确认样片前不得出现正式首帧或 Seedance 请求。随后验证自有素材跳过对应 AI 生成、测试期 Seedance 1.5 Pro 默认且方舟真实可提交、Remotion 成片、发布包、成本数据、服务重启恢复及 v1/v2/v3 历史任务读取。
 
 ## 数据边界
 

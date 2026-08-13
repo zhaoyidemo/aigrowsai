@@ -83,7 +83,12 @@ def public_resource_payload(resource, user: dict) -> dict:
     return payload
 
 
-def public_job_payload(job, user: dict) -> dict:
+def public_job_payload(
+    job,
+    user: dict,
+    *,
+    include_execution_trace: bool = True,
+) -> dict:
     """Keep provider download URLs inside the persisted aggregate."""
 
     payload = public_resource_payload(job, user)
@@ -94,6 +99,8 @@ def public_job_payload(job, user: dict) -> dict:
     payload["douyin_performance_analysis"] = (
         runtime.service.douyin_performance_analysis(job)
     )
+    if include_execution_trace:
+        payload["execution_trace"] = runtime.job_execution_trace(job)
     return payload
 
 
@@ -535,7 +542,10 @@ async def list_jobs(
     user: dict = Depends(get_current_user),
 ):
     rows = await runtime.service.list_jobs(actor_from_user(user), limit=limit)
-    return ok([public_job_payload(item, user) for item in rows])
+    return ok([
+        public_job_payload(item, user, include_execution_trace=False)
+        for item in rows
+    ])
 
 
 @api_router.get("/jobs/{job_id}")

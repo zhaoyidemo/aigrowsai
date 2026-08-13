@@ -9,6 +9,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -102,6 +103,7 @@ from qijia_video.model_registry import (
     PRODUCTION_MODELS,
     PRODUCTION_TEXT_MODEL,
 )
+from qijia_video.pipeline_visibility import job_execution_trace
 from qijia_video.settings import QijiaVideoSettings
 from qijia_video.infrastructure.storage import (
     TOS_CONTROL_TIMEOUT_SECONDS,
@@ -3750,6 +3752,71 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             value == selected_url
             for value in image_provider.reference_image_urls[3:]
         ))
+        runtime_view = SimpleNamespace(**{
+            name: getattr(self.service, name)
+            for name in (
+                "script_skill_registry",
+                "director_skill_registry",
+                "visual_style_registry",
+                "provider_adapter_registry",
+                "script_provider",
+                "storyboard_provider",
+                "image_provider",
+                "tts_provider",
+                "video_provider",
+                "renderer",
+                "media_packager",
+                "quality_checker",
+            )
+        })
+        trace = job_execution_trace(runtime_view, job)
+        trace_nodes = {item["id"]: item for item in trace["nodes"]}
+        self.assertEqual(trace["pipeline_version"], "v4")
+        self.assertTrue(trace["matches_current_pipeline"])
+        self.assertEqual(
+            trace["source"],
+            "job_snapshots_artifacts_and_usage_ledger",
+        )
+        self.assertEqual(trace_nodes["script"]["status"], "completed")
+        self.assertEqual(
+            trace_nodes["script"]["capabilities"][0]["id"],
+            job.script_skill_snapshot.skill_id,
+        )
+        self.assertEqual(
+            trace_nodes["script"]["capabilities"][0]["source"],
+            "job_frozen_snapshot",
+        )
+        self.assertEqual(trace_nodes["director"]["status"], "completed")
+        self.assertEqual(
+            trace_nodes["director"]["capabilities"][0]["version"],
+            job.director_skill_snapshot.version,
+        )
+        self.assertEqual(
+            {
+                item["kind"]: item["source"]
+                for item in trace_nodes["prompt_method"]["capabilities"]
+            },
+            {
+                "visual_style": "job_frozen_snapshot",
+                "provider_adapter": "job_frozen_snapshot",
+            },
+        )
+        self.assertEqual(
+            trace_nodes["style_development"]["status"],
+            "completed",
+        )
+        self.assertEqual(
+            trace_nodes["style_development"]["actual"]["request_count"],
+            3,
+        )
+        self.assertEqual(trace_nodes["media_review"]["status"], "completed")
+        self.assertEqual(trace_nodes["media_generation"]["status"], "completed")
+        self.assertEqual(trace_nodes["render"]["status"], "completed")
+        self.assertEqual(trace_nodes["final_review"]["status"], "waiting")
+        self.assertIn(
+            str(len(job.storyboard_plan.shots)),
+            trace_nodes["director"]["actual"]["output_summary"],
+        )
 
     async def test_quality_first_reference_reaches_style_and_formal_seedream_requests(self):
         reference_path = self.root / "quality-reference.png"
@@ -3953,6 +4020,57 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(job.generation_settings.script_prompt, "")
         self.assertEqual(job.generation_settings.seedance_prompt, "")
+        runtime_view = SimpleNamespace(**{
+            name: getattr(self.service, name)
+            for name in (
+                "script_skill_registry",
+                "director_skill_registry",
+                "visual_style_registry",
+                "provider_adapter_registry",
+                "script_provider",
+                "storyboard_provider",
+                "image_provider",
+                "tts_provider",
+                "video_provider",
+                "renderer",
+                "media_packager",
+                "quality_checker",
+            )
+        })
+        historical_trace = job_execution_trace(runtime_view, job)
+        historical_nodes = {
+            item["id"]: item for item in historical_trace["nodes"]
+        }
+        self.assertFalse(historical_trace["matches_current_pipeline"])
+        self.assertEqual(
+            {
+                item["kind"]
+                for item in historical_nodes["script"]["capabilities"]
+            },
+            {
+                "script_skill",
+                "legacy_content_skill",
+                "legacy_script_prompt_adapter",
+            },
+        )
+        self.assertEqual(
+            {
+                item["kind"]: item["id"]
+                for item in historical_nodes["prompt_method"]["capabilities"]
+            },
+            {
+                "visual_style": "paper-collage-explainer",
+                "provider_adapter": "seedream-seedance",
+            },
+        )
+        self.assertTrue(all(
+            not item["models"] and not item["tools"]
+            for item in historical_trace["nodes"]
+        ))
+        self.assertTrue(all(
+            item["planned_calls"] == "历史任务按当时冻结版本执行"
+            for item in historical_trace["nodes"]
+        ))
         job = await self.service.generate_script(job.id, self.actor)
         self.assertIsNone(job.editorial_plan)
         self.assertIsNone(job.creative_brief)
@@ -4965,6 +5083,22 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(public_payload["script"]["schema_version"], "3.0")
         self.assertIn("beats", public_payload["script"])
         self.assertNotIn("narration_segments", public_payload["script"])
+        self.assertIn("execution_trace", public_payload)
+        self.assertEqual(
+            public_payload["execution_trace"]["source"],
+            "job_snapshots_artifacts_and_usage_ledger",
+        )
+        summary_payload = qijia_api.public_job_payload(
+            job,
+            {
+                "id": 7,
+                "username": "editor",
+                "role": "member",
+                "permissions": ["qijia_video"],
+            },
+            include_execution_trace=False,
+        )
+        self.assertNotIn("execution_trace", summary_payload)
         self.assertTrue(all(
             "source_url" not in candidate
             for candidate in public_payload["first_frame_candidates"]
@@ -6439,6 +6573,73 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             runtime_models["video"]["model_id"],
             response.json()["data"]["generation_defaults"]["seedance_model"],
         )
+        pipeline = capabilities["production_pipeline"]
+        self.assertEqual(pipeline["pipeline_version"], "v4")
+        self.assertEqual(
+            pipeline["source"],
+            "runtime_models_and_versioned_registries",
+        )
+        pipeline_nodes = {
+            item["id"]: item for item in pipeline["nodes"]
+        }
+        self.assertEqual(
+            list(pipeline_nodes),
+            [
+                "creative_input",
+                "script",
+                "script_review",
+                "voice",
+                "director",
+                "prompt_method",
+                "style_development",
+                "media_review",
+                "media_generation",
+                "render",
+                "final_review",
+            ],
+        )
+        self.assertEqual(
+            pipeline_nodes["script"]["capabilities"][0]["kind"],
+            "script_skill",
+        )
+        self.assertEqual(
+            pipeline_nodes["script"]["models"][0]["model_id"],
+            capabilities["script_model"],
+        )
+        self.assertEqual(
+            pipeline_nodes["director"]["capabilities"][0]["kind"],
+            "director_skill",
+        )
+        self.assertEqual(
+            pipeline_nodes["director"]["models"][0]["model_id"],
+            capabilities["director_model"],
+        )
+        self.assertEqual(
+            {
+                item["kind"]
+                for item in pipeline_nodes["prompt_method"]["capabilities"]
+            },
+            {"visual_style", "provider_adapter"},
+        )
+        self.assertEqual(pipeline_nodes["prompt_method"]["models"], [])
+        self.assertEqual(
+            pipeline_nodes["voice"]["category"],
+            "production_model",
+        )
+        self.assertEqual(
+            pipeline_nodes["render"]["category"],
+            "production_tool",
+        )
+        self.assertEqual(
+            {
+                item["model_id"]
+                for item in pipeline_nodes["media_generation"]["models"]
+            },
+            {capabilities["image_model"], capabilities["video_model"]},
+        )
+        self.assertTrue(pipeline_nodes["script_review"]["human_gate"])
+        self.assertTrue(pipeline_nodes["media_review"]["human_gate"])
+        self.assertTrue(pipeline_nodes["final_review"]["human_gate"])
         self.assertEqual(
             response.json()["data"]["seedance_pricing"]["default_model"],
             SEEDANCE_BALANCED_MODEL,

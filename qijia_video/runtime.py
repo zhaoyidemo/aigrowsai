@@ -17,6 +17,7 @@ from qijia_video.contracts import (
     SEEDANCE_BALANCED_MODEL,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
+    VideoJob,
 )
 from qijia_video.cost_analysis import USD_TO_CNY_RATE
 from qijia_video.errors import InvalidTransition
@@ -45,6 +46,10 @@ from qijia_video.model_registry import (
     QUALITY_DIRECTOR_REQUEST_COUNT,
     QUALITY_DIRECTOR_REQUEST_COUNT_RANGE,
     model_display_name,
+)
+from qijia_video.pipeline_visibility import (
+    job_execution_trace as build_job_execution_trace,
+    production_pipeline as build_production_pipeline,
 )
 from qijia_video.settings import settings
 from qijia_video.service import QijiaVideoService, TTS_PREVIEW_MAX_CHARACTERS
@@ -194,6 +199,20 @@ class QijiaVideoRuntime:
                 settings.QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS
             ),
         )
+        # Keep versioned registries stable when tests or maintenance code
+        # temporarily replace the service object on the runtime.
+        self.script_skill_registry = self.service.script_skill_registry
+        self.director_skill_registry = self.service.director_skill_registry
+        self.visual_style_registry = self.service.visual_style_registry
+        self.provider_adapter_registry = self.service.provider_adapter_registry
+        self.media_packager = self.service.media_packager
+        self.quality_checker = self.service.quality_checker
+
+    def production_pipeline(self) -> dict:
+        return build_production_pipeline(self)
+
+    def job_execution_trace(self, job: VideoJob) -> dict:
+        return build_job_execution_trace(self, job)
 
     def capabilities(self) -> dict:
         renderer_ready, renderer_detail = self.renderer.available()
@@ -381,6 +400,7 @@ class QijiaVideoRuntime:
             "video_model": configured_seedance_model,
             "tts_model": self.tts_provider.resource_id,
             "runtime_models": runtime_models,
+            "production_pipeline": self.production_pipeline(),
             "openrouter_pricing": {
                 "currency": "USD",
                 "model": self.storyboard_provider.model,

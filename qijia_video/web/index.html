@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 知识视频工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.37.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.38.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -106,13 +106,13 @@
       <button class="production-view-tab active" type="button" role="tab" aria-selected="true" data-production-pane="create">新建视频</button>
       <button class="production-view-tab" type="button" role="tab" aria-selected="false" data-production-pane="jobs">视频任务 <span id="production-task-count">0</span></button>
     </div>
-    <details id="runtime-models" class="runtime-models" open>
+    <details id="production-pipeline" class="production-pipeline" open>
       <summary>
-        <span><strong>当前生产模型</strong><small>由后端运行时返回，新任务按这里显示的模型冻结</small></span>
-        <span id="runtime-model-summary">正在读取实际配置…</span>
+        <span><strong>当前真实生产链路</strong><small>AI 同事、创作方法、生产模型、工具和人工质量门均由后端返回</small></span>
+        <span id="production-pipeline-summary">正在读取真实架构…</span>
       </summary>
-      <div id="runtime-model-grid" class="runtime-model-grid" aria-live="polite"></div>
-      <p id="runtime-model-note" class="runtime-model-note">前端不单独维护生产模型名称。</p>
+      <ol id="production-pipeline-list" class="production-pipeline-list" aria-live="polite"></ol>
+      <p id="production-pipeline-note" class="production-pipeline-note">页面不单独维护模型或 Skill 名称，也不把这些只读信息变成新的选择门槛。</p>
     </details>
     <div class="workspace-grid">
       <aside class="left-column" data-production-column="create">
@@ -270,6 +270,14 @@
             </div>
           </section>
           <ol id="stage-track" class="stage-track" aria-label="生产进度"></ol>
+          <details id="job-execution-trace" class="job-execution-trace">
+            <summary>
+              <span><strong>本次真实执行</strong><small>来自本任务冻结快照、生成产物和费用账本</small></span>
+              <span id="job-execution-summary">正在读取实际轨迹…</span>
+            </summary>
+            <ol id="job-execution-list" class="job-execution-list"></ol>
+            <p id="job-execution-note" class="job-execution-note"></p>
+          </details>
           <section id="production-progress" class="task-subprogress" hidden>
             <div><strong>当前阶段进度</strong><span id="task-progress">等待后台任务…</span></div>
             <div id="task-progress-meter" class="progress" role="progressbar" aria-label="自动流程总进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="task-progress-bar"></span></div>
@@ -479,6 +487,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.37.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.38.0"></script>
 </body>
 </html>
