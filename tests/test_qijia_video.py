@@ -97,6 +97,7 @@ from qijia_video.infrastructure.script_providers import (
     _director_treatment_response_schema,
     _normalized_script_editor_feedback,
     _openrouter_completion_limit_key,
+    _openrouter_json_request,
     _validate_director_artifact,
 )
 from qijia_video.lazy_registry import LazyRegistryProxy
@@ -1634,6 +1635,8 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("provider", request_body)
         self.assertNotIn("reasoning", request_body)
         self.assertNotIn("models", request_body)
+        self.assertNotIn("stream", request_body)
+        self.assertNotIn("stream_options", request_body)
         self.assertEqual(request_body["model"], PRODUCTION_TEXT_MODEL)
         self.assertEqual(script.video_title, "判断先于成败")
         self.assertEqual(len(usage_records), 1)
@@ -1648,6 +1651,195 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             usage_records[0].pricing_basis,
             "DGrid billing-json 不可变计费快照",
         )
+
+    async def test_dgrid_director_uses_sse_and_terminal_usage(self):
+        calls: list[httpx.Request] = []
+        usage_records: list[ProviderUsageRecord] = []
+        events = [
+            {
+                "id": "chatcmpl-dgrid-director-1",
+                "model": "anthropic/claude-fable-5",
+                "choices": [{
+                    "index": 0,
+                    "delta": {"role": "assistant"},
+                    "finish_reason": None,
+                }],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-dgrid-director-1",
+                "model": "anthropic/claude-fable-5",
+                "choices": [{
+                    "index": 0,
+                    "delta": {"reasoning_content": "private reasoning"},
+                    "finish_reason": None,
+                }],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-dgrid-director-1",
+                "model": "anthropic/claude-fable-5",
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": '{"ok":'},
+                    "finish_reason": None,
+                }],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-dgrid-director-1",
+                "model": "anthropic/claude-fable-5",
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": "true}"},
+                    "finish_reason": None,
+                }],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-dgrid-director-1",
+                "model": "anthropic/claude-fable-5",
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop",
+                }],
+                "usage": None,
+            },
+            {
+                "id": "chatcmpl-dgrid-director-1",
+                "model": "anthropic/claude-fable-5",
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 120,
+                    "completion_tokens": 40,
+                    "total_tokens": 160,
+                    "completion_tokens_details": {"reasoning_tokens": 12},
+                },
+            },
+        ]
+        stream_body = "".join(
+            f"data: {json.dumps(event)}\n\n" for event in events
+        ) + "data: [DONE]\n\n"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            if request.url.path == "/api/v1/model-router/billing-json":
+                self.assertEqual(
+                    request.url.params["request_id"],
+                    "req-dgrid-director-1",
+                )
+                return httpx.Response(200, json={
+                    "code": 200,
+                    "data": {
+                        "billing_json": {
+                            "model": "anthropic/claude-fable-5",
+                            "input_tokens": 120,
+                            "output_tokens": 40,
+                            "total_cost": 0.003,
+                        },
+                    },
+                })
+            request_body = json.loads(request.content)
+            self.assertTrue(request_body["stream"])
+            self.assertEqual(
+                request_body["stream_options"],
+                {"include_usage": True},
+            )
+            return httpx.Response(
+                200,
+                headers={
+                    "Content-Type": "text/event-stream",
+                    "DGrid-Request-ID": "req-dgrid-director-1",
+                },
+                text=stream_body,
+            )
+
+        async def record_usage(usage: ProviderUsageRecord) -> None:
+            usage_records.append(usage)
+
+        response = await _openrouter_json_request(
+            gateway="dgrid",
+            api_key="test-key",
+            base_url="https://api.dgrid.ai/v1",
+            model="anthropic/claude-fable-5",
+            messages=[{"role": "user", "content": "return JSON"}],
+            label="导演视觉开发",
+            schema_name="test_dgrid_stream",
+            response_schema={
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+                "additionalProperties": False,
+            },
+            max_completion_tokens=64,
+            timeout_seconds=30,
+            transport=httpx.MockTransport(handler),
+            operation="director_treatment",
+            on_usage=record_usage,
+        )
+
+        self.assertEqual(response.data, {"ok": True})
+        self.assertEqual(response.model_id, "anthropic/claude-fable-5")
+        self.assertEqual([request.method for request in calls], ["POST", "GET"])
+        self.assertEqual(len(usage_records), 1)
+        self.assertTrue(usage_records[0].succeeded)
+        self.assertEqual(
+            usage_records[0].request_id,
+            "req-dgrid-director-1",
+        )
+        self.assertEqual(usage_records[0].total_tokens, 160)
+        self.assertEqual(usage_records[0].reasoning_tokens, 12)
+        self.assertAlmostEqual(usage_records[0].reported_cost, 0.003)
+
+    async def test_dgrid_non_json_524_reports_gateway_timeout(self):
+        calls: list[httpx.Request] = []
+        usage_records: list[ProviderUsageRecord] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            request_body = json.loads(request.content)
+            self.assertTrue(request_body["stream"])
+            return httpx.Response(
+                524,
+                headers={"Content-Type": "text/html"},
+                text="<html>proxy timeout page</html>",
+            )
+
+        async def record_usage(usage: ProviderUsageRecord) -> None:
+            usage_records.append(usage)
+
+        with self.assertRaises(ProviderUnavailable) as caught:
+            await _openrouter_json_request(
+                gateway="dgrid",
+                api_key="test-key",
+                base_url="https://api.dgrid.ai/v1",
+                model="anthropic/claude-fable-5",
+                messages=[{"role": "user", "content": "return JSON"}],
+                label="导演视觉开发",
+                schema_name="test_dgrid_timeout",
+                response_schema={
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"],
+                    "additionalProperties": False,
+                },
+                max_completion_tokens=64,
+                timeout_seconds=30,
+                transport=httpx.MockTransport(handler),
+                operation="director_treatment",
+                on_usage=record_usage,
+            )
+
+        error = str(caught.exception)
+        self.assertIn("HTTP 524", error)
+        self.assertIn("边缘网关等待上游响应时超时", error)
+        self.assertIn("error_type=gateway_timeout", error)
+        self.assertNotIn("无法读取的响应", error)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(usage_records), 1)
+        self.assertFalse(usage_records[0].succeeded)
+        self.assertEqual(usage_records[0].http_status_code, 524)
 
     async def test_dgrid_billing_snapshot_polls_until_entry_is_available(self):
         attempts = 0

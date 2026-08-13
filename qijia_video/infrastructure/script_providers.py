@@ -69,6 +69,12 @@ OPENROUTER_REASONING_EFFORT = "high"
 OPENROUTER_REQUEST_TIMEOUT_SECONDS = 600.0
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 STORYBOARD_MAX_COMPLETION_TOKENS = 128_000
+DGRID_STREAMING_OPERATIONS = frozenset({
+    "director_treatment",
+    "storyboard_generation",
+    "director_critique",
+    "storyboard_revision",
+})
 UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
 ModelT = TypeVar('ModelT', bound=BaseModel)
 
@@ -986,6 +992,8 @@ class _DGridRequestError(ProviderUnavailable):
         self.context = context
         if context.status_code == 401:
             classification = "API Key 未通过认证"
+        elif context.status_code in {408, 504, 524}:
+            classification = "DGrid 边缘网关等待上游响应时超时"
         elif context.model_access == "not_listed_for_key":
             classification = "当前 API Key 的模型目录未列出该模型"
         elif context.model_access == "listed_for_key":
@@ -1594,6 +1602,108 @@ async def _record_usage(
         ) from exc
 
 
+def _non_json_error_body(
+    *,
+    status_code: int,
+    reason_phrase: str,
+) -> dict[str, dict[str, str | int]]:
+    """Describe an HTTP failure without echoing an HTML proxy error page."""
+
+    if status_code in {408, 504, 524}:
+        message = "上游长响应未在边缘网关时限内完成"
+    else:
+        reason = _diagnostic_text(reason_phrase, 160)
+        message = reason or "上游返回了非 JSON 错误响应"
+    return {
+        "error": {
+            "code": status_code,
+            "message": message,
+            "error_type": "gateway_timeout"
+            if status_code in {408, 504, 524}
+            else "non_json_http_error",
+        },
+    }
+
+
+async def _openai_sse_json_body(
+    response: httpx.Response,
+    *,
+    requested_model: str,
+) -> dict[str, Any]:
+    """Aggregate an OpenAI-compatible SSE completion without retaining reasoning."""
+
+    content_parts: list[str] = []
+    refusal_parts: list[str] = []
+    response_id = ""
+    resolved_model = requested_model
+    finish_reason = "unknown"
+    usage: dict[str, Any] = {}
+    saw_event = False
+
+    async for line in response.aiter_lines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(":"):
+            continue
+        if not stripped.startswith("data:"):
+            continue
+        raw_event = stripped.removeprefix("data:").strip()
+        if raw_event == "[DONE]":
+            break
+        try:
+            event = json.loads(raw_event)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError("invalid SSE JSON event") from exc
+        if not isinstance(event, dict):
+            raise ValueError("invalid SSE event payload")
+        saw_event = True
+        if event.get("error"):
+            return event
+        response_id = _diagnostic_text(event.get("id"), 160) or response_id
+        resolved_model = (
+            _diagnostic_text(event.get("model"), 256) or resolved_model
+        )
+        event_usage = event.get("usage")
+        if isinstance(event_usage, dict) and event_usage:
+            usage = event_usage
+        choices = event.get("choices")
+        if not isinstance(choices, list) or not choices:
+            continue
+        choice = choices[0] if isinstance(choices[0], dict) else {}
+        raw_finish_reason = choice.get("finish_reason")
+        if raw_finish_reason:
+            finish_reason = str(raw_finish_reason)
+        delta = choice.get("delta")
+        if not isinstance(delta, dict):
+            continue
+        content = _message_text(delta.get("content"))
+        if content:
+            content_parts.append(content)
+        refusal = _message_text(delta.get("refusal"))
+        if refusal:
+            refusal_parts.append(refusal)
+
+    if not saw_event:
+        raise ValueError("empty SSE response")
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": "".join(content_parts),
+    }
+    if refusal_parts:
+        message["refusal"] = "".join(refusal_parts)
+    body: dict[str, Any] = {
+        "id": response_id,
+        "model": resolved_model,
+        "choices": [{
+            "index": 0,
+            "message": message,
+            "finish_reason": finish_reason,
+        }],
+    }
+    if usage:
+        body["usage"] = usage
+    return body
+
+
 async def _gateway_json_request(
     *,
     gateway: str,
@@ -1616,6 +1726,9 @@ async def _gateway_json_request(
 ) -> _OpenRouterJsonResponse:
     usage_id = f"usage_{uuid.uuid4().hex}"
     provider_label = "DGrid" if gateway == "dgrid" else "OpenRouter"
+    use_stream = (
+        gateway == "dgrid" and operation in DGRID_STREAMING_OPERATIONS
+    )
     headers = (
         dgrid_headers(api_key, title="Qijia AI Video Workbench")
         if gateway == "dgrid"
@@ -1652,43 +1765,130 @@ async def _gateway_json_request(
         payload["tool_choice"] = tool_choice
     if gateway == "openrouter" and max_tool_calls is not None:
         payload["max_tool_calls"] = max(1, int(max_tool_calls))
+    if use_stream:
+        payload["stream"] = True
+        payload["stream_options"] = {"include_usage": True}
+    response: httpx.Response | None = None
+    body: Any = None
+    parse_error: ValueError | None = None
+    request_id = ""
+    generation_id = ""
+    trace_id = ""
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(timeout_seconds, connect=20.0),
         transport=transport,
     ) as client:
         try:
-            response = await client.post(
-                _chat_url(base_url, gateway=gateway),
-                headers=headers,
-                json=payload,
-            )
+            if use_stream:
+                async with client.stream(
+                    "POST",
+                    _chat_url(base_url, gateway=gateway),
+                    headers=headers,
+                    json=payload,
+                ) as streamed_response:
+                    response = streamed_response
+                    request_id = dgrid_request_id(response)
+                    generation_id = response.headers.get(
+                        "x-generation-id", ""
+                    )
+                    trace_id = request_id or generation_id
+                    content_type = response.headers.get(
+                        "content-type", ""
+                    ).casefold()
+                    if (
+                        response.status_code < 400
+                        and "text/event-stream" in content_type
+                    ):
+                        try:
+                            body = await _openai_sse_json_body(
+                                response,
+                                requested_model=model,
+                            )
+                        except ValueError as exc:
+                            parse_error = exc
+                    else:
+                        raw_body = await response.aread()
+                        try:
+                            body = json.loads(raw_body)
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            if response.status_code >= 400:
+                                body = _non_json_error_body(
+                                    status_code=response.status_code,
+                                    reason_phrase=response.reason_phrase,
+                                )
+                            else:
+                                parse_error = ValueError(
+                                    "invalid non-stream JSON response"
+                                )
+            else:
+                response = await client.post(
+                    _chat_url(base_url, gateway=gateway),
+                    headers=headers,
+                    json=payload,
+                )
+                request_id = (
+                    dgrid_request_id(response)
+                    if gateway == "dgrid"
+                    else response.headers.get("x-request-id", "")
+                )
+                generation_id = response.headers.get("x-generation-id", "")
+                trace_id = (
+                    request_id
+                    if gateway == "dgrid"
+                    else generation_id or request_id
+                )
+                try:
+                    body = response.json()
+                except ValueError as exc:
+                    if response.status_code >= 400:
+                        body = _non_json_error_body(
+                            status_code=response.status_code,
+                            reason_phrase=response.reason_phrase,
+                        )
+                    else:
+                        parse_error = exc
         except (httpx.TimeoutException, httpx.RequestError) as exc:
+            billing = (
+                await dgrid_billing_snapshot(
+                    api_key=api_key,
+                    base_url=base_url,
+                    request_id=request_id,
+                    timeout_seconds=timeout_seconds,
+                    transport=transport,
+                )
+                if gateway == "dgrid" and request_id
+                else None
+            )
             await _record_usage(on_usage, _gateway_usage_record(
                 None,
                 gateway=gateway,
                 usage_id=usage_id,
                 operation=operation,
                 requested_model=model,
+                billing_snapshot=billing,
+                request_id=trace_id,
+                http_status_code=(
+                    response.status_code if response is not None else None
+                ),
                 succeeded=False,
-                note="网络异常后是否计费未知",
+                note=(
+                    "流式响应中断，是否计费需对账"
+                    if use_stream and response is not None
+                    else "网络异常后是否计费未知"
+                ),
             ))
             raise ProviderUnavailable(
-                f"{provider_label} {label}请求失败"
+                f"{provider_label} {label}"
+                + (
+                    "流式响应中断"
+                    if use_stream and response is not None
+                    else "请求失败"
+                )
+                + (f"；request_id={trace_id}" if trace_id else "")
             ) from exc
-    request_id = (
-        dgrid_request_id(response)
-        if gateway == "dgrid"
-        else response.headers.get("x-request-id", "")
-    )
-    generation_id = response.headers.get("x-generation-id", "")
-    trace_id = (
-        request_id
-        if gateway == "dgrid"
-        else generation_id or request_id
-    )
-    try:
-        body = response.json()
-    except ValueError as exc:
+    if response is None:
+        raise ProviderUnavailable(f"{provider_label} {label}请求失败")
+    if parse_error is not None:
         billing = (
             await dgrid_billing_snapshot(
                 api_key=api_key,
@@ -1710,12 +1910,21 @@ async def _gateway_json_request(
             request_id=trace_id,
             http_status_code=response.status_code,
             succeeded=False,
-            note="响应无法解析，是否计费需对账",
+            note=(
+                "流式响应无法重组，是否计费需对账"
+                if use_stream
+                else "响应无法解析，是否计费需对账"
+            ),
         ))
         raise ProviderUnavailable(
-            f"{provider_label} {label}返回了无法读取的响应"
+            f"{provider_label} {label}"
+            + (
+                "返回了无法重组的流式响应"
+                if use_stream
+                else "返回了无法读取的响应"
+            )
             + (f"；request_id={trace_id}" if trace_id else "")
-        ) from exc
+        ) from parse_error
     if isinstance(body, dict) and not generation_id:
         generation_id = _diagnostic_text(body.get("id"), 160)
     trace_id = (
@@ -1736,7 +1945,13 @@ async def _gateway_json_request(
         else None
     )
     if error_context:
-        if gateway == "dgrid":
+        if gateway == "dgrid" and error_context.status_code in {
+            400,
+            401,
+            403,
+            404,
+            422,
+        }:
             model_access = await dgrid_model_access(
                 api_key=api_key,
                 models_url=_models_url(base_url, gateway=gateway),
