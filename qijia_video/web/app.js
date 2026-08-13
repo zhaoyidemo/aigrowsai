@@ -614,10 +614,6 @@ function renderProductionPipeline() {
     note.textContent = '为避免前后端漂移，页面不会用本地硬编码伪装 AI 同事、Skill 或模型。';
     return;
   }
-  if (container.dataset.jobId !== job.id) {
-    container.dataset.jobId = job.id;
-    container.open = job.state === 'failed';
-  }
   list.innerHTML = nodes.map((node) => `<li class="production-pipeline-node ${escapeHtml(node.category)}" data-pipeline-node="${escapeHtml(node.id)}">
     <div class="pipeline-node-heading">
       <span class="pipeline-node-order">${String(Number(node.order) || '').padStart(2, '0')}</span>
@@ -1524,6 +1520,10 @@ function renderJobExecutionTrace(job) {
     list.innerHTML = '<li class="empty">正在读取任务详情；如果持续为空，请刷新任务。</li>';
     note.textContent = '任务列表只返回摘要，打开任务后才读取冻结快照、产物和费用账本。';
     return;
+  }
+  if (container.dataset.jobId !== job.id) {
+    container.dataset.jobId = job.id;
+    container.open = job.state === 'failed';
   }
   const rendered = nodes.map((node) => {
     const status = effectiveExecutionStatus(node, job);

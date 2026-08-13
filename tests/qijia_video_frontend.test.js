@@ -90,6 +90,47 @@ test('production pipeline visibility is backend-driven and names real collaborat
   assert.match(styles, /\.production-pipeline-node\.creative_method/);
   assert.match(styles, /\.production-pipeline-node\.production_model/);
   assert.match(styles, /\.production-pipeline-node\.production_tool/);
+
+  const source = app.slice(
+    app.indexOf('function capabilityReference'),
+    app.indexOf('function setResolutionField'),
+  );
+  const elements = {
+    '#production-pipeline': {dataset: {}, open: true},
+    '#production-pipeline-list': {innerHTML: ''},
+    '#production-pipeline-summary': {textContent: ''},
+    '#production-pipeline-note': {textContent: ''},
+  };
+  const context = {
+    state: {
+      capabilities: {
+        production_pipeline: {
+          pipeline_version: 'v4',
+          nodes: [{
+            id: 'script',
+            order: 1,
+            category: 'ai_colleague',
+            category_label: 'AI 同事',
+            name: '脚本创作',
+            owner: '洞见型脚本主编',
+            detail: '生成并审校口播',
+            planned_calls: '固定 4 次',
+            human_gate: false,
+            capabilities: [],
+            models: [],
+            tools: [],
+          }],
+        },
+      },
+    },
+    $: (selector) => elements[selector],
+    window: {matchMedia: () => ({matches: false})},
+    escapeHtml: (value) => String(value ?? ''),
+  };
+  vm.runInNewContext(source + '\nrenderProductionPipeline();', context);
+  assert.match(elements['#production-pipeline-list'].innerHTML, /洞见型脚本主编/);
+  assert.match(elements['#production-pipeline-summary'].textContent, /1 位 AI 同事/);
+  assert.match(page, /app\.js\?v=1\.38\.1/);
 });
 
 test('job detail exposes frozen skills, actual models, usage and live execution state', () => {
