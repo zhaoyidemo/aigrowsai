@@ -83,6 +83,8 @@ from qijia_video.infrastructure.script_providers import (
     SCRIPT_MAX_COMPLETION_TOKENS,
     SCRIPT_PROMPT_VERSION,
     STORYBOARD_MAX_COMPLETION_TOKENS,
+    _director_shot_plan_response_schema,
+    _director_treatment_response_schema,
     _openrouter_completion_limit_key,
 )
 from qijia_video.model_registry import (
@@ -270,6 +272,25 @@ class QijiaVideoContractTests(unittest.TestCase):
                 _openrouter_completion_limit_key(model),
                 "max_tokens",
             )
+
+    def test_quality_director_locks_one_payload_per_chapter_slot(self):
+        four_chapter_treatment = _director_treatment_response_schema(4)
+        progression = four_chapter_treatment["properties"]["director_treatment"][
+            "properties"
+        ]["chapter_progression"]
+        self.assertEqual(progression["minItems"], 3)
+        self.assertEqual(progression["maxItems"], 4)
+
+        chapter_ids = ["chapter_01", "chapter_02", "chapter_03"]
+        shot_plan = _director_shot_plan_response_schema(chapter_ids)
+        chapters = shot_plan["properties"]["chapters"]
+        self.assertEqual(chapters["required"], chapter_ids)
+        self.assertEqual(set(chapters["properties"]), set(chapter_ids))
+        self.assertFalse(chapters["additionalProperties"])
+        self.assertTrue(all(
+            "beat_ids" in chapters["properties"][chapter_id]["required"]
+            for chapter_id in chapter_ids
+        ))
 
     def test_content_skills_are_versioned_workflow_presets_without_prompts(self):
         catalog = default_skill_registry.public_catalog()
@@ -2495,18 +2516,18 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("max_completion_tokens", body)
             self.assertNotIn("models", body)
             schema_name = body["response_format"]["json_schema"]["name"]
-            if schema_name == "qijia_director_treatment_v1":
+            if schema_name == "qijia_director_treatment_v2":
                 result = treatment_payload
             else:
                 result = {
-                    "shots": [
-                        {
+                    "chapters": {
+                        f"chapter_{index:02d}": {
                             "beat_ids": group,
                             "visual_type": "video" if index == 1 else "image",
                             "context": context(index),
                         }
                         for index, group in enumerate(groups, 1)
-                    ],
+                    },
                 }
             return httpx.Response(200, json={
                 "id": f"director-{len(calls)}",
@@ -2541,12 +2562,16 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [item["response_format"]["json_schema"]["name"] for item in calls],
-            ["qijia_director_treatment_v1", "qijia_director_shot_plan_v1"],
+            ["qijia_director_treatment_v2", "qijia_director_shot_plan_v2"],
         )
         first_schema = calls[0]["response_format"]["json_schema"]["schema"]
         second_schema = calls[1]["response_format"]["json_schema"]["schema"]
         self.assertNotIn("shots", first_schema["properties"])
-        self.assertEqual(set(second_schema["properties"]), {"shots"})
+        self.assertEqual(set(second_schema["properties"]), {"chapters"})
+        chapter_schema = second_schema["properties"]["chapters"]
+        expected_chapter_ids = ["chapter_01", "chapter_02", "chapter_03"]
+        self.assertEqual(chapter_schema["required"], expected_chapter_ids)
+        self.assertEqual(set(chapter_schema["properties"]), set(expected_chapter_ids))
         self.assertIn("【导演方法】动画解说导演", calls[0]["messages"][0]["content"])
         self.assertIn("先不要拆镜头", calls[0]["messages"][0]["content"])
         self.assertIn("已经锁定，不能重新发明视觉世界", calls[1]["messages"][0]["content"])
@@ -2568,7 +2593,15 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         shot_input = json.loads(calls[1]["messages"][1]["content"])
         self.assertEqual(treatment_input["input_type"], "visual_development")
         self.assertFalse(treatment_input["reference_image_attached"])
+        self.assertEqual(
+            treatment_input["chapter_count_bounds"],
+            {"minimum": 3, "maximum": len(beat_ids)},
+        )
         self.assertEqual(shot_input["input_type"], "chapter_planning")
+        self.assertEqual(
+            [item["chapter_id"] for item in shot_input["locked_chapter_slots"]],
+            expected_chapter_ids,
+        )
         self.assertNotIn("【导演方法】", calls[0]["messages"][1]["content"])
         self.assertNotIn("【导演方法】", calls[1]["messages"][1]["content"])
         self.assertEqual(treatment.input_hash, "b" * 64)

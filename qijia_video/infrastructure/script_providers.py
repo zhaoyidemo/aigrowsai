@@ -5,6 +5,7 @@ import json
 import re
 import uuid
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -49,7 +50,7 @@ QUALITY_SCRIPT_PROMPT_VERSION = 'qijia_script_v21_provider_neutral'
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v12_semantic_adaptive"
 DIRECTOR_PROMPT_VERSION = 'qijia_director_v13_shot_context_ir'
 DIRECTOR_V3_PROMPT_VERSION = 'qijia_director_v20_concrete_event'
-DIRECTOR_QUALITY_PROMPT_VERSION = 'qijia_director_v31_provider_neutral'
+DIRECTOR_QUALITY_PROMPT_VERSION = 'qijia_director_v32_locked_chapter_slots'
 OPENROUTER_REASONING_EFFORT = "high"
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 STORYBOARD_MAX_COMPLETION_TOKENS = 128_000
@@ -692,14 +693,39 @@ _DIRECTOR_V3_RESPONSE_SCHEMA = {
     'additionalProperties': False,
 }
 
-_DIRECTOR_SHOT_PLAN_RESPONSE_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'shots': _DIRECTOR_V3_RESPONSE_SCHEMA['properties']['shots'],
-    },
-    'required': ['shots'],
-    'additionalProperties': False,
-}
+
+def _director_treatment_response_schema(max_chapters: int) -> dict:
+    """Bind the Director's chapter decision to the available semantic beats."""
+
+    schema = deepcopy(_DIRECTOR_TREATMENT_RESPONSE_SCHEMA)
+    progression = schema['properties']['director_treatment']['properties'][
+        'chapter_progression'
+    ]
+    progression['minItems'] = 3
+    progression['maxItems'] = max(3, min(10, int(max_chapters)))
+    return schema
+
+
+def _director_shot_plan_response_schema(chapter_ids: list[str]) -> dict:
+    """Require one and only one structured payload for every locked chapter."""
+
+    shot_schema = _DIRECTOR_V3_RESPONSE_SCHEMA['properties']['shots']['items']
+    return {
+        'type': 'object',
+        'properties': {
+            'chapters': {
+                'type': 'object',
+                'properties': {
+                    chapter_id: deepcopy(shot_schema)
+                    for chapter_id in chapter_ids
+                },
+                'required': list(chapter_ids),
+                'additionalProperties': False,
+            },
+        },
+        'required': ['chapters'],
+        'additionalProperties': False,
+    }
 
 
 @dataclass(frozen=True)
@@ -2136,6 +2162,7 @@ class OpenRouterStoryboardProvider:
             or any(float(narration_durations[item]) <= 0 for item in expected_beat_ids)
         ):
             raise ProviderUnavailable('Director v4 需要完整脚本与逐段旁白时长')
+        max_director_chapters = min(10, len(expected_beat_ids))
         beat_payload = [
             {
                 'beat_id': item.id,
@@ -2155,13 +2182,14 @@ class OpenRouterStoryboardProvider:
         )
         treatment_system_prompt = (
             '你是知识短视频视觉导演。当前只做全片视觉开发：建立导演处理、'
-            '视觉世界和可复用资产，不写脚本，也不拆分具体章节。\n\n'
+            '视觉世界和可复用资产，并锁定章节推进数量；不写脚本，也不设计具体事件。\n\n'
             + director_instruction
             + '\n\n'
             '【第一阶段：视觉开发】先不要拆镜头。根据完整口播和真实时长，建立一条'
             '能够随论证推进的视觉命题，而不是逐句配图。锁定重复主体、场景、道具、'
-            '材质、视觉母题、章节递进、剪辑节奏、运动规则和验收标准。具体事件将在'
-            '第二阶段设计，本阶段不要拆分具体章节。\n\n'
+            '材质、视觉母题、章节递进、剪辑节奏、运动规则和验收标准。'
+            'chapter_progression 的每一项对应第二阶段的一个视觉章节；数量必须落在输入给定'
+            '范围内，本阶段只锁定每章的叙事任务，不设计具体事件、调度或摄影机。\n\n'
             '参考素材采用职责分离：'
             + reference_instruction
         )
@@ -2173,6 +2201,10 @@ class OpenRouterStoryboardProvider:
             {
                 'input_type': 'visual_development',
                 'reference_image_attached': bool(reference_image_url),
+                'chapter_count_bounds': {
+                    'minimum': 3,
+                    'maximum': max_director_chapters,
+                },
                 'script_beats': beat_payload,
             },
             ensure_ascii=False,
@@ -2199,8 +2231,10 @@ class OpenRouterStoryboardProvider:
                 {'role': 'user', 'content': treatment_user_content},
             ],
             label='导演视觉开发',
-            schema_name='qijia_director_treatment_v1',
-            response_schema=_DIRECTOR_TREATMENT_RESPONSE_SCHEMA,
+            schema_name='qijia_director_treatment_v2',
+            response_schema=_director_treatment_response_schema(
+                max_director_chapters
+            ),
             max_completion_tokens=64_000,
             timeout_seconds=self.timeout_seconds,
             transport=self.transport,
@@ -2244,6 +2278,14 @@ class OpenRouterStoryboardProvider:
             for item in asset_bible.references
         ):
             raise ProviderUnavailable('Director 返回了未知参考素材 ID')
+        chapter_count = len(treatment.chapter_progression)
+        if not 3 <= chapter_count <= max_director_chapters:
+            raise ProviderUnavailable(
+                'Director 第一阶段返回了超出脚本边界的章节推进数量'
+            )
+        chapter_ids = [
+            f'chapter_{index:02d}' for index in range(1, chapter_count + 1)
+        ]
 
         shot_system_prompt = (
             '你仍是同一位导演。严格服从已经锁定的视觉方案和资产，'
@@ -2251,8 +2293,10 @@ class OpenRouterStoryboardProvider:
             + director_instruction
             + '\n\n'
             '【第二阶段：正式分镜】下面的全片视觉方案、视觉规则与资产规则已经锁定，'
-            '不能重新发明视觉世界。根据完整口播与真实旁白时长，自主合并'
-            '相邻 beats，设计 3—12 个具体事件章节；每个 beat_id 必须且只能出现一次并'
+            '不能重新发明视觉世界。章节数量也已锁定；必须且只能逐一填充这些槽位：'
+            + '、'.join(chapter_ids)
+            + '。不得增加、删除、合并或跳过槽位。根据完整口播与真实旁白时长，把'
+            '相邻 beats 连续分配到这些章节；每个 beat_id 必须且只能出现一次并'
             '保持顺序。每章写清 concrete_event、blocking、主体、动作、环境、构图、'
             '起止状态、连续性承接和可执行摄影机。图片是默认媒介；仅在连续动作不可'
             '替代、对应旁白不超过十秒且八秒内能完成时使用 video，全片最多三段。'
@@ -2268,6 +2312,13 @@ class OpenRouterStoryboardProvider:
                 'locked_visual_direction': treatment.model_dump(mode='json'),
                 'locked_visual_world': visual_bible.model_dump(mode='json'),
                 'locked_assets': asset_bible.model_dump(mode='json'),
+                'locked_chapter_slots': [
+                    {
+                        'chapter_id': chapter_id,
+                        'narrative_task': treatment.chapter_progression[index],
+                    }
+                    for index, chapter_id in enumerate(chapter_ids)
+                ],
                 'script_beats': beat_payload,
             },
             ensure_ascii=False,
@@ -2285,8 +2336,8 @@ class OpenRouterStoryboardProvider:
                 {'role': 'user', 'content': shot_input},
             ],
             label='导演正式分镜',
-            schema_name='qijia_director_shot_plan_v1',
-            response_schema=_DIRECTOR_SHOT_PLAN_RESPONSE_SCHEMA,
+            schema_name='qijia_director_shot_plan_v2',
+            response_schema=_director_shot_plan_response_schema(chapter_ids),
             max_completion_tokens=STORYBOARD_MAX_COMPLETION_TOKENS,
             timeout_seconds=self.timeout_seconds,
             transport=self.transport,
@@ -2294,9 +2345,19 @@ class OpenRouterStoryboardProvider:
             on_usage=on_usage,
             reasoning_effort='xhigh',
         )
-        raw_shots = shot_response.data.get('shots')
-        if not isinstance(raw_shots, list) or not 3 <= len(raw_shots) <= 12:
-            raise ProviderUnavailable('Director Skill 返回了错误的章节数量')
+        raw_chapters = shot_response.data.get('chapters')
+        if (
+            not isinstance(raw_chapters, dict)
+            or set(raw_chapters) != set(chapter_ids)
+        ):
+            actual_count = (
+                len(raw_chapters) if isinstance(raw_chapters, dict) else 0
+            )
+            raise ProviderUnavailable(
+                'Director 第二阶段未完整交付已锁定的章节槽位'
+                f'（expected={chapter_count}，actual={actual_count}）'
+            )
+        raw_shots = [raw_chapters[chapter_id] for chapter_id in chapter_ids]
         returned_groups = [
             list(item.get('beat_ids') or []) if isinstance(item, dict) else []
             for item in raw_shots
