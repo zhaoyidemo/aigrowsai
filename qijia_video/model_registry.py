@@ -9,12 +9,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 MODEL_REGISTRY_SOURCE = "qijia_video.model_registry"
-PRODUCTION_TEXT_MODEL = "deepseek/deepseek-v4-pro"
-# OpenRouter's public model catalog price for the code-owned production text
-# model. Actual requests are accounted from response usage.cost because the
-# selected upstream route can have a different price.
-PRODUCTION_TEXT_INPUT_USD_PER_MILLION = 0.435
-PRODUCTION_TEXT_OUTPUT_USD_PER_MILLION = 0.87
+PRODUCTION_TEXT_GATEWAY = "dgrid"
+PRODUCTION_TEXT_MODEL = "anthropic/claude-fable-5"
+# Anthropic's public API price for Claude Fable 5. DGrid's immutable billing
+# snapshot is authoritative after each request; this rate is the fallback used
+# while a billing record is temporarily unavailable and for preflight ranges.
+PRODUCTION_TEXT_INPUT_USD_PER_MILLION = 10.0
+PRODUCTION_TEXT_OUTPUT_USD_PER_MILLION = 50.0
 # At script review, the four normal Script Skill requests have already happened.
 # Director normally runs visual development, formal chapters and independent
 # review. One failed review adds one bounded revision plus one final review.
@@ -49,7 +50,7 @@ PRODUCTION_MODELS = ProductionModelRegistry(
 
 
 MODEL_DISPLAY_NAMES = {
-    PRODUCTION_TEXT_MODEL: "DeepSeek V4 Pro",
+    PRODUCTION_TEXT_MODEL: "Claude Fable 5",
     "doubao-seedream-5-0-lite-260128": "Seedream 5.0 Lite",
     SEEDANCE_EFFICIENT_MODEL: "Seedance 1.0 Pro Fast",
     SEEDANCE_BALANCED_MODEL: "Seedance 1.5 Pro",

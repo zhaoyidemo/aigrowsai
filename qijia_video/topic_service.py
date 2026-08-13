@@ -523,6 +523,6 @@ class TopicResearchService:
         )
         run.warnings = list(dict.fromkeys([
             *run.warnings,
-            "中断轮次的本地成本记录可能不完整，最终费用以 TikHub 与 OpenRouter 账单为准。",
+            "中断轮次的本地成本记录可能不完整，最终费用以 TikHub 与 DGrid 账单为准。",
         ]))[:20]
         return await self._save(run, actor)

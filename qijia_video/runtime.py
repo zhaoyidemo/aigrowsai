@@ -30,8 +30,8 @@ from qijia_video.infrastructure.remotion_renderer import RemotionRenderer
 from qijia_video.infrastructure.image_providers import SeedreamImageProvider
 from qijia_video.infrastructure.tikhub import TikHubDouyinPerformanceProvider
 from qijia_video.infrastructure.script_providers import (
-    OpenRouterScriptProvider,
-    OpenRouterStoryboardProvider,
+    DGridScriptProvider,
+    DGridStoryboardProvider,
 )
 from qijia_video.infrastructure.storage import storage_from_settings
 from qijia_video.infrastructure.tts_providers import VolcengineTtsProvider
@@ -39,6 +39,7 @@ from qijia_video.infrastructure.video_providers import SeedanceVideoProvider
 from qijia_video.model_registry import (
     MODEL_REGISTRY_SOURCE,
     PRODUCTION_MODELS,
+    PRODUCTION_TEXT_GATEWAY,
     PRODUCTION_TEXT_INPUT_USD_PER_MILLION,
     PRODUCTION_TEXT_OUTPUT_USD_PER_MILLION,
     QUALITY_DIRECTOR_INPUT_TOKEN_RANGE,
@@ -95,14 +96,14 @@ class QijiaVideoRuntime:
             node_binary=settings.QIJIA_VIDEO_NODE_BINARY,
             concurrency=settings.REMOTION_CONCURRENCY,
         )
-        script_provider = OpenRouterScriptProvider(
-            api_key=settings.OPENROUTER_API_KEY,
-            base_url=settings.OPENROUTER_BASE_URL,
+        script_provider = DGridScriptProvider(
+            api_key=settings.DGRID_API_KEY,
+            base_url=settings.DGRID_BASE_URL,
             model=PRODUCTION_MODELS.script,
         )
-        storyboard_provider = OpenRouterStoryboardProvider(
-            api_key=settings.OPENROUTER_API_KEY,
-            base_url=settings.OPENROUTER_BASE_URL,
+        storyboard_provider = DGridStoryboardProvider(
+            api_key=settings.DGRID_API_KEY,
+            base_url=settings.DGRID_BASE_URL,
             model=PRODUCTION_MODELS.director,
         )
         tts_provider = VolcengineTtsProvider(
@@ -219,7 +220,7 @@ class QijiaVideoRuntime:
         base_missing = list(settings.standalone_configuration_errors())
         script_missing = list(base_missing)
         if not self.script_provider.configured:
-            script_missing.append("OPENROUTER_API_KEY")
+            script_missing.append("DGRID_API_KEY")
         storage_missing: list[str] = []
         if not getattr(self.storage, "configured", True):
             storage_missing.append(
@@ -237,7 +238,7 @@ class QijiaVideoRuntime:
             self.script_provider.configured
             and self.storyboard_provider.configured
         ):
-            missing.append("OPENROUTER_API_KEY")
+            missing.append("DGRID_API_KEY")
         if not self.tts_provider.configured:
             missing.append(
                 "VOLCENGINE_SPEECH_API_KEY（或专用 VOLCENGINE_TTS_API_KEY）"
@@ -336,7 +337,7 @@ class QijiaVideoRuntime:
                 ),
                 "model_id": self.script_provider.model,
                 "provider": self.script_provider.name,
-                "detail": "xhigh 初稿 · high 独立审稿 · xhigh 重写 · high 终稿验收",
+                "detail": "主编初稿 · 隔离上下文独立审稿 · 主编重写 · 独立终稿验收",
                 "configuration_source": MODEL_REGISTRY_SOURCE,
             },
             {
@@ -347,7 +348,7 @@ class QijiaVideoRuntime:
                 ),
                 "model_id": self.storyboard_provider.model,
                 "provider": self.storyboard_provider.name,
-                "detail": "xhigh 视觉开发 · xhigh 正式分镜 · high 独立审片 · 必要时修订复审",
+                "detail": "视觉开发 · 正式分镜 · 隔离上下文独立审片 · 必要时修订复审",
                 "configuration_source": MODEL_REGISTRY_SOURCE,
             },
             {
@@ -401,8 +402,9 @@ class QijiaVideoRuntime:
             "tts_model": self.tts_provider.resource_id,
             "runtime_models": runtime_models,
             "production_pipeline": self.production_pipeline(),
-            "openrouter_pricing": {
+            "text_model_pricing": {
                 "currency": "USD",
+                "gateway": PRODUCTION_TEXT_GATEWAY,
                 "model": self.storyboard_provider.model,
                 "input_usd_per_million_tokens": (
                     PRODUCTION_TEXT_INPUT_USD_PER_MILLION
@@ -424,8 +426,8 @@ class QijiaVideoRuntime:
                 },
                 "usd_to_cny_rate": USD_TO_CNY_RATE,
                 "basis": (
-                    "按 OpenRouter 模型目录公开价和 Director 正常三次、审片修订时最多五次的 "
-                    "token 区间预估；实际调用以响应 usage.cost 为准，上游路由价格可能不同"
+                    "按 Claude Fable 5 公开价和 Director 正常三次、审片修订时最多五次的 "
+                    "token 区间预估；实际调用以 DGrid billing-json 计费快照为准"
                 ),
             },
             "knowledge_mode": "model_knowledge",

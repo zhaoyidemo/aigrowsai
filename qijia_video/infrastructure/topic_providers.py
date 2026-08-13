@@ -10,6 +10,12 @@ import httpx
 from pydantic import ValidationError
 
 from qijia_video.errors import ProviderUnavailable
+from qijia_video.infrastructure.dgrid_gateway import (
+    DGRID_DEFAULT_BASE_URL,
+    dgrid_billing_snapshot,
+    dgrid_headers,
+    dgrid_request_id,
+)
 from qijia_video.topic_contracts import (
     TopicCandidateProposal,
     TopicContentPillar,
@@ -88,11 +94,18 @@ def _topic_response_schema(evidence: list[TopicEvidence]) -> dict[str, Any]:
     return schema
 
 
-def _chat_url(base_url: str) -> str:
-    base = str(base_url or "https://openrouter.ai/api").rstrip("/")
+def _chat_url(base_url: str, *, gateway: str = "openrouter") -> str:
+    default_url = (
+        DGRID_DEFAULT_BASE_URL
+        if gateway == "dgrid"
+        else "https://openrouter.ai/api"
+    )
+    base = str(base_url or default_url).rstrip("/")
     if base.endswith("/v1"):
         return base + "/chat/completions"
     if base.endswith("/api"):
+        return base + "/v1/chat/completions"
+    if gateway == "dgrid":
         return base + "/v1/chat/completions"
     return base + "/api/v1/chat/completions"
 
@@ -164,6 +177,7 @@ def _safe_nonnegative_int(value: Any) -> int:
 def _usage_snapshot(
     body: Any,
     *,
+    provider: str = "openrouter",
     requested_model: str,
     request_id: str = "",
     http_status_code: int | None = None,
@@ -187,6 +201,7 @@ def _usage_snapshot(
         usage.get("total_tokens") or input_tokens + output_tokens
     )
     return TopicModelUsage(
+        provider=provider,
         model=str(payload.get("model") or requested_model)[:200],
         request_id=str(request_id or payload.get("id") or "")[:200],
         request_count=1,
@@ -201,6 +216,32 @@ def _usage_snapshot(
     )
 
 
+def _with_dgrid_billing(
+    body: Any,
+    billing_snapshot: dict[str, Any] | None,
+) -> Any:
+    if not isinstance(body, dict) or not isinstance(billing_snapshot, dict):
+        return body
+    merged = copy.deepcopy(body)
+    usage = merged.get("usage")
+    usage = dict(usage) if isinstance(usage, dict) else {}
+    field_map = {
+        "input_tokens": "prompt_tokens",
+        "output_tokens": "completion_tokens",
+        "total_cost": "cost",
+    }
+    for source, target in field_map.items():
+        if billing_snapshot.get(source) is not None:
+            usage[target] = billing_snapshot[source]
+    input_tokens = _safe_nonnegative_int(usage.get("prompt_tokens"))
+    output_tokens = _safe_nonnegative_int(usage.get("completion_tokens"))
+    usage["total_tokens"] = input_tokens + output_tokens
+    merged["usage"] = usage
+    if billing_snapshot.get("model"):
+        merged["model"] = billing_snapshot["model"]
+    return merged
+
+
 async def _record_usage(
     recorder: TopicModelUsageRecorder | None,
     usage: TopicModelUsage,
@@ -213,13 +254,17 @@ async def _record_usage(
         raise
     except Exception as exc:
         raise TopicEditorialFailed(
-            "OpenRouter 调用已经发生，但模型成本账本无法持久化；研究已停止",
+            "编辑模型调用已经发生，但成本账本无法持久化；研究已停止",
             usage,
         ) from exc
 
 
 class OpenRouterTopicEditor:
     name = "openrouter-topic-editor"
+    gateway = "openrouter"
+    credential_setting = "OPENROUTER_API_KEY"
+    base_url_setting = "OPENROUTER_BASE_URL"
+    default_base_url = "https://openrouter.ai/api"
 
     def __init__(
         self,
@@ -231,7 +276,7 @@ class OpenRouterTopicEditor:
         timeout_seconds: float = 120.0,
     ):
         self.api_key = str(api_key or "").strip()
-        self.base_url = str(base_url or "https://openrouter.ai/api").strip()
+        self.base_url = str(base_url or self.default_base_url).strip()
         self.model = str(model or "").strip()
         self.transport = transport
         self.timeout_seconds = max(10.0, float(timeout_seconds))
@@ -245,7 +290,7 @@ class OpenRouterTopicEditor:
         parsed = urlparse(self.base_url)
         errors: list[str] = []
         if not self.api_key:
-            errors.append("OPENROUTER_API_KEY")
+            errors.append(self.credential_setting)
         if not self.model:
             errors.append("代码模型目录：topic_editor")
         if not (
@@ -256,7 +301,10 @@ class OpenRouterTopicEditor:
             and not parsed.query
             and not parsed.fragment
         ):
-            errors.append("OPENROUTER_BASE_URL（必须是无凭据、无查询参数的 HTTPS 地址）")
+            errors.append(
+                f"{self.base_url_setting}"
+                "（必须是无凭据、无查询参数的 HTTPS 地址）"
+            )
         return errors
 
     @staticmethod
@@ -304,11 +352,16 @@ class OpenRouterTopicEditor:
             raise ProviderUnavailable(
                 "选题编辑模型未配置：" + "、".join(self.configuration_errors)
             )
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "X-OpenRouter-Title": "Qijia AI Topic Research",
-        }
+        provider_label = "DGrid" if self.gateway == "dgrid" else "OpenRouter"
+        headers = (
+            dgrid_headers(self.api_key, title="Qijia AI Topic Research")
+            if self.gateway == "dgrid"
+            else {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "X-OpenRouter-Title": "Qijia AI Topic Research",
+            }
+        )
         payload = {
             "model": self.model,
             "messages": [
@@ -324,9 +377,6 @@ class OpenRouterTopicEditor:
                     "content": self._prompt(evidence, valid_through),
                 },
             ],
-            "reasoning": {"effort": "high", "exclude": True},
-            # DeepSeek V4 Pro advertises max_tokens through OpenRouter's
-            # user-scoped model metadata.
             "max_tokens": 6000,
             "response_format": {
                 "type": "json_schema",
@@ -336,40 +386,78 @@ class OpenRouterTopicEditor:
                     "schema": _topic_response_schema(evidence),
                 },
             },
-            "provider": {"require_parameters": True},
         }
+        if self.gateway == "openrouter":
+            payload["reasoning"] = {"effort": "high", "exclude": True}
+            payload["provider"] = {"require_parameters": True}
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(self.timeout_seconds, connect=20.0),
             transport=self.transport,
         ) as client:
             try:
                 response = await client.post(
-                    _chat_url(self.base_url), headers=headers, json=payload
+                    _chat_url(self.base_url, gateway=self.gateway),
+                    headers=headers,
+                    json=payload,
                 )
             except (httpx.TimeoutException, httpx.RequestError) as exc:
-                usage = _usage_snapshot(None, requested_model=self.model)
+                usage = _usage_snapshot(
+                    None,
+                    provider=self.gateway,
+                    requested_model=self.model,
+                )
                 await _record_usage(on_usage, usage)
                 raise TopicEditorialFailed(
-                    "OpenRouter 选题编辑请求失败；是否计费需以供应商账单核对",
+                    f"{provider_label} 选题编辑请求失败；"
+                    "是否计费需以供应商账单核对",
                     usage,
                 ) from exc
-        request_id = response.headers.get("x-request-id", "")
+        request_id = (
+            dgrid_request_id(response)
+            if self.gateway == "dgrid"
+            else response.headers.get("x-request-id", "")
+        )
         try:
             body = response.json()
         except ValueError as exc:
+            billing = (
+                await dgrid_billing_snapshot(
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                    request_id=request_id,
+                    timeout_seconds=self.timeout_seconds,
+                    transport=self.transport,
+                )
+                if self.gateway == "dgrid"
+                else None
+            )
             usage = _usage_snapshot(
-                None,
+                _with_dgrid_billing({}, billing),
+                provider=self.gateway,
                 requested_model=self.model,
                 request_id=request_id,
                 http_status_code=response.status_code,
             )
             await _record_usage(on_usage, usage)
             raise TopicEditorialFailed(
-                "OpenRouter 选题编辑返回了无法读取的响应",
+                f"{provider_label} 选题编辑返回了无法读取的响应",
                 usage,
             ) from exc
+        billing = (
+            await dgrid_billing_snapshot(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                request_id=request_id,
+                timeout_seconds=self.timeout_seconds,
+                transport=self.transport,
+            )
+            if self.gateway == "dgrid"
+            else None
+        )
+        body = _with_dgrid_billing(body, billing)
         failed_usage = _usage_snapshot(
             body,
+            provider=self.gateway,
             requested_model=self.model,
             request_id=request_id,
             http_status_code=response.status_code,
@@ -384,7 +472,8 @@ class OpenRouterTopicEditor:
                 else str(error or response.reason_phrase)
             )
             raise TopicEditorialFailed(
-                f"OpenRouter 选题编辑返回 HTTP {response.status_code}：{message[:500]}"
+                f"{provider_label} 选题编辑返回 HTTP "
+                f"{response.status_code}：{message[:500]}"
                 + (f"；request_id={request_id}" if request_id else ""),
                 failed_usage,
             )
@@ -396,7 +485,8 @@ class OpenRouterTopicEditor:
                 else str(top_level_error)
             )
             raise TopicEditorialFailed(
-                f"OpenRouter 选题编辑失败：{str(message or '未知上游错误')[:500]}"
+                f"{provider_label} 选题编辑失败："
+                f"{str(message or '未知上游错误')[:500]}"
                 + (f"；request_id={request_id}" if request_id else ""),
                 failed_usage,
             )
@@ -410,13 +500,15 @@ class OpenRouterTopicEditor:
                     else str(choice_error)
                 )
                 raise TopicEditorialFailed(
-                    f"OpenRouter 选题编辑失败：{str(message or '未知上游错误')[:500]}",
+                    f"{provider_label} 选题编辑失败："
+                    f"{str(message or '未知上游错误')[:500]}",
                     failed_usage,
                 )
             message = choice["message"]
             if message.get("refusal"):
                 raise TopicEditorialFailed(
-                    f"OpenRouter 拒绝了选题编辑请求：{str(message['refusal'])[:300]}",
+                    f"{provider_label} 拒绝了选题编辑请求："
+                    f"{str(message['refusal'])[:300]}",
                     failed_usage,
                 )
             generated = _json_object(message.get("content"))
@@ -454,6 +546,7 @@ class OpenRouterTopicEditor:
             )
         succeeded_usage = _usage_snapshot(
             body,
+            provider=self.gateway,
             requested_model=self.model,
             request_id=request_id,
             http_status_code=response.status_code,
@@ -464,3 +557,11 @@ class OpenRouterTopicEditor:
             proposals=proposals,
             usage=succeeded_usage,
         )
+
+
+class DGridTopicEditor(OpenRouterTopicEditor):
+    name = "dgrid-topic-editor"
+    gateway = "dgrid"
+    credential_setting = "DGRID_API_KEY"
+    base_url_setting = "DGRID_BASE_URL"
+    default_base_url = DGRID_DEFAULT_BASE_URL

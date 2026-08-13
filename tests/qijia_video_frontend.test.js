@@ -339,7 +339,8 @@ test('creation intake hides internal architecture behind creator-facing choices'
   const referenceStart = page.indexOf('id="manual-reference-input"');
   const referenceEnd = page.indexOf('id="manual-intake-actions"');
   const referenceSection = page.slice(referenceStart, referenceEnd);
-  assert.match(referenceSection, /OpenRouter/);
+  assert.match(referenceSection, /DGrid/);
+  assert.match(referenceSection, /Claude Fable 5/);
   assert.match(referenceSection, /火山引擎 Seedream/);
   assert.match(referenceSection, /敏感图片/);
   assert.doesNotMatch(referenceSection, /ShotContextIR|Director Skill/);
@@ -402,7 +403,7 @@ test('creation intake offers one optional global reference image without extra f
   assert.match(page, /id="reference-image-input"/);
   assert.match(page, /accept="image\/jpeg,image\/png,image\/webp"/);
   assert.match(page, /上传 1 张参考图（可选）/);
-  assert.match(page, /发送给 OpenRouter 导演模型进行职责分析/);
+  assert.match(page, /发送给 DGrid 上的 Claude Fable 5 导演模型进行职责分析/);
   assert.match(page, /发送给火山引擎 Seedream 生成 3 张视觉样片和正式首帧/);
   assert.match(page, /不会把图片内容当作事实依据/);
   assert.doesNotMatch(page, /id="reference-image-input"[^>]*multiple/);
@@ -665,7 +666,7 @@ test('script review shows a whole-job cost range before confirmation', () => {
   assert.match(app, /function renderScriptCostEstimate/);
   assert.match(app, /usageRecordCostCny/);
   assert.match(app, /function pendingDirectorCostRange/);
-  assert.match(app, /openrouter_pricing/);
+  assert.match(app, /text_model_pricing/);
   assert.match(app, /待执行 Director/);
   assert.match(app, /每段 8–10 秒/);
   assert.match(app, /未生成的 AI 画面会从实际费用中扣除/);

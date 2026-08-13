@@ -79,7 +79,10 @@ from qijia_video.infrastructure.mock_providers import (
     TemplateScriptProvider,
     TemplateStoryboardProvider,
 )
+from qijia_video.infrastructure.dgrid_gateway import dgrid_billing_snapshot
 from qijia_video.infrastructure.script_providers import (
+    DGridScriptProvider,
+    DGridStoryboardProvider,
     OPENROUTER_REASONING_EFFORT,
     OPENROUTER_REQUEST_TIMEOUT_SECONDS,
     OpenRouterScriptProvider,
@@ -1538,6 +1541,162 @@ class SeedreamProviderContractTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dgrid_script_request_uses_only_documented_gateway_fields_and_billing(self):
+        calls: list[httpx.Request] = []
+        generated = {
+            "schema_version": "3.0",
+            "video_title": "判断先于成败",
+            "cover_text": "先问是非",
+            "beats": [
+                {
+                    "id": f"n{index:02d}",
+                    "narration": text.ljust(35, "。"),
+                    "role": role,
+                    "on_screen_text": "",
+                    "source_refs": [],
+                    "quote_ref": None,
+                }
+                for index, (role, text) in enumerate([
+                    ("hook", "真正困难的是先判断什么值得做。"),
+                    ("context", "结果不会自动证明选择正确。"),
+                    ("explanation", "判断标准决定一个人承担什么代价。"),
+                    ("application", "面对选择时先问事情本身的是非。"),
+                    ("closing", "成败会过去，判断留下方向。"),
+                ], 1)
+            ],
+            "caption": "先判断是非，再衡量成败。",
+            "hashtags": ["人物观点", "判断", "选择"],
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            if request.url.path == "/api/v1/model-router/billing-json":
+                self.assertEqual(
+                    request.url.params["request_id"],
+                    "req-dgrid-script-1",
+                )
+                return httpx.Response(200, json={
+                    "code": 200,
+                    "message": "ok",
+                    "data": {
+                        "request_id": "req-dgrid-script-1",
+                        "billing_json": {
+                            "model": PRODUCTION_TEXT_MODEL,
+                            "input_tokens": 900,
+                            "output_tokens": 300,
+                            "cache_read_tokens": 120,
+                            "total_cost": 0.024,
+                        },
+                    },
+                })
+            self.assertEqual(request.url.path, "/v1/chat/completions")
+            return httpx.Response(
+                200,
+                headers={"DGrid-Request-ID": "req-dgrid-script-1"},
+                json={
+                    "id": "chatcmpl-dgrid-script-1",
+                    "model": PRODUCTION_TEXT_MODEL,
+                    "choices": [{
+                        "message": {
+                            "content": json.dumps(
+                                generated, ensure_ascii=False
+                            )
+                        },
+                        "finish_reason": "stop",
+                    }],
+                    "usage": {
+                        "prompt_tokens": 900,
+                        "completion_tokens": 300,
+                        "total_tokens": 1200,
+                    },
+                },
+            )
+
+        provider = DGridScriptProvider(
+            api_key="test-key",
+            base_url="https://api.dgrid.ai/v1",
+            model=PRODUCTION_TEXT_MODEL,
+            transport=httpx.MockTransport(handler),
+        )
+        usage_records: list[ProviderUsageRecord] = []
+
+        async def record_usage(usage: ProviderUsageRecord) -> None:
+            usage_records.append(usage)
+
+        script = await provider.generate_direct_script(
+            SourceCard(
+                **valid_card().model_dump(mode="json"),
+                id="card-dgrid-script",
+                revision=1,
+                status="verified",
+            ),
+            "【用户原始创作请求｜最高优先级】\\n黄宗羲及其观点",
+            on_usage=record_usage,
+        )
+
+        request = calls[0]
+        request_body = json.loads(request.content)
+        self.assertEqual(request.headers["X-Title"], "Qijia AI Video Workbench")
+        self.assertNotIn("X-OpenRouter-Title", request.headers)
+        self.assertNotIn("X-OpenRouter-Metadata", request.headers)
+        self.assertNotIn("provider", request_body)
+        self.assertNotIn("reasoning", request_body)
+        self.assertNotIn("models", request_body)
+        self.assertEqual(request_body["model"], PRODUCTION_TEXT_MODEL)
+        self.assertEqual(script.video_title, "判断先于成败")
+        self.assertEqual(len(usage_records), 1)
+        self.assertEqual(usage_records[0].provider, "dgrid")
+        self.assertEqual(
+            usage_records[0].request_id,
+            "req-dgrid-script-1",
+        )
+        self.assertEqual(usage_records[0].cached_tokens, 120)
+        self.assertAlmostEqual(usage_records[0].reported_cost, 0.024)
+        self.assertEqual(
+            usage_records[0].pricing_basis,
+            "DGrid billing-json 不可变计费快照",
+        )
+
+    async def test_dgrid_billing_snapshot_polls_until_entry_is_available(self):
+        attempts = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            self.assertEqual(
+                request.url.params["request_id"],
+                "req-delayed-billing",
+            )
+            if attempts == 1:
+                return httpx.Response(200, json={
+                    "code": 404,
+                    "message": "Billing details not available yet",
+                })
+            return httpx.Response(200, json={
+                "code": 200,
+                "data": {
+                    "billing_json": {
+                        "model": PRODUCTION_TEXT_MODEL,
+                        "total_cost": 0.001071,
+                    },
+                },
+            })
+
+        with patch(
+            "qijia_video.infrastructure.dgrid_gateway.asyncio.sleep",
+            new=AsyncMock(),
+        ) as sleep_mock:
+            billing = await dgrid_billing_snapshot(
+                api_key="test-key",
+                request_id="req-delayed-billing",
+                timeout_seconds=30,
+                transport=httpx.MockTransport(handler),
+            )
+
+        self.assertEqual(attempts, 2)
+        sleep_mock.assert_awaited_once_with(1.0)
+        self.assertEqual(billing["total_cost"], 0.001071)
+
     async def test_media_packager_normalizes_audio_without_reencoding_video(self):
         packager = FfmpegMediaPackager()
         with tempfile.TemporaryDirectory() as directory:
@@ -6490,7 +6649,7 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             loaded = QijiaVideoSettings(_env_file=None)
         self.assertFalse(hasattr(loaded, "QIJIA_VIDEO_SCRIPT_MODEL"))
         self.assertFalse(hasattr(loaded, "QIJIA_VIDEO_SEEDANCE_MODEL"))
-        self.assertEqual(PRODUCTION_TEXT_MODEL, "deepseek/deepseek-v4-pro")
+        self.assertEqual(PRODUCTION_TEXT_MODEL, "anthropic/claude-fable-5")
         self.assertEqual(OPENROUTER_REQUEST_TIMEOUT_SECONDS, 600.0)
         self.assertEqual(
             {
@@ -6532,6 +6691,14 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             not capabilities["reference_upload_missing_configuration"],
         )
         self.assertNotIn("mock", response.json()["data"]["script_provider"])
+        self.assertEqual(
+            response.json()["data"]["script_provider"],
+            "dgrid-script",
+        )
+        self.assertEqual(
+            response.json()["data"]["storyboard_provider"],
+            "dgrid-storyboard",
+        )
         self.assertNotIn("mock", response.json()["data"]["tts_provider"])
         self.assertNotIn("mock", response.json()["data"]["video_provider"])
         defaults = response.json()["data"]["generation_defaults"]
@@ -6572,6 +6739,11 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         self.assertEqual(
             runtime_models["video"]["model_id"],
             response.json()["data"]["generation_defaults"]["seedance_model"],
+        )
+        self.assertEqual(runtime_models["script"]["provider"], "dgrid-script")
+        self.assertEqual(
+            runtime_models["director"]["provider"],
+            "dgrid-storyboard",
         )
         pipeline = capabilities["production_pipeline"]
         self.assertEqual(pipeline["pipeline_version"], "v4")
@@ -6644,13 +6816,14 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             response.json()["data"]["seedance_pricing"]["default_model"],
             SEEDANCE_BALANCED_MODEL,
         )
-        openrouter_pricing = response.json()["data"]["openrouter_pricing"]
-        self.assertEqual(openrouter_pricing["model"], PRODUCTION_TEXT_MODEL)
-        self.assertEqual(openrouter_pricing["input_usd_per_million_tokens"], 0.435)
-        self.assertEqual(openrouter_pricing["output_usd_per_million_tokens"], 0.87)
-        self.assertEqual(openrouter_pricing["usd_to_cny_rate"], 6.7)
+        text_model_pricing = response.json()["data"]["text_model_pricing"]
+        self.assertEqual(text_model_pricing["gateway"], "dgrid")
+        self.assertEqual(text_model_pricing["model"], PRODUCTION_TEXT_MODEL)
+        self.assertEqual(text_model_pricing["input_usd_per_million_tokens"], 10.0)
+        self.assertEqual(text_model_pricing["output_usd_per_million_tokens"], 50.0)
+        self.assertEqual(text_model_pricing["usd_to_cny_rate"], 6.7)
         self.assertEqual(
-            openrouter_pricing["director_after_script_approval"],
+            text_model_pricing["director_after_script_approval"],
             {
                 "request_count": 3,
                 "request_count_range": [3, 5],
@@ -6658,7 +6831,7 @@ class QijiaVideoPermissionTests(unittest.TestCase):
                 "output_token_range": [26000, 368000],
             },
         )
-        self.assertIn("usage.cost", openrouter_pricing["basis"])
+        self.assertIn("DGrid billing-json", text_model_pricing["basis"])
         self.assertNotIn(
             "seedance_prompt",
             response.json()["data"]["generation_defaults"],

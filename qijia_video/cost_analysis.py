@@ -38,6 +38,7 @@ STAGE_LABELS = {
 }
 PROVIDER_LABELS = {
     "tikhub": "TikHub",
+    "dgrid": "DGrid",
     "openrouter": "OpenRouter",
     "volcengine-seed-tts-2.0": "豆包语音",
     "volcengine-seedream": "Seedream",
@@ -502,7 +503,7 @@ def _topic_events(
             scope_status=run.status.value,
             occurred_at=occurred_at,
             stage="topic_editor",
-            provider=model.provider or "openrouter",
+            provider=model.provider or "dgrid",
             model_id=model.model,
             request_id=model.request_id,
             request_count=model.request_count,
@@ -517,9 +518,13 @@ def _topic_events(
             priced=priced,
             valuation="reported" if priced else "unpriced",
             note=(
-                "OpenRouter usage.cost 供应商回传金额"
+                (
+                    "DGrid billing-json 不可变计费快照"
+                    if model.provider == "dgrid"
+                    else "OpenRouter usage.cost 供应商回传金额"
+                )
                 if priced
-                else "供应商未回传金额，需与 OpenRouter Activity 对账"
+                else "供应商未回传金额，需与对应网关账单核对"
             ),
         ))
     return events
@@ -1119,10 +1124,10 @@ def build_cost_analysis(
             "has_unpriced_events": summary["unpriced_event_count"] > 0,
             "notes": [
                 "页面只显示人民币；所有美元成本按固定经营分析汇率 1 USD = ¥6.7 换算。",
-                "OpenRouter 使用响应内 usage.cost 换算人民币；不包含充值手续费、税费或账外调整。",
+                "DGrid 使用单次请求 billing-json 计费快照换算人民币；暂未返回时按 Claude Fable 5 公开价估算。",
                 "TikHub 按成功请求规划价换算人民币；端点价格、阶梯折扣与账单优先。",
                 "Seedream、Seedance 和豆包语音按调用发生时保存的刊例价估算；历史任务缺少价格快照时才使用当前配置补算。",
-                "成本账本上线前的脚本与分镜没有保存 OpenRouter usage，历史金额无法可靠反推，需到 OpenRouter Activity 对账。",
+                "DGrid 迁移前的 OpenRouter 记录按原 Provider 保留；成本账本上线前未保存 usage 的历史金额无法可靠反推。",
                 "未回传 tokens、金额或发生网络中断的请求保留为待对账，不按 0 元冒充完整成本。",
                 "范围仅包含内容生产相关模型与数据 API，不包含 Railway、TOS、带宽、人工和购买积分手续费。",
             ],
@@ -1149,11 +1154,11 @@ def build_cost_analysis(
                 "source": "https://docs.tikhub.io/493289600e0",
             },
             {
-                "provider": "OpenRouter",
-                "rate": f"响应 usage.cost × ¥{USD_TO_CNY_RATE:g}/USD",
+                "provider": "DGrid · Claude Fable 5",
+                "rate": f"billing-json total_cost × ¥{USD_TO_CNY_RATE:g}/USD",
                 "currency": "CNY",
                 "valuation": "reported",
-                "source": "https://openrouter.ai/docs/cookbook/administration/usage-accounting",
+                "source": "https://docs.dgrid.ai/api-reference/usage-and-billing/get-request-billing-details",
             },
             {
                 "provider": "Seedream",

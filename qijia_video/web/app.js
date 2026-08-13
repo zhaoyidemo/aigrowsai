@@ -2534,7 +2534,7 @@ function usageRecordCostCny(record) {
 
 function pendingDirectorCostRange(job) {
   if (job?.pipeline_version !== 'v4' || job?.storyboard_plan) return null;
-  const pricing = state.capabilities?.openrouter_pricing || {};
+  const pricing = state.capabilities?.text_model_pricing || {};
   const estimate = pricing.director_after_script_approval || {};
   const inputRange = Array.isArray(estimate.input_token_range)
     ? estimate.input_token_range.map(Number)
@@ -2619,7 +2619,7 @@ function renderScriptCostEstimate(job) {
   breakdownNode.textContent = [
     `已发生且可计价 ${formatCny(incurred)}`,
     directorCost
-      ? `待执行 Director ${directorCost.requestCountRange.length === 2 ? `${directorCost.requestCountRange[0]}–${directorCost.requestCountRange[1]}` : directorCost.requestCount} 次（${directorCost.model || 'OpenRouter'}）约 ${formatCny(directorLow)}–${formatCny(directorHigh)}`
+      ? `待执行 Director ${directorCost.requestCountRange.length === 2 ? `${directorCost.requestCountRange[0]}–${directorCost.requestCountRange[1]}` : directorCost.requestCount} 次（${directorCost.model || 'DGrid'}）约 ${formatCny(directorLow)}–${formatCny(directorHigh)}`
       : '',
     `完整旁白 ${characterCount} 字约 ${formatCny(ttsCost)}`,
     reusesVisuals

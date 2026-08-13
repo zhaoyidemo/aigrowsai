@@ -6,9 +6,9 @@
 
 ## v4 职责边界
 
-- Script Skill：`insight-led-scriptwriter@1.1.0` 直接读取原始请求与用户材料。`deepseek/deepseek-v4-pro` 依次执行 `xhigh` 初稿、隔离上下文 `high` 独立审稿、主编 `xhigh` 重写和隔离上下文 `high` 终稿验收；终审结果绑定最终脚本哈希，唯一业务交付仍是 `ScriptDraft`，不包含视觉决策。
-- Director Skill：脚本人工确认且 TTS 完成后，`animated-explainer@2.1.0` 使用同一 `deepseek/deepseek-v4-pro`。前两次 `xhigh` 调用分别锁定 `DirectorTreatment + VisualBible + AssetBible` 和固定 `chapter_01...chapter_N` 槽位内的 `StoryboardPlan + ShotContextIR`；第三次隔离上下文 `high` 独立审片。只有审片发现关键问题时才允许一次 `xhigh` 定向修订并再次 `high` 复审，因此正常 3 次、最多 5 次。人类文档、来源说明与媒体平台语法不会进入模型请求。任何 403 都在原模型调用处终止，不通过切换模型掩盖。
-- OpenRouter 传输层：脚本、导演和选题编辑只发送单一 `deepseek/deepseek-v4-pro` 模型请求，不携带 `models` 备用列表。完成长度使用该模型通过 OpenRouter 声明支持的 `max_tokens`；结构化结果既受模型端严格 JSON Schema 约束，也在本地再次校验完整字段、评分、章节和审核结论。
+- Script Skill：`insight-led-scriptwriter@1.1.0` 直接读取原始请求与用户材料。DGrid 上的 `anthropic/claude-fable-5` 依次完成主编初稿、隔离上下文独立审稿、主编重写和隔离上下文终稿验收；终审结果绑定最终脚本哈希，唯一业务交付仍是 `ScriptDraft`，不包含视觉决策。
+- Director Skill：脚本人工确认且 TTS 完成后，`animated-explainer@2.1.0` 使用同一 DGrid Claude Fable 5。前两次调用分别锁定 `DirectorTreatment + VisualBible + AssetBible` 和固定 `chapter_01...chapter_N` 槽位内的 `StoryboardPlan + ShotContextIR`；第三次使用隔离上下文独立审片。只有审片发现关键问题时才允许一次定向修订并再次复审，因此正常 3 次、最多 5 次。人类文档、来源说明与媒体平台语法不会进入模型请求。
+- DGrid 传输层：脚本、导演和选题编辑只发送单一 `anthropic/claude-fable-5` 模型请求，不携带备用模型列表。请求只使用 DGrid 官方 Chat Completions 字段；结构化结果既受严格 JSON Schema 约束，也在本地再次校验完整字段、评分、章节和审核结论。
 - Visual Style：四套风格只定义资产、材质、造型、色彩、构图、运动语法和验收标准，不选择论点，也不改写导演事件。
 - H3 Provider Adapter：只在脚本与导演之后工作，把参考图职责整理为多模态 Context IR，并把冻结的导演产物连同版本化图片/视频框架、负向边界和真实视频时长编译为 Seedream/Seedance 自然语言提示词；不参与脚本创作。三张视觉开发样片固定比较同一代表性事件；若用户上传参考图，三张样片都按 Director 声明的职责使用原图。正式首帧再按固定顺序同时输入原图与已选样片，分别保持身份/场景和已确认风格。
 - 媒体生产：先生成三张视觉开发样片，由编辑锁定一张，再为未上传自有素材的章节调用 Seedream 5 Lite 和测试期默认 Seedance 1.5 Pro。样片确认是正式批量生成前唯一新增的人工质量门。
@@ -31,7 +31,7 @@
 两种入口汇入统一生产链路
   → 原子冻结原始 CreativeInput、唯一 Script Skill、唯一 Director Skill、Visual Style 与 Provider Adapter
   → 原始输入与用户材料直接进入 Script Skill；不生成研究简报、Content/Evidence Policy、CreativeBrief 或 EditorialPlan
-  → 脚本主编 xhigh 初稿 → 独立 high 审稿 → 同一主编 xhigh 重写 → 独立 high 验收终稿
+  → Claude Fable 5 主编初稿 → 隔离上下文独立审稿 → 同一主编重写 → 独立验收终稿
   → 人工修改并确认脚本；确认后的 ScriptDraft 成为内容唯一真相
   → 豆包 TTS 2.0 按 ScriptBeat 合成并实测每段时长，再无缝拼成一条完整旁白
   → Director 第一阶段交付 DirectorTreatment、VisualBible 与 AssetBible
@@ -92,29 +92,29 @@ v4 脚本确认后固定先进入视觉开发和素材安排，不再提供“�
 - 家庭教育相关性使用“受控检索词 + 视频标题”共同判断，仍会直接排除孕期、奶粉、辅食、纸尿裤等泛母婴内容。每轮保存低粉榜样本整理结果，展示唯一可用数、批量详情补齐数、指标强/潜力复核数、榜单待补数，以及发布时间和粉丝字段缺失等排序观察；只有作品 ID/标题异常、偏离家庭教育和跨检索重复会被移出可用池。
 - 作者粉丝数是采集时快照，不是视频发布前的粉丝数；当前接口也不返回 DOU+ 或其他投流支出，因此系统不会把“低粉爆款”进一步表述成“纯自然流量爆款”。
 - 中国大陆使用官方建议的 `api.tikhub.dev` 加速域名：<https://docs.tikhub.io/4579297m0>
-- 编辑模型使用 OpenRouter 非流式响应自带的 `usage` 记录 Token 和供应商上报成本，不额外发起费用查询：<https://openrouter.ai/docs/cookbook/administration/usage-accounting>
+- 编辑模型使用 DGrid 响应记录 Token，并以 `DGrid-Request-ID` 查询不可变 `billing-json` 计费快照：<https://docs.dgrid.ai/api-reference/usage-and-billing/get-request-billing-details>
 
 TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此适配器采用保守归一化，兼容常见的大小写、下划线和榜单字段变体。必须至少有 8 条可用榜单视频且其中至少 5 条来自低粉爆款榜，否则不会调用编辑模型；每个候选必须由至少 2 条独立榜单视频共同验证且包含低粉榜样本，五个候选合计引用至少 8 条不同榜单视频和 5 条不同低粉榜视频，排名前三位还必须分别引用不同的低粉榜视频。排序先看低粉榜身份与发布时间，再看指标复核层级、跨榜单出现、日均播放、播粉比和播放量。不保存庞大的原始响应，只保存候选可复核所需的证据快照、样本整理结果、请求 ID 和字段结构摘要。
 
 ## 成本账本与团队效果分析
 
-登录后从工作台右上角进入 `/qijia-video/costs`。查看、筛选、排序、导出 CSV 和“重新载入看板”都只读取已保存数据，不会触发 TikHub、OpenRouter 或火山引擎调用。只有明确点击“更新这条抖音数据”或表格中的“更新此视频”才会调用 TikHub，而且每次严格只更新 1 个唯一作品并显示预计人民币成本。管理员和有工作台权限的同事看到同一份团队账本与内容效果；成员只能为自己创建的内容产生刷新费用，管理员可更新全部。
+登录后从工作台右上角进入 `/qijia-video/costs`。查看、筛选、排序、导出 CSV 和“重新载入看板”都只读取已保存数据，不会触发 TikHub、DGrid 或火山引擎调用。只有明确点击“更新这条抖音数据”或表格中的“更新此视频”才会调用 TikHub，而且每次严格只更新 1 个唯一作品并显示预计人民币成本。管理员和有工作台权限的同事看到同一份团队账本与内容效果；成员只能为自己创建的内容产生刷新费用，管理员可更新全部。
 
 团队效果看板只汇总已手填绑定的抖音作品，首屏聚焦累计播放、累计视频成本、整体 ROI、团队 10 倍目标差距和单条视频 ROI 排行；供应商、阶段、调用明细和计价依据默认折叠在“成本明细与对账”中，效果 CSV 同时导出最新点赞、评论、分享和收藏累计数据。时间范围按作品首次绑定时间确定发布批次；手动刷新不会把旧作品移入新批次。作品一旦纳入，播放量使用最新累计快照，成本使用该视频全生命周期累计成本，避免用累计播放除以局部成本造成虚高 ROI。同一抖音作品被误绑定到多个任务时，明细保留全部绑定供排查，团队合计只按最早绑定任务计一次，刷新入口也不会为重复绑定重复请求。尚未绑定的已打包视频只计入回流覆盖缺口；选题研究费用不强行分摊到单条视频。视频详情和团队看板的付费刷新都会在原位显示读取中、成功摘要、权限提示或 Provider 失败原因；即使累计数据没有变化也能确认本次操作结果。
 
 账本覆盖当前全部内容生产收费节点：
 
 - TikHub：选题研究和抖音效果回流都逐次保存成功/失败、端点和请求 ID，按成功请求规划价估算；原始美元金额在报表中固定按 `1 USD = ¥6.7` 换算。
-- OpenRouter：选题编辑、脚本生成和分镜生成逐次保存 Token，并使用非流式响应内的 `usage.cost` 作为供应商回传金额；记录动作先于下游 JSON 和质量门禁，报表按固定汇率换算人民币。
+- DGrid：选题编辑、脚本生成和分镜生成逐次保存 Token 与 `DGrid-Request-ID`，并查询单次请求 `billing-json.total_cost`；账单暂未可读时按 Fable 5 公开价保存估算，记录动作先于下游 JSON 和质量门禁。
 - Seedream：按成功生成图片数保存当次 CNY 单价快照；失败或结果未知的请求保留为待对账。
 - Seedance：测试期由代码内 `qijia_video/model_registry.py` 唯一决定新任务默认模型，当前为 1.5 Pro 无声模式；Railway 只保存凭证和基础设施配置，不保存具体模型型号。1.0 Pro Fast 是更低成本选项，2.0 是单镜头高质量升级选项。前端从 `/capabilities` 读取同一值并展示，不维护第二套默认。每次请求冻结模型，并按该模型的 `usage.total_tokens` 和 CNY 刊例价保存成本快照；失败不会偷偷切换模型，未知提交保留为待对账。
 - 豆包语音：逐个实际合成请求保存发送字符数，按当次 CNY 单价快照估算；音频返回后即入账，不受后续本地音频处理结果影响。
 
 报表只显示人民币，“已计成本”统一计算为：`供应商回传金额 + 有计价依据的估算`。所有原始 USD 成本固定按 `1 USD = ¥6.7` 换算，底层账本仍保存供应商原始币种和金额，便于对账。供应商未回传金额、Token 缺失或网络结果未知的调用显示为“待对账”，不会按 0 元伪装成完整成本。页面提供团队效果、10 倍目标进度、视频排行、时间趋势、供应商、生产阶段、创建人、每项内容、最近调用明细，以及成本与效果两份 CSV 导出。
 
-默认估算依据为 TikHub 选题研究及短链解析 `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、TikHub 抖音效果回流 `$0.002/成功请求`（`¥0.0134/成功请求`）、DeepSeek V4 Pro 目录价 `$0.435/百万输入 tokens + $0.87/百万输出 tokens`、Seedream `¥0.22/张`、Seedance 1.0 Pro Fast 无声视频 `¥4.2/百万 tokens`、Seedance 1.5 Pro 无声视频 `¥8/百万 tokens`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。脚本确认页使用四次已发生脚本调用的真实 `usage.cost`，并补入尚未执行的 Director 正常 3 次、审片修订时最多 5 次的 token 区间预估；画面用量卡同时计入 3 张视觉样片、所有正式首帧及全部 Seedance 版本。OpenRouter 实际上游价格可能不同，发生后始终以响应 `usage.cost` 取代目录价判断。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) 和[火山引擎豆包大模型计价](https://www.volcengine.com/product/doubao/)为准。
+默认估算依据为 TikHub 选题研究及短链解析 `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、TikHub 抖音效果回流 `$0.002/成功请求`（`¥0.0134/成功请求`）、Claude Fable 5 公开价 `$10/百万输入 tokens + $50/百万输出 tokens`、Seedream `¥0.22/张`、Seedance 1.0 Pro Fast 无声视频 `¥4.2/百万 tokens`、Seedance 1.5 Pro 无声视频 `¥8/百万 tokens`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。脚本确认页使用四次已发生脚本调用的 DGrid 计费快照，并补入尚未执行的 Director 正常 3 次、审片修订时最多 5 次的 token 区间预估；画面用量卡同时计入 3 张视觉样片、所有正式首帧及全部 Seedance 版本。DGrid 调用发生后始终以 `billing-json` 的不可变计费快照取代公开价估算。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[DGrid request billing](https://docs.dgrid.ai/api-reference/usage-and-billing/get-request-billing-details) 和[火山引擎豆包大模型计价](https://www.volcengine.com/product/doubao/)为准。
 
-范围刻意只包含模型与数据 API，不包含 Railway、TOS、带宽、人工、税费和购买积分手续费。账本上线前的脚本与分镜没有持久化 OpenRouter `usage`，无法可靠反推；历史图片、视频和语音仅在有保存产物或 Token 时按当前配置补算，并明确标记为历史估算。
+范围刻意只包含模型与数据 API，不包含 Railway、TOS、带宽、人工、税费和购买积分手续费。切换 DGrid 前的历史脚本与分镜可能只保存 OpenRouter `usage`，当前账本继续按原 Provider 展示且不会改写；更早缺少用量记录的金额无法可靠反推。历史图片、视频和语音仅在有保存产物或 Token 时按当前配置补算，并明确标记为历史估算。
 
 ## 独立架构
 
@@ -180,7 +180,7 @@ DATABASE_URL
 ADMIN_USERNAME
 ADMIN_PASSWORD
 SESSION_SECRET
-OPENROUTER_API_KEY
+DGRID_API_KEY
 TIKHUB_API_KEY
 ARK_API_KEY
 VOLCENGINE_SPEECH_API_KEY
@@ -213,7 +213,7 @@ node --test tests/qijia_video_frontend.test.js
 npm.cmd run typecheck --prefix video_renderer
 ```
 
-真实部署验收至少包括：登录后默认进入视频生产，确认创建页“当前真实生产链路”与 `/capabilities.production_pipeline` 完全一致，并验证任务详情中的冻结 Skill、实际模型、调用次数、成本与产物均来自任务轨迹而非前端硬编码；验证选题未配置不会锁死脚本入口。用统一创作请求检查 `pipeline_version=v4`、原始输入逐字冻结、`skill_snapshot=null`、`prompt_adapter_snapshot=null` 且没有外部检索；确认脚本产生“初稿 xhigh、独立审稿 high、主编重写 xhigh、终稿验收 high”四条 OpenRouter 用量记录，终审哈希与最终脚本一致。人工确认脚本后，核对逐段实测 TTS 时间轴、两阶段 Director 产物、独立审片结果、三张同事件视觉样片和样片选择门；确认样片前不得出现正式首帧或 Seedance 请求。随后验证自有素材跳过对应 AI 生成、测试期 Seedance 1.5 Pro 默认且方舟真实可提交、Remotion 成片、发布包、成本数据、服务重启恢复及 v1/v2/v3 历史任务读取。
+真实部署验收至少包括：登录后默认进入视频生产，确认创建页“当前真实生产链路”与 `/capabilities.production_pipeline` 完全一致，并验证任务详情中的冻结 Skill、实际模型、调用次数、成本与产物均来自任务轨迹而非前端硬编码；验证选题未配置不会锁死脚本入口。用统一创作请求检查 `pipeline_version=v4`、原始输入逐字冻结、`skill_snapshot=null`、`prompt_adapter_snapshot=null` 且没有外部检索；确认脚本产生“主编初稿、独立审稿、主编重写、终稿验收”四条 DGrid 用量记录，终审哈希与最终脚本一致。人工确认脚本后，核对逐段实测 TTS 时间轴、两阶段 Director 产物、独立审片结果、三张同事件视觉样片和样片选择门；确认样片前不得出现正式首帧或 Seedance 请求。随后验证自有素材跳过对应 AI 生成、测试期 Seedance 1.5 Pro 默认且方舟真实可提交、Remotion 成片、发布包、成本数据、服务重启恢复及 v1/v2/v3 历史任务读取。
 
 ## 数据边界
 

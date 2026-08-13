@@ -1,4 +1,4 @@
-"""真实脚本生成 Provider；只依赖 OpenRouter 的 OpenAI 兼容接口。"""
+"""真实脚本与导演 Provider；生产链使用 DGrid 的兼容接口。"""
 from __future__ import annotations
 
 import json
@@ -32,6 +32,18 @@ from qijia_video.contracts import (
 )
 from qijia_video.director_prompting import assert_provider_neutral_runtime_prompt
 from qijia_video.errors import ProviderUnavailable
+from qijia_video.infrastructure.dgrid_gateway import (
+    DGRID_DEFAULT_BASE_URL,
+    dgrid_billing_snapshot,
+    dgrid_headers,
+    dgrid_model_access,
+    dgrid_request_id,
+)
+from qijia_video.model_registry import (
+    PRODUCTION_TEXT_INPUT_USD_PER_MILLION,
+    PRODUCTION_TEXT_MODEL,
+    PRODUCTION_TEXT_OUTPUT_USD_PER_MILLION,
+)
 from qijia_video.prompt_orchestration import compile_legacy_h3_script_prompt
 from qijia_video.prompts import (
     DIRECT_SCRIPT_OUTPUT_CONTRACT,
@@ -61,13 +73,18 @@ UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
 ModelT = TypeVar('ModelT', bound=BaseModel)
 
 
-def _openrouter_completion_limit_key(model: str) -> str:
-    """Use the Chat Completions token limit supported by the production model."""
+def _completion_limit_key(model: str) -> str:
+    """Use the documented Chat Completions token-limit field."""
 
-    # Keep the argument for the request-builder contract. The production model
-    # advertises max_tokens through OpenRouter's user-scoped model metadata.
+    # Keep the argument for the request-builder contract and future models.
     del model
     return "max_tokens"
+
+
+def _openrouter_completion_limit_key(model: str) -> str:
+    """Compatibility alias for historical tests and adapters."""
+
+    return _completion_limit_key(model)
 
 
 _CREATIVE_BRIEF_RESPONSE_SCHEMA = {
@@ -989,8 +1006,10 @@ class _OpenRouterErrorContext:
             parts.append(f"generation_id={self.generation_id}")
         return "（" + "，".join(parts) + "）"
 
-    def ledger_note(self) -> str:
-        return ("OpenRouter 失败诊断" + self.diagnostic_suffix())[:480]
+    def ledger_note(self, provider_label: str = "OpenRouter") -> str:
+        return (
+            f"{provider_label} 失败诊断" + self.diagnostic_suffix()
+        )[:480]
 
 
 class _OpenRouterRequestError(ProviderUnavailable):
@@ -1016,6 +1035,26 @@ class _OpenRouterRequestError(ProviderUnavailable):
             classification = "OpenRouter 拒绝了当前请求"
         super().__init__(
             f"OpenRouter {label}返回 HTTP {context.status_code}："
+            f"{classification}；{context.message[:300]}"
+            f"{context.diagnostic_suffix()}"
+        )
+
+
+class _DGridRequestError(ProviderUnavailable):
+    def __init__(self, label: str, context: _OpenRouterErrorContext):
+        self.context = context
+        if context.status_code == 401:
+            classification = "API Key 未通过认证"
+        elif context.model_access == "not_listed_for_key":
+            classification = "当前 API Key 的模型目录未列出该模型"
+        elif context.model_access == "listed_for_key":
+            classification = "当前 API Key 已识别该模型，但请求参数或上游仍被拒绝"
+        elif context.status_code == 429:
+            classification = "请求达到 DGrid 速率或余额限制"
+        else:
+            classification = "DGrid 拒绝了当前单模型请求"
+        super().__init__(
+            f"DGrid {label}返回 HTTP {context.status_code}："
             f"{classification}；{context.message[:300]}"
             f"{context.diagnostic_suffix()}"
         )
@@ -1185,23 +1224,34 @@ def _beat_groups_cover_script(
     return compressed_ids == expected_beat_ids
 
 
-def _openrouter_api_url(base_url: str, path: str) -> str:
-    base = str(base_url or "https://openrouter.ai/api").rstrip("/")
+def _gateway_api_url(base_url: str, path: str, *, gateway: str) -> str:
+    default_url = (
+        DGRID_DEFAULT_BASE_URL
+        if gateway == "dgrid"
+        else "https://openrouter.ai/api"
+    )
+    base = str(base_url or default_url).rstrip("/")
     if base.endswith("/v1"):
         root = base
     elif base.endswith("/api"):
+        root = base + "/v1"
+    elif gateway == "dgrid":
         root = base + "/v1"
     else:
         root = base + "/api/v1"
     return root + "/" + path.lstrip("/")
 
 
-def _chat_url(base_url: str) -> str:
-    return _openrouter_api_url(base_url, "chat/completions")
+def _chat_url(base_url: str, *, gateway: str = "openrouter") -> str:
+    return _gateway_api_url(base_url, "chat/completions", gateway=gateway)
 
 
 def _models_user_url(base_url: str) -> str:
-    return _openrouter_api_url(base_url, "models/user")
+    return _gateway_api_url(base_url, "models/user", gateway="openrouter")
+
+
+def _models_url(base_url: str, *, gateway: str) -> str:
+    return _gateway_api_url(base_url, "models", gateway=gateway)
 
 
 def _message_text(content: Any) -> str:
@@ -1456,12 +1506,14 @@ def _nonnegative_int(value: Any) -> int:
         return 0
 
 
-def _openrouter_usage_record(
+def _gateway_usage_record(
     body: dict | None,
     *,
+    gateway: str,
     usage_id: str,
     operation: str,
     requested_model: str,
+    billing_snapshot: dict[str, Any] | None = None,
     request_id: str = "",
     http_status_code: int | None = None,
     succeeded: bool = False,
@@ -1476,37 +1528,95 @@ def _openrouter_usage_record(
     completion_details = (
         completion_details if isinstance(completion_details, dict) else {}
     )
-    raw_cost = usage.get("cost")
+    billing = (
+        billing_snapshot if isinstance(billing_snapshot, dict) else {}
+    )
+    raw_cost = (
+        billing.get("total_cost")
+        if "total_cost" in billing
+        else usage.get("cost")
+    )
     try:
         reported_cost = max(0.0, float(raw_cost)) if raw_cost is not None else None
     except (TypeError, ValueError):
         reported_cost = None
     input_tokens = _nonnegative_int(
-        usage.get("prompt_tokens") or usage.get("input_tokens")
+        billing.get("input_tokens")
+        or usage.get("prompt_tokens")
+        or usage.get("input_tokens")
     )
     output_tokens = _nonnegative_int(
-        usage.get("completion_tokens") or usage.get("output_tokens")
+        billing.get("output_tokens")
+        or usage.get("completion_tokens")
+        or usage.get("output_tokens")
     )
     total_tokens = _nonnegative_int(
         usage.get("total_tokens") or input_tokens + output_tokens
     )
-    missing_cost_note = (
-        "供应商响应未提供 usage.cost，金额需与 OpenRouter Activity 对账"
-        if reported_cost is None
-        else ""
+    estimated_cost = None
+    if (
+        gateway == "dgrid"
+        and reported_cost is None
+        and succeeded
+        and requested_model == PRODUCTION_TEXT_MODEL
+        and (input_tokens or output_tokens)
+    ):
+        estimated_cost = round(
+            (
+                input_tokens * PRODUCTION_TEXT_INPUT_USD_PER_MILLION
+                + output_tokens * PRODUCTION_TEXT_OUTPUT_USD_PER_MILLION
+            )
+            / 1_000_000,
+            10,
+        )
+    provider_label = "DGrid" if gateway == "dgrid" else "OpenRouter"
+    missing_cost_note = ""
+    if reported_cost is None and estimated_cost is not None:
+        missing_cost_note = (
+            "DGrid billing-json 暂未返回，先按 Claude Fable 5 公开价估算"
+        )
+    elif reported_cost is None:
+        missing_cost_note = (
+            "DGrid billing-json 暂无可用金额，需到 DGrid 用量账单核对"
+            if gateway == "dgrid"
+            else "供应商响应未提供 usage.cost，金额需与 OpenRouter Activity 对账"
+        )
+    pricing_basis = ""
+    if reported_cost is not None:
+        pricing_basis = (
+            "DGrid billing-json 不可变计费快照"
+            if billing
+            else f"{provider_label} 非流式响应 usage.cost 供应商回传金额"
+        )
+    elif estimated_cost is not None:
+        pricing_basis = (
+            f"Claude Fable 5 公开价 ${PRODUCTION_TEXT_INPUT_USD_PER_MILLION:g}"
+            "/百万输入 tokens + "
+            f"${PRODUCTION_TEXT_OUTPUT_USD_PER_MILLION:g}/百万输出 tokens；"
+            "DGrid 账单优先"
+        )
+    cached_tokens = _nonnegative_int(
+        billing.get("cache_read_tokens")
+        or prompt_details.get("cached_tokens")
     )
     return ProviderUsageRecord(
         usage_id=usage_id,
         operation=operation,
-        provider="openrouter",
-        model_id=str(payload.get("model") or requested_model),
-        request_id=str(payload.get("id") or request_id),
+        provider=gateway,
+        model_id=str(
+            billing.get("model") or payload.get("model") or requested_model
+        ),
+        request_id=str(
+            request_id
+            if gateway == "dgrid"
+            else payload.get("id") or request_id
+        ),
         succeeded=bool(succeeded),
         http_status_code=http_status_code,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
-        cached_tokens=_nonnegative_int(prompt_details.get("cached_tokens")),
+        cached_tokens=cached_tokens,
         reasoning_tokens=_nonnegative_int(
             completion_details.get("reasoning_tokens")
         ),
@@ -1514,11 +1624,9 @@ def _openrouter_usage_record(
         unit="request",
         reported_cost=reported_cost,
         reported_currency="USD" if reported_cost is not None else None,
-        pricing_basis=(
-            "OpenRouter 非流式响应 usage.cost 供应商回传金额"
-            if reported_cost is not None
-            else ""
-        ),
+        estimated_cost=estimated_cost,
+        estimated_currency="USD" if estimated_cost is not None else None,
+        pricing_basis=pricing_basis,
         note="；".join(
             item
             for item in (
@@ -1545,8 +1653,9 @@ async def _record_usage(
         ) from exc
 
 
-async def _openrouter_json_request(
+async def _gateway_json_request(
     *,
+    gateway: str,
     api_key: str,
     base_url: str,
     model: str,
@@ -1565,16 +1674,20 @@ async def _openrouter_json_request(
     max_tool_calls: int | None = None,
 ) -> _OpenRouterJsonResponse:
     usage_id = f"usage_{uuid.uuid4().hex}"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "X-OpenRouter-Title": "Qijia AI Video Workbench",
-        "X-OpenRouter-Metadata": "enabled",
-    }
+    provider_label = "DGrid" if gateway == "dgrid" else "OpenRouter"
+    headers = (
+        dgrid_headers(api_key, title="Qijia AI Video Workbench")
+        if gateway == "dgrid"
+        else {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "X-OpenRouter-Title": "Qijia AI Video Workbench",
+            "X-OpenRouter-Metadata": "enabled",
+        }
+    )
     payload = {
         "model": model,
         "messages": messages,
-        "reasoning": {"effort": reasoning_effort, "exclude": True},
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -1583,18 +1696,20 @@ async def _openrouter_json_request(
                 "schema": response_schema,
             },
         },
-        "provider": {"require_parameters": True},
     }
-    # OpenRouter filters endpoints when require_parameters=true, so use the
-    # completion-limit field advertised by the production model. This remains
-    # a single-model request.
-    completion_limit_key = _openrouter_completion_limit_key(model)
+    if gateway == "openrouter":
+        payload["reasoning"] = {
+            "effort": reasoning_effort,
+            "exclude": True,
+        }
+        payload["provider"] = {"require_parameters": True}
+    completion_limit_key = _completion_limit_key(model)
     payload[completion_limit_key] = max_completion_tokens
     if tools:
         payload["tools"] = tools
     if tools and tool_choice is not None:
         payload["tool_choice"] = tool_choice
-    if max_tool_calls is not None:
+    if gateway == "openrouter" and max_tool_calls is not None:
         payload["max_tool_calls"] = max(1, int(max_tool_calls))
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(timeout_seconds, connect=20.0),
@@ -1602,41 +1717,71 @@ async def _openrouter_json_request(
     ) as client:
         try:
             response = await client.post(
-                _chat_url(base_url), headers=headers, json=payload
+                _chat_url(base_url, gateway=gateway),
+                headers=headers,
+                json=payload,
             )
         except (httpx.TimeoutException, httpx.RequestError) as exc:
-            await _record_usage(on_usage, _openrouter_usage_record(
+            await _record_usage(on_usage, _gateway_usage_record(
                 None,
+                gateway=gateway,
                 usage_id=usage_id,
                 operation=operation,
                 requested_model=model,
                 succeeded=False,
                 note="网络异常后是否计费未知",
             ))
-            raise ProviderUnavailable(f"OpenRouter {label}请求失败") from exc
-    request_id = response.headers.get("x-request-id", "")
+            raise ProviderUnavailable(
+                f"{provider_label} {label}请求失败"
+            ) from exc
+    request_id = (
+        dgrid_request_id(response)
+        if gateway == "dgrid"
+        else response.headers.get("x-request-id", "")
+    )
     generation_id = response.headers.get("x-generation-id", "")
-    trace_id = generation_id or request_id
+    trace_id = (
+        request_id
+        if gateway == "dgrid"
+        else generation_id or request_id
+    )
     try:
         body = response.json()
     except ValueError as exc:
-        await _record_usage(on_usage, _openrouter_usage_record(
+        billing = (
+            await dgrid_billing_snapshot(
+                api_key=api_key,
+                base_url=base_url,
+                request_id=request_id,
+                timeout_seconds=timeout_seconds,
+                transport=transport,
+            )
+            if gateway == "dgrid"
+            else None
+        )
+        await _record_usage(on_usage, _gateway_usage_record(
             None,
+            gateway=gateway,
             usage_id=usage_id,
             operation=operation,
             requested_model=model,
+            billing_snapshot=billing,
             request_id=trace_id,
             http_status_code=response.status_code,
             succeeded=False,
             note="响应无法解析，是否计费需对账",
         ))
         raise ProviderUnavailable(
-            f"OpenRouter {label}返回了无法读取的响应"
+            f"{provider_label} {label}返回了无法读取的响应"
             + (f"；request_id={trace_id}" if trace_id else "")
         ) from exc
     if isinstance(body, dict) and not generation_id:
         generation_id = _diagnostic_text(body.get("id"), 160)
-    trace_id = generation_id or request_id
+    trace_id = (
+        request_id
+        if gateway == "dgrid"
+        else generation_id or request_id
+    )
     error_context = (
         _openrouter_error_context(
             body,
@@ -1649,37 +1794,65 @@ async def _openrouter_json_request(
         if response.status_code >= 400
         else None
     )
-    if (
-        error_context
-        and error_context.status_code == 403
-        and not error_context.guardrail_blocked
-        and not error_context.reasons
-    ):
-        model_access = await _openrouter_model_access_diagnostic(
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            transport=transport,
-        )
-        error_context = replace(error_context, model_access=model_access)
+    if error_context:
+        if gateway == "dgrid":
+            model_access = await dgrid_model_access(
+                api_key=api_key,
+                models_url=_models_url(base_url, gateway=gateway),
+                model=model,
+                timeout_seconds=timeout_seconds,
+                transport=transport,
+            )
+            error_context = replace(error_context, model_access=model_access)
+        elif (
+            error_context.status_code == 403
+            and not error_context.guardrail_blocked
+            and not error_context.reasons
+        ):
+            model_access = await _openrouter_model_access_diagnostic(
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                transport=transport,
+            )
+            error_context = replace(error_context, model_access=model_access)
     response_succeeded = bool(
         response.status_code < 400
         and isinstance(body, dict)
         and not body.get("error")
         and body.get("choices")
     )
-    await _record_usage(on_usage, _openrouter_usage_record(
+    billing = (
+        await dgrid_billing_snapshot(
+            api_key=api_key,
+            base_url=base_url,
+            request_id=request_id,
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+        )
+        if gateway == "dgrid"
+        else None
+    )
+    await _record_usage(on_usage, _gateway_usage_record(
         body if isinstance(body, dict) else None,
+        gateway=gateway,
         usage_id=usage_id,
         operation=operation,
         requested_model=model,
+        billing_snapshot=billing,
         request_id=trace_id,
         http_status_code=response.status_code,
         succeeded=response_succeeded,
-        note=error_context.ledger_note() if error_context else "",
+        note=(
+            error_context.ledger_note(provider_label)
+            if error_context
+            else ""
+        ),
     ))
     if error_context:
+        if gateway == "dgrid":
+            raise _DGridRequestError(label, error_context)
         raise _OpenRouterRequestError(label, error_context)
     top_level_error = body.get("error") if isinstance(body, dict) else None
     if top_level_error:
@@ -1689,7 +1862,8 @@ async def _openrouter_json_request(
             else str(top_level_error)
         )
         raise ProviderUnavailable(
-            f"OpenRouter {label}生成失败：{str(message or '未知上游错误')[:500]}"
+            f"{provider_label} {label}生成失败："
+            f"{str(message or '未知上游错误')[:500]}"
             + (f"；request_id={trace_id}" if trace_id else "")
         )
     try:
@@ -1699,7 +1873,7 @@ async def _openrouter_json_request(
         finish_reason = str(choice.get("finish_reason") or "unknown")
     except (KeyError, IndexError, TypeError) as exc:
         raise ProviderUnavailable(
-            f"OpenRouter {label}响应缺少模型结果"
+            f"{provider_label} {label}响应缺少模型结果"
             + (f"；request_id={trace_id}" if trace_id else "")
         ) from exc
     choice_error = choice.get("error")
@@ -1710,13 +1884,14 @@ async def _openrouter_json_request(
             else str(choice_error)
         )
         raise ProviderUnavailable(
-            f"OpenRouter {label}生成失败：{str(error_message or '未知上游错误')[:500]}"
+            f"{provider_label} {label}生成失败："
+            f"{str(error_message or '未知上游错误')[:500]}"
             + (f"；request_id={trace_id}" if trace_id else "")
         )
     refusal = message.get("refusal") if isinstance(message, dict) else None
     if refusal:
         raise ProviderUnavailable(
-            f"OpenRouter {label}拒绝了本次请求：{str(refusal)[:300]}"
+            f"{provider_label} {label}拒绝了本次请求：{str(refusal)[:300]}"
             + (f"；request_id={trace_id}" if trace_id else "")
         )
     try:
@@ -1732,15 +1907,28 @@ async def _openrouter_json_request(
         else:
             detail = "没有返回可解析的结构化结果，请从失败阶段重试"
         raise ProviderUnavailable(
-            f"OpenRouter {label}{detail}（finish_reason={finish_reason}）"
+            f"{provider_label} {label}{detail}（finish_reason={finish_reason}）"
             + (f"；request_id={trace_id}" if trace_id else "")
         ) from exc
+
+
+async def _openrouter_json_request(
+    *,
+    gateway: str = "openrouter",
+    **kwargs,
+) -> _OpenRouterJsonResponse:
+    """Compatibility entry point with an explicit production gateway."""
+
+    return await _gateway_json_request(gateway=gateway, **kwargs)
 
 
 class OpenRouterScriptProvider:
     """Generate one reviewable screenplay with independent content tracks."""
 
     name = "openrouter-script"
+    gateway = "openrouter"
+    credential_setting = "OPENROUTER_API_KEY"
+    default_base_url = "https://openrouter.ai/api"
 
     def __init__(
         self,
@@ -1752,7 +1940,7 @@ class OpenRouterScriptProvider:
         timeout_seconds: float = OPENROUTER_REQUEST_TIMEOUT_SECONDS,
     ):
         self.api_key = str(api_key or "").strip()
-        self.base_url = str(base_url or "https://openrouter.ai/api").strip()
+        self.base_url = str(base_url or self.default_base_url).strip()
         self.model = str(model or "").strip()
         self.transport = transport
         self.timeout_seconds = max(10.0, float(timeout_seconds))
@@ -2002,7 +2190,7 @@ class OpenRouterScriptProvider:
     ) -> tuple[EditorialPlan, ScriptDraft]:
         if not self.configured:
             raise ProviderUnavailable(
-                '真实脚本生成未配置：请设置 OPENROUTER_API_KEY'
+                f'真实脚本生成未配置：请设置 {self.credential_setting}'
             )
         user_prompt = self._prompt(
             card,
@@ -2010,6 +2198,7 @@ class OpenRouterScriptProvider:
             output_contract=SCRIPT_SKILL_OUTPUT_CONTRACT,
         )
         response = await _openrouter_json_request(
+            gateway=self.gateway,
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -2052,7 +2241,7 @@ class OpenRouterScriptProvider:
 
         if not self.configured:
             raise ProviderUnavailable(
-                '真实脚本生成未配置：请设置 OPENROUTER_API_KEY'
+                f'真实脚本生成未配置：请设置 {self.credential_setting}'
             )
         user_prompt = self._prompt(
             card,
@@ -2060,6 +2249,7 @@ class OpenRouterScriptProvider:
             output_contract=DIRECT_SCRIPT_OUTPUT_CONTRACT,
         )
         response = await _openrouter_json_request(
+            gateway=self.gateway,
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -2096,7 +2286,7 @@ class OpenRouterScriptProvider:
 
         if not self.configured:
             raise ProviderUnavailable(
-                '真实脚本生成未配置：请设置 OPENROUTER_API_KEY'
+                f'真实脚本生成未配置：请设置 {self.credential_setting}'
             )
         writer_prompt = self._prompt(
             card,
@@ -2104,6 +2294,7 @@ class OpenRouterScriptProvider:
             output_contract=DIRECT_SCRIPT_OUTPUT_CONTRACT,
         )
         draft_response = await _openrouter_json_request(
+            gateway=self.gateway,
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -2140,6 +2331,7 @@ class OpenRouterScriptProvider:
             + json.dumps(draft.model_dump(mode='json'), ensure_ascii=False)
         )
         critique_response = await _openrouter_json_request(
+            gateway=self.gateway,
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -2183,6 +2375,7 @@ class OpenRouterScriptProvider:
             + DIRECT_SCRIPT_OUTPUT_CONTRACT
         )
         final_response = await _openrouter_json_request(
+            gateway=self.gateway,
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -2220,6 +2413,7 @@ class OpenRouterScriptProvider:
             + json.dumps(final_script.model_dump(mode='json'), ensure_ascii=False)
         )
         final_review_response = await _openrouter_json_request(
+            gateway=self.gateway,
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -2292,7 +2486,7 @@ class OpenRouterScriptProvider:
 
         if not self.configured:
             raise ProviderUnavailable(
-                "真实脚本生成未配置：请设置 OPENROUTER_API_KEY"
+                f"真实脚本生成未配置：请设置 {self.credential_setting}"
             )
         user_prompt = self._prompt(card, prompt)
         messages = [
@@ -2307,6 +2501,7 @@ class OpenRouterScriptProvider:
             {"role": "user", "content": user_prompt},
         ]
         response = await _openrouter_json_request(
+            gateway=self.gateway,
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -2386,6 +2581,9 @@ class OpenRouterStoryboardProvider:
     """Turn an approved script into an ordered provider-neutral shot plan."""
 
     name = "openrouter-storyboard"
+    gateway = "openrouter"
+    credential_setting = "OPENROUTER_API_KEY"
+    default_base_url = "https://openrouter.ai/api"
 
     async def generate_quality_director_plan(
         self,
@@ -2402,7 +2600,9 @@ class OpenRouterStoryboardProvider:
         """Develop and plan in isolated calls, then audit with one bounded revision."""
 
         if not self.configured:
-            raise ProviderUnavailable('真实分镜生成未配置：请设置 OPENROUTER_API_KEY')
+            raise ProviderUnavailable(
+                f'真实分镜生成未配置：请设置 {self.credential_setting}'
+            )
         expected_beat_ids = [item.id for item in script.beats]
         if (
             not 3 <= len(expected_beat_ids) <= 12
@@ -2474,6 +2674,7 @@ class OpenRouterStoryboardProvider:
                 },
             ]
         treatment_response = await _openrouter_json_request(
+            gateway=self.gateway,
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -2586,6 +2787,7 @@ class OpenRouterStoryboardProvider:
             indent=2,
         )
         shot_response = await _openrouter_json_request(
+            gateway=self.gateway,
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -2713,6 +2915,7 @@ class OpenRouterStoryboardProvider:
                 indent=2,
             )
             audit_response = await _openrouter_json_request(
+                gateway=self.gateway,
                 api_key=self.api_key,
                 base_url=self.base_url,
                 model=self.model,
@@ -2786,6 +2989,7 @@ class OpenRouterStoryboardProvider:
                 indent=2,
             )
             revision_response = await _openrouter_json_request(
+                gateway=self.gateway,
                 api_key=self.api_key,
                 base_url=self.base_url,
                 model=self.model,
@@ -2854,7 +3058,9 @@ class OpenRouterStoryboardProvider:
         '''Let the v3 Director choose chapter boundaries and media.'''
 
         if not self.configured:
-            raise ProviderUnavailable('真实分镜生成未配置：请设置 OPENROUTER_API_KEY')
+            raise ProviderUnavailable(
+                f'真实分镜生成未配置：请设置 {self.credential_setting}'
+            )
         expected_beat_ids = [item.id for item in script.beats]
         if (
             not 3 <= len(expected_beat_ids) <= 12
@@ -2887,6 +3093,7 @@ class OpenRouterStoryboardProvider:
             + json.dumps(beat_payload, ensure_ascii=False, indent=2)
         )
         response = await _openrouter_json_request(
+            gateway=self.gateway,
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -3001,7 +3208,9 @@ class OpenRouterStoryboardProvider:
         '''Generate neutral direction; media prompts are compiled later.'''
 
         if not self.configured:
-            raise ProviderUnavailable('真实分镜生成未配置：请设置 OPENROUTER_API_KEY')
+            raise ProviderUnavailable(
+                f'真实分镜生成未配置：请设置 {self.credential_setting}'
+            )
         expected_beat_ids = [item.id for item in script.beats]
         shot_count = len(beat_groups)
         adaptive_media = not visual_types
@@ -3099,6 +3308,7 @@ class OpenRouterStoryboardProvider:
             )
         )
         response = await _openrouter_json_request(
+            gateway=self.gateway,
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -3195,7 +3405,7 @@ class OpenRouterStoryboardProvider:
         timeout_seconds: float = OPENROUTER_REQUEST_TIMEOUT_SECONDS,
     ):
         self.api_key = str(api_key or "").strip()
-        self.base_url = str(base_url or "https://openrouter.ai/api").strip()
+        self.base_url = str(base_url or self.default_base_url).strip()
         self.model = str(model or "").strip()
         self.transport = transport
         self.timeout_seconds = max(10.0, float(timeout_seconds))
@@ -3235,7 +3445,7 @@ class OpenRouterStoryboardProvider:
 
         if not self.configured:
             raise ProviderUnavailable(
-                "真实分镜生成未配置：请设置 OPENROUTER_API_KEY"
+                f"真实分镜生成未配置：请设置 {self.credential_setting}"
             )
         expected_beat_ids = [item.id for item in script.beats]
         shot_count = len(beat_groups)
@@ -3343,6 +3553,7 @@ class OpenRouterStoryboardProvider:
             )
         )
         response = await _openrouter_json_request(
+            gateway=self.gateway,
             api_key=self.api_key,
             base_url=self.base_url,
             model=self.model,
@@ -3409,3 +3620,21 @@ class OpenRouterStoryboardProvider:
             raise ProviderUnavailable(
                 f"分镜模型返回内容不符合 {shot_count} 镜头契约，请重试"
             ) from exc
+
+
+class DGridScriptProvider(OpenRouterScriptProvider):
+    """Production Script Skill adapter for DGrid-hosted Claude Fable 5."""
+
+    name = "dgrid-script"
+    gateway = "dgrid"
+    credential_setting = "DGRID_API_KEY"
+    default_base_url = DGRID_DEFAULT_BASE_URL
+
+
+class DGridStoryboardProvider(OpenRouterStoryboardProvider):
+    """Production Director Skill adapter for DGrid-hosted Claude Fable 5."""
+
+    name = "dgrid-storyboard"
+    gateway = "dgrid"
+    credential_setting = "DGRID_API_KEY"
+    default_base_url = DGRID_DEFAULT_BASE_URL

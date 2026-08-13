@@ -21,8 +21,8 @@ class QijiaVideoSettings(BaseSettings):
     QIJIA_VIDEO_EXECUTION_MODE: str = "auto"
     REMOTION_CONCURRENCY: str = "1"
 
-    OPENROUTER_API_KEY: str = ""
-    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api"
+    DGRID_API_KEY: str = ""
+    DGRID_BASE_URL: str = "https://api.dgrid.ai/v1"
 
     # 家庭教育选题研究：仅使用 TikHub 的抖音读接口。中国大陆默认走 .dev。
     TIKHUB_API_KEY: str = ""
