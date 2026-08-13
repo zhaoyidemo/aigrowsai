@@ -1782,7 +1782,7 @@ class QijiaVideoService:
                 editorial_plan.draft_script_hash = generated_script_hash
             self._report(
                 progress,
-                message="主编重写已完成，正在校验最终脚本结构…",
+                message="主编终稿已完成，正在校验必要结构…",
                 stage="script_generation",
                 percent=24,
             )

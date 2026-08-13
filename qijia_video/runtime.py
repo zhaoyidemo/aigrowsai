@@ -337,7 +337,7 @@ class QijiaVideoRuntime:
                 ),
                 "model_id": self.script_provider.model,
                 "provider": self.script_provider.name,
-                "detail": "主编初稿 · 隔离上下文独立审稿 · 主编重写 · 独立终稿验收",
+                "detail": "主编初稿 · 非阻断编辑建议 · 主编终稿 · 交由你确认",
                 "configuration_source": MODEL_REGISTRY_SOURCE,
             },
             {

@@ -114,7 +114,7 @@ test('production pipeline visibility is backend-driven and names real collaborat
             name: '脚本创作',
             owner: '洞见型脚本主编',
             detail: '生成并审校口播',
-            planned_calls: '固定 4 次',
+            planned_calls: '固定 3 次',
             human_gate: false,
             capabilities: [],
             models: [],

@@ -95,18 +95,20 @@ def production_pipeline(runtime) -> dict:
         _node(
             "script", 2, "ai_colleague", "AI 同事", "脚本创作",
             script_skill["display_name"],
-            "主编初稿、独立审稿、主编重写、独立终稿验收。",
+            "主编初稿、非阻断编辑建议、主编终稿；是否采用由主编决定。",
             "原始请求与用户材料",
-            "最终 ScriptDraft 与绑定终稿哈希的 ScriptReview",
+            "最终 ScriptDraft 与结构完整性记录",
             capabilities=[_capability("script_skill", script_skill, "skill_id")],
             models=[_model(
                 _provider_model_id(runtime.script_provider),
                 runtime.script_provider.name,
-                "初稿、审稿、重写、终审",
+                "初稿、编辑建议、终稿",
             )],
-            calls="固定 4 次",
+            calls="固定 3 次",
             operations=[
                 "script_draft_generation", "script_critique",
+                # Keep retired operation names so historical job costs remain
+                # attached to the script node without advertising another gate.
                 "script_revision", "script_final_review", "script_generation",
             ],
             progress_stages=["script_generation"],
@@ -442,7 +444,7 @@ def _output_summaries(job, facts: dict) -> dict[str, str]:
         ),
         "script": (
             f"{len(job.script.beats)} 个 ScriptBeat · "
-            f"{'终审通过' if job.script_review else '等待交付'}"
+            f"{'主编终稿已交付' if job.script_review else '等待交付'}"
             if job.script else "尚未生成 ScriptDraft"
         ),
         "script_review": (

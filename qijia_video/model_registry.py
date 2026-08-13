@@ -16,7 +16,8 @@ PRODUCTION_TEXT_MODEL = "anthropic/claude-fable-5"
 # while a billing record is temporarily unavailable and for preflight ranges.
 PRODUCTION_TEXT_INPUT_USD_PER_MILLION = 10.0
 PRODUCTION_TEXT_OUTPUT_USD_PER_MILLION = 50.0
-# At script review, the four normal Script Skill requests have already happened.
+# At script review, the three Script Skill requests have already happened:
+# writer draft, advisory editor, and final writer.
 # Director normally runs visual development, formal chapters and independent
 # review. One failed review adds one bounded revision plus one final review.
 QUALITY_DIRECTOR_REQUEST_COUNT = 3

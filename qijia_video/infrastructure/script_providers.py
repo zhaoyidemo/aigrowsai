@@ -31,7 +31,7 @@ from qijia_video.contracts import (
     timestamp,
 )
 from qijia_video.director_prompting import assert_provider_neutral_runtime_prompt
-from qijia_video.errors import ProviderUnavailable
+from qijia_video.errors import ProviderUnavailable, UsageLedgerUnavailable
 from qijia_video.infrastructure.dgrid_gateway import (
     DGRID_DEFAULT_BASE_URL,
     dgrid_billing_snapshot,
@@ -60,7 +60,7 @@ from qijia_video.tts_options import (
 SCRIPT_PROMPT_VERSION = "qijia_script_v14_single_creative_brief"
 SCRIPT_SKILL_PROMPT_VERSION = 'qijia_script_v15_editorial_plan'
 DIRECT_SCRIPT_PROMPT_VERSION = 'qijia_script_v16_direct_draft'
-QUALITY_SCRIPT_PROMPT_VERSION = 'qijia_script_v22_final_audit'
+QUALITY_SCRIPT_PROMPT_VERSION = 'qijia_script_v23_editorial_collaboration'
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v12_semantic_adaptive"
 DIRECTOR_PROMPT_VERSION = 'qijia_director_v13_shot_context_ir'
 DIRECTOR_V3_PROMPT_VERSION = 'qijia_director_v20_concrete_event'
@@ -278,16 +278,6 @@ _DIRECT_SCRIPT_RESPONSE_SCHEMA['required'] = [
     if item != 'creative_brief'
 ]
 
-_SCRIPT_QUALITY_SCORE_KEYS = (
-    'input_fidelity',
-    'central_insight',
-    'argument_progression',
-    'specificity',
-    'spoken_language',
-    'originality',
-    'factual_discipline',
-)
-
 _DIRECTOR_QUALITY_SCORE_KEYS = (
     'script_fidelity',
     'visual_thesis_execution',
@@ -300,88 +290,76 @@ _DIRECTOR_QUALITY_SCORE_KEYS = (
 )
 
 
-_SCRIPT_CRITIQUE_RESPONSE_SCHEMA = {
+_SCRIPT_EDITOR_RESPONSE_SCHEMA = {
     'type': 'object',
     'properties': {
-        'verdict': {'type': 'string', 'enum': ['revise', 'polish']},
-        'quality_scores': {
-            'type': 'object',
-            'properties': {
-                key: {'type': 'integer', 'minimum': 1, 'maximum': 10}
-                for key in _SCRIPT_QUALITY_SCORE_KEYS
-            },
-            'required': [
-                'input_fidelity',
-                'central_insight',
-                'argument_progression',
-                'specificity',
-                'spoken_language',
-                'originality',
-                'factual_discipline',
-            ],
-            'additionalProperties': False,
-        },
-        'strengths': {
+        'preserve': {
             'type': 'array',
             'maxItems': 4,
             'items': {'type': 'string'},
         },
-        'revision_requests': {
-            'type': 'array',
-            'maxItems': 8,
-            'items': {
-                'type': 'object',
-                'properties': {
-                    'priority': {
-                        'type': 'string',
-                        'enum': ['critical', 'important', 'polish'],
-                    },
-                    'issue': {'type': 'string'},
-                    'instruction': {'type': 'string'},
-                },
-                'required': ['priority', 'issue', 'instruction'],
-                'additionalProperties': False,
-            },
-        },
-        'factual_risks': {
-            'type': 'array',
-            'maxItems': 8,
-            'items': {
-                'type': 'object',
-                'properties': {
-                    'claim': {'type': 'string'},
-                    'risk': {'type': 'string'},
-                    'action': {
-                        'type': 'string',
-                        'enum': ['remove', 'rephrase', 'manual_check'],
-                    },
-                },
-                'required': ['claim', 'risk', 'action'],
-                'additionalProperties': False,
-            },
-        },
-        'preserve': {
+        'improvements': {
             'type': 'array',
             'maxItems': 6,
             'items': {'type': 'string'},
         },
     },
-    'required': [
-        'verdict',
-        'quality_scores',
-        'strengths',
-        'revision_requests',
-        'factual_risks',
-        'preserve',
-    ],
+    'required': ['preserve', 'improvements'],
     'additionalProperties': False,
 }
 
-_FINAL_SCRIPT_REVIEW_RESPONSE_SCHEMA = deepcopy(_SCRIPT_CRITIQUE_RESPONSE_SCHEMA)
-_FINAL_SCRIPT_REVIEW_RESPONSE_SCHEMA['properties']['verdict']['enum'] = [
-    'pass',
-    'revise',
-]
+
+def _editorial_texts(value: Any, *, limit: int) -> list[str]:
+    """Normalize useful editor prose without turning its shape into a gate."""
+
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, dict):
+            issue = str(item.get('issue') or '').strip()
+            instruction = str(
+                item.get('instruction')
+                or item.get('suggestion')
+                or item.get('text')
+                or ''
+            ).strip()
+            text = (
+                f'{issue}：{instruction}'
+                if issue and instruction
+                else instruction or issue
+            )
+        else:
+            continue
+        normalized = re.sub(r'\s+', ' ', text).strip()[:600]
+        if normalized and normalized not in result:
+            result.append(normalized)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _normalized_script_editor_feedback(payload: Any) -> dict[str, list[str]]:
+    """Accept partial or provider-deviant advice; editor output is advisory."""
+
+    if not isinstance(payload, dict):
+        return {'preserve': [], 'improvements': []}
+    preserve = _editorial_texts(
+        payload.get('preserve')
+        or payload.get('keep')
+        or payload.get('strengths'),
+        limit=4,
+    )
+    improvements = _editorial_texts(
+        payload.get('improvements')
+        or payload.get('revision_requests')
+        or payload.get('suggestions')
+        or payload.get('editor_notes'),
+        limit=6,
+    )
+    return {'preserve': preserve, 'improvements': improvements}
 
 
 def _director_review_response_schema(chapter_ids: list[str]) -> dict:
@@ -450,9 +428,8 @@ def _validated_review_payload(
     score_keys: tuple[str, ...],
     verdicts: set[str],
     chapter_ids: set[str] | None = None,
-    include_script_fields: bool = False,
 ) -> dict:
-    """Reject incomplete reviews even if an upstream ignores strict JSON."""
+    """Validate Director review output that can trigger a bounded repair."""
 
     expected_fields = {
         'verdict',
@@ -460,8 +437,6 @@ def _validated_review_payload(
         'strengths',
         'revision_requests',
     }
-    if include_script_fields:
-        expected_fields.update({'factual_risks', 'preserve'})
     try:
         if not isinstance(payload, dict) or set(payload) != expected_fields:
             raise ValueError('root fields')
@@ -480,10 +455,9 @@ def _validated_review_payload(
             raise ValueError('quality score values')
 
         strengths = payload.get('strengths')
-        max_strengths = 4 if include_script_fields else 5
         if (
             not isinstance(strengths, list)
-            or len(strengths) > max_strengths
+            or len(strengths) > 5
             or any(
                 not isinstance(item, str) or not item.strip()
                 for item in strengths
@@ -492,8 +466,7 @@ def _validated_review_payload(
             raise ValueError('strengths')
 
         revisions = payload.get('revision_requests')
-        max_revisions = 8 if include_script_fields else 10
-        if not isinstance(revisions, list) or len(revisions) > max_revisions:
+        if not isinstance(revisions, list) or len(revisions) > 10:
             raise ValueError('revision requests')
         revision_fields = {'priority', 'issue', 'instruction'}
         if chapter_ids is not None:
@@ -530,38 +503,6 @@ def _validated_review_payload(
         ):
             raise ValueError('director revise without blocking revision')
 
-        if include_script_fields:
-            preserve = payload.get('preserve')
-            if (
-                not isinstance(preserve, list)
-                or len(preserve) > 6
-                or any(
-                    not isinstance(item, str) or not item.strip()
-                    for item in preserve
-                )
-            ):
-                raise ValueError('preserve')
-            risks = payload.get('factual_risks')
-            if not isinstance(risks, list) or len(risks) > 8:
-                raise ValueError('factual risks')
-            for item in risks:
-                if (
-                    not isinstance(item, dict)
-                    or set(item) != {'claim', 'risk', 'action'}
-                ):
-                    raise ValueError('factual risk fields')
-                if item.get('action') not in {
-                    'remove',
-                    'rephrase',
-                    'manual_check',
-                }:
-                    raise ValueError('factual risk action')
-                if any(
-                    not isinstance(item.get(key), str)
-                    or not item[key].strip()
-                    for key in ('claim', 'risk')
-                ):
-                    raise ValueError('factual risk text')
     except (KeyError, TypeError, ValueError) as exc:
         raise ProviderUnavailable(
             f'{label}返回内容不符合质量审查契约'
@@ -1648,7 +1589,7 @@ async def _record_usage(
     try:
         await recorder(usage.model_copy(deep=True))
     except Exception as exc:
-        raise ProviderUnavailable(
+        raise UsageLedgerUnavailable(
             "模型调用已经发生，但成本账本无法持久化；流程已停止"
         ) from exc
 
@@ -2282,7 +2223,7 @@ class OpenRouterScriptProvider:
         *,
         on_usage: UsageRecorder | None = None,
     ) -> tuple[ScriptDraft, ScriptReview]:
-        """Run draft, isolated critique, rewrite, and a final-bound audit."""
+        """Run a writer/editor/writer collaboration with one human quality gate."""
 
         if not self.configured:
             raise ProviderUnavailable(
@@ -2320,57 +2261,62 @@ class OpenRouterScriptProvider:
             reasoning_effort='xhigh',
         )
         draft = self._script_from_generated(card, draft_response.data)
-        critique_prompt = (
-            '独立审阅下面这篇口播初稿。你的职责不是把观点改得中立、保险或四平八稳，'
-            '而是发现它为什么还不够精彩、不够具体或不够成立。重点检查：是否忠实回应'
-            '用户原始输入；中心判断是否清楚且可争论；每段是否推进；抽象概念是否落到'
-            '具体处境与后果；语言是否自然可说；是否存在套话、重复或没有依据的精确事实。'
-            '只返回 Review JSON，不要重写脚本。\n\n'
+        editor_prompt = (
+            '阅读下面这篇口播初稿，给主编少量、具体、可执行的编辑建议。保护作品最有力量'
+            '的判断和语言，不要要求中立、全面或四平八稳。重点看中心判断、论证推进、具体'
+            '处境、口语节奏和套话重复。不要评分，不要给 pass/revise 裁决，不要制作风险清单，'
+            '也不要重写全文。只返回 preserve 与 improvements 两组短建议。\n\n'
             + prompt
             + '\n\n【待审初稿】\n'
             + json.dumps(draft.model_dump(mode='json'), ensure_ascii=False)
         )
-        critique_response = await _openrouter_json_request(
-            gateway=self.gateway,
-            api_key=self.api_key,
-            base_url=self.base_url,
-            model=self.model,
-            messages=[
-                {
-                    'role': 'system',
-                    'content': (
-                        '你是独立的资深脚本评论员。保护作品中真正有力量的判断和语言，'
-                        '不要用中立、全面或风险规避压平作者声音；只指出能够实际提升成稿'
-                        '的问题，以及明确的事实风险。'
-                    ),
-                },
-                {'role': 'user', 'content': critique_prompt},
-            ],
-            label='脚本独立审稿',
-            schema_name='qijia_script_critique_v1',
-            response_schema=_SCRIPT_CRITIQUE_RESPONSE_SCHEMA,
-            max_completion_tokens=16_000,
-            timeout_seconds=self.timeout_seconds,
-            transport=self.transport,
-            operation='script_critique',
-            on_usage=on_usage,
-            reasoning_effort='high',
-        )
-        critique = _validated_review_payload(
-            critique_response.data,
-            label='脚本独立审稿',
-            score_keys=_SCRIPT_QUALITY_SCORE_KEYS,
-            verdicts={'revise', 'polish'},
-            include_script_fields=True,
-        )
+        editor_feedback = {'preserve': [], 'improvements': []}
+        editor_model_id = ''
+        editor_warning = ''
+        try:
+            editor_response = await _openrouter_json_request(
+                gateway=self.gateway,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                model=self.model,
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': (
+                            '你是服务于主编的资深脚本编辑。只提出能让作品更准确、更具体、'
+                            '更有推进感的建议；你没有否决权，也不改变作者立场。'
+                        ),
+                    },
+                    {'role': 'user', 'content': editor_prompt},
+                ],
+                label='脚本编辑建议',
+                schema_name='qijia_script_editor_notes_v1',
+                response_schema=_SCRIPT_EDITOR_RESPONSE_SCHEMA,
+                max_completion_tokens=8_000,
+                timeout_seconds=self.timeout_seconds,
+                transport=self.transport,
+                operation='script_critique',
+                on_usage=on_usage,
+                reasoning_effort='high',
+            )
+            editor_feedback = _normalized_script_editor_feedback(
+                editor_response.data
+            )
+            editor_model_id = editor_response.model_id
+        except UsageLedgerUnavailable:
+            raise
+        except ProviderUnavailable:
+            editor_warning = (
+                '编辑建议本次不可用；主编已依据原始请求和冻结的脚本方法独立完成终稿'
+            )
         revision_prompt = (
             prompt
             + '\n\n【你的初稿】\n'
             + json.dumps(draft.model_dump(mode='json'), ensure_ascii=False)
-            + '\n\n【独立审稿意见】\n'
-            + json.dumps(critique, ensure_ascii=False)
-            + '\n\n根据审稿意见重写成最终作品。审稿意见是质量诊断，不是新的创作'
-            '负责人：保留 preserve 和初稿中真正有力量的表达，只修复确实存在的问题。'
+            + '\n\n【编辑建议｜仅供主编判断】\n'
+            + json.dumps(editor_feedback, ensure_ascii=False)
+            + '\n\n你仍对终稿全权负责。只采纳确实让作品更好的建议；保留初稿中真正'
+            '有力量的判断和表达。即使建议为空，也要自行完成一次扎实的终稿打磨。'
             '不要在正文解释修改过程，不要增加风险声明，只返回最终 ScriptDraft JSON。\n\n'
             + DIRECT_SCRIPT_OUTPUT_CONTRACT
         )
@@ -2389,7 +2335,7 @@ class OpenRouterScriptProvider:
                 },
                 {'role': 'user', 'content': revision_prompt},
             ],
-            label='脚本主编重写',
+            label='脚本主编终稿',
             schema_name='qijia_quality_script_final_v1',
             response_schema=_DIRECT_SCRIPT_RESPONSE_SCHEMA,
             max_completion_tokens=SCRIPT_MAX_COMPLETION_TOKENS,
@@ -2401,74 +2347,18 @@ class OpenRouterScriptProvider:
         )
         final_script = self._script_from_generated(card, final_response.data)
         final_hash = content_hash(final_script)
-        final_review_prompt = (
-            '独立验收下面这份已经重写完成的最终口播。你审查的是终稿本身，不能沿用或'
-            '猜测初稿评分。重点检查它是否忠实回应用户输入、中心判断是否鲜明、论证是否'
-            '持续推进、抽象观点是否落到具体处境与后果、口语是否自然，以及精确事实是否'
-            '超出用户材料与模型稳定知识。不要因为作品有立场、锋芒或取舍就要求中立化。'
-            '只有存在会实质损害作品成立、忠实度或事实可靠性的关键问题时，verdict 才写 '
-            'revise；只有润色建议时仍写 pass。只返回 Review JSON，不重写脚本。\n\n'
-            + prompt
-            + '\n\n【待验收终稿】\n'
-            + json.dumps(final_script.model_dump(mode='json'), ensure_ascii=False)
-        )
-        final_review_response = await _openrouter_json_request(
-            gateway=self.gateway,
-            api_key=self.api_key,
-            base_url=self.base_url,
-            model=self.model,
-            messages=[
-                {
-                    'role': 'system',
-                    'content': (
-                        '你是与主笔上下文隔离的终稿验收编辑。你的评分和意见必须只绑定'
-                        '眼前终稿；保护真正有力量的判断，不用四平八稳替代作品质量。'
-                    ),
-                },
-                {'role': 'user', 'content': final_review_prompt},
-            ],
-            label='脚本终稿独立验收',
-            schema_name='qijia_script_final_review_v1',
-            response_schema=_FINAL_SCRIPT_REVIEW_RESPONSE_SCHEMA,
-            max_completion_tokens=16_000,
-            timeout_seconds=self.timeout_seconds,
-            transport=self.transport,
-            operation='script_final_review',
-            on_usage=on_usage,
-            reasoning_effort='high',
-        )
-        final_assessment = _validated_review_payload(
-            final_review_response.data,
-            label='脚本终稿独立验收',
-            score_keys=_SCRIPT_QUALITY_SCORE_KEYS,
-            verdicts={'pass', 'revise'},
-            include_script_fields=True,
-        )
         review = await self.review(card, final_script)
-        review.quality_scores = {
-            str(key): int(value)
-            for key, value in dict(
-                final_assessment.get('quality_scores') or {}
-            ).items()
-        }
-        review.strengths = list(final_assessment.get('strengths') or [])
-        review.revision_requests = list(
-            final_assessment.get('revision_requests') or []
-        )
-        review.factual_risks = list(final_assessment.get('factual_risks') or [])
-        review.preserve = list(final_assessment.get('preserve') or [])
+        review.strengths = list(editor_feedback['preserve'])
+        review.preserve = list(editor_feedback['preserve'])
         review.reviewed_draft_hash = final_hash
-        if final_assessment.get('verdict') == 'revise':
-            review.passed = False
-            review.blocking_reasons.append(
-                '终稿独立语义验收发现仍需主编修订的关键问题'
-            )
-        review.model_id = (
-            f'{draft_response.model_id} writer + '
-            f'{critique_response.model_id} critic + '
-            f'{final_response.model_id} revision + '
-            f'{final_review_response.model_id} final-review'
-        )
+        if editor_warning:
+            review.warnings.append(editor_warning)
+        collaborators = [
+            f'{draft_response.model_id} writer',
+            *([f'{editor_model_id} editor'] if editor_model_id else []),
+            f'{final_response.model_id} final-writer',
+        ]
+        review.model_id = ' + '.join(collaborators)
         review.prompt_version = QUALITY_SCRIPT_PROMPT_VERSION
         review.input_hash = final_hash
         review.reviewed_at = timestamp()

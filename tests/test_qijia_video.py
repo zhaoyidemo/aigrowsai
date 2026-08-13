@@ -95,10 +95,9 @@ from qijia_video.infrastructure.script_providers import (
     _VISUAL_BIBLE_RESPONSE_SCHEMA,
     _director_shot_plan_response_schema,
     _director_treatment_response_schema,
+    _normalized_script_editor_feedback,
     _openrouter_completion_limit_key,
-    _SCRIPT_QUALITY_SCORE_KEYS,
     _validate_director_artifact,
-    _validated_review_payload,
 )
 from qijia_video.lazy_registry import LazyRegistryProxy
 from qijia_video.model_registry import (
@@ -306,13 +305,10 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(factory_calls, [1])
         self.assertIn("loaded", repr(proxy))
 
-    def test_local_review_contract_rejects_incomplete_upstream_json(self):
+    def test_script_editor_feedback_accepts_partial_provider_json(self):
         payload = {
             "verdict": "pass",
-            "quality_scores": {
-                key: 8 for key in _SCRIPT_QUALITY_SCORE_KEYS
-            },
-            "strengths": ["中心判断成立"],
+            "strengths": ["中心判断\n成立"],
             "revision_requests": [{
                 "priority": "critical",
                 "issue": "终稿仍未回应输入",
@@ -322,17 +318,13 @@ class QijiaVideoContractTests(unittest.TestCase):
             "preserve": [],
         }
 
-        with self.assertRaisesRegex(
-            ProviderUnavailable,
-            "脚本终稿独立验收返回内容不符合质量审查契约",
-        ):
-            _validated_review_payload(
-                payload,
-                label="脚本终稿独立验收",
-                score_keys=_SCRIPT_QUALITY_SCORE_KEYS,
-                verdicts={"pass", "revise"},
-                include_script_fields=True,
-            )
+        feedback = _normalized_script_editor_feedback(payload)
+
+        self.assertEqual(feedback["preserve"], ["中心判断 成立"])
+        self.assertEqual(
+            feedback["improvements"],
+            ["终稿仍未回应输入：重新建立中心判断"],
+        )
 
     def test_openrouter_completion_limit_uses_gateway_standard_parameter(self):
         for model in (PRODUCTION_TEXT_MODEL, "test/model"):
@@ -2271,7 +2263,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(script.source_card_id, card.id)
         self.assertEqual(script.video_title, "真正重要的是判断标准")
 
-    async def test_openrouter_quality_script_reviews_the_final_rewrite(self):
+    async def test_openrouter_quality_script_uses_advisory_editor(self):
         calls: list[dict] = []
 
         def script_payload(title: str, suffix: str = "") -> dict:
@@ -2300,47 +2292,17 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "hashtags": ["人物观点", "判断", "选择"],
             }
 
-        critique = {
-            "verdict": "revise",
-            "quality_scores": {
-                "input_fidelity": 9,
-                "central_insight": 8,
-                "argument_progression": 7,
-                "specificity": 6,
-                "spoken_language": 8,
-                "originality": 8,
-                "factual_discipline": 9,
-            },
-            "strengths": ["中心判断清楚"],
-            "revision_requests": [{
-                "priority": "important",
-                "issue": "具体处境不足",
-                "instruction": "增加一个选择与代价同时出现的处境",
-            }],
-            "factual_risks": [],
+        editor_feedback = {
             "preserve": ["开场判断"],
-        }
-        final_review = {
-            **critique,
-            "verdict": "pass",
-            "quality_scores": {
-                **critique["quality_scores"],
-                "central_insight": 9,
-                "specificity": 8,
-            },
-            "strengths": ["终稿的中心判断与具体代价已经形成闭环"],
-            "revision_requests": [],
-            "preserve": ["终稿开场判断"],
+            "improvements": ["增加一个选择与代价同时出现的处境"],
         }
 
         def handler(request: httpx.Request) -> httpx.Response:
             body = json.loads(request.content)
             calls.append(body)
             schema_name = body["response_format"]["json_schema"]["name"]
-            if schema_name == "qijia_script_critique_v1":
-                result = critique
-            elif schema_name == "qijia_script_final_review_v1":
-                result = final_review
+            if schema_name == "qijia_script_editor_notes_v1":
+                result = editor_feedback
             elif schema_name == "qijia_quality_script_final_v1":
                 result = script_payload("最终稿", "具体代价")
             else:
@@ -2371,10 +2333,10 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             "【用户原始创作请求｜原文】\n黄宗羲及这段话的思想力量",
         )
 
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 3)
         self.assertEqual(
             [item["reasoning"]["effort"] for item in calls],
-            ["xhigh", "high", "xhigh", "high"],
+            ["xhigh", "high", "xhigh"],
         )
         self.assertTrue(all(item["model"] == "deepseek/deepseek-v4-pro" for item in calls))
         self.assertTrue(all("models" not in item for item in calls))
@@ -2388,18 +2350,104 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             [item["response_format"]["json_schema"]["name"] for item in calls],
             [
                 "qijia_quality_script_draft_v1",
-                "qijia_script_critique_v1",
+                "qijia_script_editor_notes_v1",
                 "qijia_quality_script_final_v1",
-                "qijia_script_final_review_v1",
             ],
         )
         self.assertNotIn("【硬性政策】", calls[0]["messages"][1]["content"])
         self.assertNotIn("H3 Prompt Adapter", calls[0]["messages"][1]["content"])
         self.assertEqual(script.video_title, "最终稿")
-        self.assertEqual(review.quality_scores["central_insight"], 9)
+        self.assertEqual(review.quality_scores, {})
         self.assertEqual(review.revision_requests, [])
+        self.assertEqual(review.preserve, ["开场判断"])
+        self.assertIn("仅供主编判断", calls[2]["messages"][1]["content"])
         self.assertEqual(review.input_hash, content_hash(script))
         self.assertEqual(review.reviewed_draft_hash, content_hash(script))
+
+    async def test_quality_script_delivers_final_when_editor_is_unavailable(self):
+        calls: list[str] = []
+
+        def script_payload(title: str) -> dict:
+            return {
+                "schema_version": "3.0",
+                "video_title": title,
+                "cover_text": "先问是非",
+                "beats": [
+                    {
+                        "id": f"n{index:02d}",
+                        "narration": text.ljust(40, "。"),
+                        "role": role,
+                        "on_screen_text": "",
+                        "source_refs": [],
+                        "quote_ref": None,
+                    }
+                    for index, (role, text) in enumerate([
+                        ("hook", "真正困难的是先判断什么值得做。"),
+                        ("context", "结果并不会自动证明选择正确。"),
+                        ("explanation", "判断意味着愿意承担现实代价。"),
+                        ("application", "今天的选择同样留下长期方向。"),
+                        ("closing", "成败会过去，判断仍然塑造一个人。"),
+                    ], 1)
+                ],
+                "caption": "先判断是非，再衡量成败。",
+                "hashtags": ["人物观点", "判断", "选择"],
+            }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            schema_name = body["response_format"]["json_schema"]["name"]
+            calls.append(schema_name)
+            if schema_name == "qijia_script_editor_notes_v1":
+                return httpx.Response(502, json={
+                    "error": {"message": "editor temporarily unavailable"},
+                })
+            title = (
+                "无编辑建议仍完成的终稿"
+                if schema_name == "qijia_quality_script_final_v1"
+                else "初稿"
+            )
+            return httpx.Response(200, json={
+                "model": "test/model",
+                "choices": [{
+                    "message": {
+                        "content": json.dumps(
+                            script_payload(title), ensure_ascii=False
+                        ),
+                    },
+                    "finish_reason": "stop",
+                }],
+            })
+
+        provider = OpenRouterScriptProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model="test/model",
+            transport=httpx.MockTransport(handler),
+        )
+        card = SourceCard(
+            **valid_card().model_dump(mode="json"),
+            id="card-editor-fallback",
+            revision=1,
+            status="verified",
+        )
+
+        script, review = await provider.generate_quality_script(
+            card,
+            "【用户原始创作请求｜原文】\n黄宗羲及这段话的思想力量",
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                "qijia_quality_script_draft_v1",
+                "qijia_script_editor_notes_v1",
+                "qijia_quality_script_final_v1",
+            ],
+        )
+        self.assertEqual(script.video_title, "无编辑建议仍完成的终稿")
+        self.assertTrue(review.passed)
+        self.assertEqual(review.blocking_reasons, [])
+        self.assertTrue(any("编辑建议本次不可用" in item for item in review.warnings))
 
     async def test_openrouter_reports_truncated_json_with_the_exact_stage(self):
         def handler(_: httpx.Request) -> httpx.Response:
@@ -4455,7 +4503,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"external_retrieval": false', provider.generated_prompt)
         self.assertIn("禁止联网搜索", provider.generated_prompt)
         self.assertIn(
-            "【Script Skill】insight-led-scriptwriter@1.1.0",
+            "【Script Skill】insight-led-scriptwriter@1.2.0",
             provider.generated_prompt,
         )
         self.assertNotIn("openrouter:web_search", provider.generated_prompt)
@@ -6390,7 +6438,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(provider.prompt.startswith("你是本任务唯一的 Script Skill"))
         self.assertIn("【用户原始创作请求｜最高优先级】", provider.prompt)
         self.assertIn("【用户明确核对的材料】", provider.prompt)
-        self.assertIn("【Script Skill】insight-led-scriptwriter@1.1.0", provider.prompt)
+        self.assertIn("【Script Skill】insight-led-scriptwriter@1.2.0", provider.prompt)
         self.assertIn('"external_retrieval": false', provider.prompt)
         self.assertIn("禁止联网搜索", provider.prompt)
         self.assertIn("【硬性政策】", provider.prompt)
@@ -6778,6 +6826,8 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             pipeline_nodes["script"]["models"][0]["model_id"],
             capabilities["script_model"],
         )
+        self.assertEqual(pipeline_nodes["script"]["planned_calls"], "固定 3 次")
+        self.assertIn("非阻断编辑建议", pipeline_nodes["script"]["detail"])
         self.assertEqual(
             pipeline_nodes["director"]["capabilities"][0]["kind"],
             "director_skill",

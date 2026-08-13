@@ -25,5 +25,9 @@ class ProviderUnavailable(QijiaVideoError):
     status_code = 503
 
 
+class UsageLedgerUnavailable(ProviderUnavailable):
+    """A paid provider call happened but its usage record could not persist."""
+
+
 class QualityGateFailed(QijiaVideoError):
     status_code = 422
