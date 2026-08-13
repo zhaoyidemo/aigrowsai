@@ -738,7 +738,7 @@ class OpenRouterTopicEditorContractTests(unittest.IsolatedAsyncioTestCase):
                 reference_schema["enum"],
                 [item.id for item in self._minimal_evidence()],
             )
-            self.assertEqual(payload["reasoning"]["effort"], "medium")
+            self.assertEqual(payload["reasoning"]["effort"], "high")
             self.assertEqual(payload["max_tokens"], 6000)
             self.assertNotIn("max_completion_tokens", payload)
             self.assertTrue(payload["provider"]["require_parameters"])

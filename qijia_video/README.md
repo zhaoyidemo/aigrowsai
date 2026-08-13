@@ -30,9 +30,9 @@
 
 Remotion 位于仓库根目录 `video_renderer/`，只读取 `render_manifest.json` 与本地化素材，不访问数据库，也不调用生成模型。
 
-新任务只接受创作者真正能决定的原始请求、核对材料、Visual Style、可选视觉参考、画质、配音和视频模型规格。v4 不创建 Content Policy、EvidencePolicy、CreativeBrief、EditorialPlan、研究简报或 H3 前置产物；Script Skill、Director Skill、Visual Style 与 Provider Adapter 版本由服务端冻结。三次脚本请求均不携带搜索工具：主笔使用 `openai/gpt-5.6-sol` 的 `xhigh` 推理，独立批评使用隔离上下文的 `high` 推理，最终由主笔在新上下文中以 `xhigh` 重写，只对外保留最终 `ScriptDraft`。
+新任务只接受创作者真正能决定的原始请求、核对材料、Visual Style、可选视觉参考、画质、配音和视频模型规格。v4 不创建 Content Policy、EvidencePolicy、CreativeBrief、EditorialPlan、研究简报或 H3 前置产物；Script Skill、Director Skill、Visual Style 与 Provider Adapter 版本由服务端冻结。三次脚本请求均不携带搜索工具：主笔使用 `deepseek/deepseek-v4-flash` 的 `xhigh` 推理，独立批评使用隔离上下文的 `high` 推理，最终由主笔在新上下文中以 `xhigh` 重写，只对外保留最终 `ScriptDraft`。
 
-脚本确认后，TTS 提供真实段落时长。Director Skill 使用两次 `openai/gpt-5.6-sol` `xhigh` 调用：第一阶段确定导演处理、全片视觉圣经和资产圣经，第二阶段才规划章节、具体事件、主体调度、摄影机、连续性与图片/视频媒介。系统随后先付费生成 3 张风格样片并暂停，用户选定一张后才批量生成正式镜头；选中的样片是正式首帧的唯一视觉基线，原始上传参考不再被重复发送给图片模型。
+脚本确认后，TTS 提供真实段落时长。Director Skill 使用两次 `deepseek/deepseek-v4-flash` `xhigh` 调用：第一阶段确定导演处理、全片视觉圣经和资产圣经，第二阶段才规划章节、具体事件、主体调度、摄影机、连续性与图片/视频媒介。系统随后先付费生成 3 张风格样片并暂停，用户选定一张后才批量生成正式镜头；选中的样片是正式首帧的唯一视觉基线，原始上传参考不再被重复发送给图片模型。
 
 创建页以自然语言主输入为第一动作，只保留视觉风格这个常用选择，并用同一场景的真实样片进行比较。脚本、导演、选题编辑、图片、视频与配音的具体型号只在 `model_registry.py` 管理，Railway 不提供型号覆盖入口。页面通过 `/capabilities.runtime_models` 展示后端实际加载的模型及精确 ID；这些信息只读，不形成第二套前端配置。内部角色和中间规划不作为创建控件，冻结版本仍进入发布包审计快照。
 

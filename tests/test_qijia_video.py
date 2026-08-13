@@ -2034,7 +2034,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 result = script_payload("初稿")
             return httpx.Response(200, json={
                 "id": f"request-{len(calls)}",
-                "model": "openai/gpt-5.6-sol",
+                "model": "deepseek/deepseek-v4-flash",
                 "choices": [{"message": {"content": json.dumps(
                     result, ensure_ascii=False
                 )}}],
@@ -2043,7 +2043,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         provider = OpenRouterScriptProvider(
             api_key="test-key",
             base_url="https://openrouter.ai/api",
-            model="openai/gpt-5.6-sol",
+            model="deepseek/deepseek-v4-flash",
             transport=httpx.MockTransport(handler),
         )
         card = SourceCard(
@@ -2063,7 +2063,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             [item["reasoning"]["effort"] for item in calls],
             ["xhigh", "high", "xhigh"],
         )
-        self.assertTrue(all(item["model"] == "openai/gpt-5.6-sol" for item in calls))
+        self.assertTrue(all(item["model"] == "deepseek/deepseek-v4-flash" for item in calls))
         self.assertTrue(all("models" not in item for item in calls))
         self.assertTrue(all("tools" not in item for item in calls))
         self.assertTrue(all("plugins" not in item for item in calls))
@@ -2510,7 +2510,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 }
             return httpx.Response(200, json={
                 "id": f"director-{len(calls)}",
-                "model": "openai/gpt-5.6-sol",
+                "model": "deepseek/deepseek-v4-flash",
                 "choices": [{"message": {"content": json.dumps(
                     result, ensure_ascii=False
                 )}}],
@@ -2519,7 +2519,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         provider = OpenRouterStoryboardProvider(
             api_key="test-key",
             base_url="https://openrouter.ai/api",
-            model="openai/gpt-5.6-sol",
+            model="deepseek/deepseek-v4-flash",
             transport=httpx.MockTransport(handler),
         )
 
@@ -2593,12 +2593,12 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             if request.method == "GET":
                 self.assertEqual(request.url.path, "/api/v1/models/user")
                 return httpx.Response(200, json={
-                    "data": [{"id": "openai/gpt-5.6-sol"}],
+                    "data": [{"id": "deepseek/deepseek-v4-flash"}],
                 })
             body = json.loads(request.content)
             self.assertEqual(request.headers["X-OpenRouter-Metadata"], "enabled")
             if len(calls) == 1:
-                self.assertEqual(body["model"], "openai/gpt-5.6-sol")
+                self.assertEqual(body["model"], "deepseek/deepseek-v4-flash")
                 return httpx.Response(
                     403,
                     headers={
@@ -2615,20 +2615,20 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                             "metadata": {
                                 "error_type": "permission_denied",
                                 "provider_code": "terms_violation",
-                                "provider_name": "OpenAI",
+                                "provider_name": "DeepSeek",
                                 "flagged_input": "这段内容不得写入日志或成本账本",
                             },
                         },
                         "openrouter_metadata": {
-                            "requested": "openai/gpt-5.6-sol",
+                            "requested": "deepseek/deepseek-v4-flash",
                             "region": "sin",
                             "summary": "available=1",
                             "attempt": 0,
                             "endpoints": {
                                 "total": 1,
                                 "available": [{
-                                    "provider": "OpenAI",
-                                    "model": "openai/gpt-5.6-sol",
+                                    "provider": "DeepSeek",
+                                    "model": "deepseek/deepseek-v4-flash",
                                     "selected": False,
                                 }],
                             },
@@ -2643,7 +2643,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         provider = OpenRouterStoryboardProvider(
             api_key="test-key",
             base_url="https://openrouter.ai/api",
-            model="openai/gpt-5.6-sol",
+            model="deepseek/deepseek-v4-flash",
             transport=httpx.MockTransport(handler),
         )
         with self.assertRaises(ProviderUnavailable) as caught:
@@ -2665,7 +2665,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("model_access=listed_for_key", str(caught.exception))
         self.assertIn("attempt=0", str(caught.exception))
         self.assertIn("系统未切换或调用备用模型", str(caught.exception))
-        self.assertIn("candidates=OpenAI", str(caught.exception))
+        self.assertIn("candidates=DeepSeek", str(caught.exception))
         self.assertIn("selected=none", str(caught.exception))
         self.assertIn("generation_id=or-generation-403", str(caught.exception))
         self.assertEqual([item.succeeded for item in usage_records], [False])
@@ -2710,7 +2710,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         provider = OpenRouterStoryboardProvider(
             api_key="test-key",
             base_url="https://openrouter.ai/api",
-            model="openai/gpt-5.6-sol",
+            model="deepseek/deepseek-v4-flash",
             transport=httpx.MockTransport(handler),
         )
         with self.assertRaises(ProviderUnavailable) as caught:
@@ -5984,7 +5984,7 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             loaded = QijiaVideoSettings(_env_file=None)
         self.assertFalse(hasattr(loaded, "QIJIA_VIDEO_SCRIPT_MODEL"))
         self.assertFalse(hasattr(loaded, "QIJIA_VIDEO_SEEDANCE_MODEL"))
-        self.assertEqual(PRODUCTION_TEXT_MODEL, "openai/gpt-5.6-sol")
+        self.assertEqual(PRODUCTION_TEXT_MODEL, "deepseek/deepseek-v4-flash")
         self.assertEqual(
             {
                 PRODUCTION_MODELS.script,

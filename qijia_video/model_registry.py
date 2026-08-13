@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 MODEL_REGISTRY_SOURCE = "qijia_video.model_registry"
-PRODUCTION_TEXT_MODEL = "openai/gpt-5.6-sol"
+PRODUCTION_TEXT_MODEL = "deepseek/deepseek-v4-flash"
 SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-0-pro-fast-251015"
 SEEDANCE_BALANCED_MODEL = "doubao-seedance-1-5-pro-251215"
 SEEDANCE_FLAGSHIP_MODEL = "doubao-seedance-2-0-260128"
@@ -37,7 +37,7 @@ PRODUCTION_MODELS = ProductionModelRegistry(
 
 
 MODEL_DISPLAY_NAMES = {
-    PRODUCTION_TEXT_MODEL: "GPT-5.6 Sol",
+    PRODUCTION_TEXT_MODEL: "DeepSeek V4 Flash",
     "doubao-seedream-5-0-lite-260128": "Seedream 5.0 Lite",
     SEEDANCE_EFFICIENT_MODEL: "Seedance 1.0 Pro Fast",
     SEEDANCE_BALANCED_MODEL: "Seedance 1.5 Pro",

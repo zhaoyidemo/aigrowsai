@@ -57,11 +57,10 @@ UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
 
 
 def _openrouter_completion_limit_key(model: str) -> str:
-    """Use the Chat Completions gateway limit accepted by production Sol routes."""
+    """Use the Chat Completions token limit supported by the production model."""
 
-    # Keep the argument for the request-builder contract. OpenRouter's Sol
-    # endpoint metadata advertises max_tokens for OpenAI routes; using
-    # max_completion_tokens with require_parameters narrows routing to Azure.
+    # Keep the argument for the request-builder contract. The production model
+    # advertises max_tokens through OpenRouter's user-scoped model metadata.
     del model
     return "max_tokens"
 
@@ -1370,9 +1369,9 @@ async def _openrouter_json_request(
         },
         "provider": {"require_parameters": True},
     }
-    # OpenRouter filters endpoints when require_parameters=true. Sol's OpenAI
-    # routes advertise max_tokens, while max_completion_tokens narrows the same
-    # model to Azure routes. This remains a single-model request.
+    # OpenRouter filters endpoints when require_parameters=true, so use the
+    # completion-limit field advertised by the production model. This remains
+    # a single-model request.
     completion_limit_key = _openrouter_completion_limit_key(model)
     payload[completion_limit_key] = max_completion_tokens
     if tools:

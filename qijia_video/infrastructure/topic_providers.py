@@ -324,9 +324,9 @@ class OpenRouterTopicEditor:
                     "content": self._prompt(evidence, valid_through),
                 },
             ],
-            "reasoning": {"effort": "medium", "exclude": True},
-            # Sol's OpenAI routes advertise max_tokens. With require_parameters
-            # enabled, max_completion_tokens would narrow routing to Azure.
+            "reasoning": {"effort": "high", "exclude": True},
+            # DeepSeek V4 Flash advertises max_tokens through OpenRouter's
+            # user-scoped model metadata.
             "max_tokens": 6000,
             "response_format": {
                 "type": "json_schema",
