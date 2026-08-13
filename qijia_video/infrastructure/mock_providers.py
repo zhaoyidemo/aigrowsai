@@ -8,6 +8,7 @@ from pathlib import Path
 from qijia_video.contracts import (
     AssetBible,
     ContentFormat,
+    DirectorReview,
     DirectorTreatment,
     EditorialAngle,
     EditorialPlan,
@@ -23,6 +24,7 @@ from qijia_video.contracts import (
     ShotContextIR,
     VisualBible,
     content_hash,
+    storyboard_review_hash,
     timestamp,
 )
 from qijia_video.ports import GeneratedFile
@@ -322,6 +324,24 @@ class TemplateStoryboardProvider:
             model_id=self.name,
             input_hash=input_hash,
             created_at=timestamp(),
+        )
+        plan.director_review = DirectorReview(
+            passed=True,
+            quality_scores={
+                'script_fidelity': 9,
+                'visual_thesis_execution': 8,
+                'event_specificity': 8,
+                'narrative_progression': 8,
+                'continuity': 8,
+                'camera_readability': 8,
+                'media_discipline': 9,
+                'producibility': 9,
+            },
+            strengths=['确定性测试分镜完整覆盖脚本并满足结构质量门'],
+            reviewed_plan_hash=storyboard_review_hash(plan),
+            model_id=f'{self.name}-reviewer',
+            prompt_version='template_director_review_v1',
+            reviewed_at=timestamp(),
         )
         return treatment, bible, asset_bible, plan
 

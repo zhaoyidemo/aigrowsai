@@ -29,8 +29,8 @@ from qijia_video.tts_options import (
 
 
 # The online V3 endpoint documents a 1024-byte UTF-8 ceiling. Keep a small
-# margin for provider-side normalization while allowing a normal 45-75 second
-# Chinese narration to remain one request.
+# margin for provider-side normalization. Each ScriptBeat is synthesized as an
+# independent timing unit; only an oversized beat is split further.
 TTS_TEXT_MAX_BYTES = 1000
 # Kept for import compatibility with older tests/integrations. New narration
 # synthesis does not insert artificial gaps between approved script beats.
@@ -318,10 +318,21 @@ class VolcengineTtsProvider:
 
     @classmethod
     def _synthesis_chunks(cls, texts: list[str]) -> list[str]:
-        """Use one request normally and the minimum number required by the API."""
+        """Preserve one semantic unit unless the provider byte ceiling requires a split."""
+
+        cleaned = [
+            str(item or "").strip()
+            for item in texts
+            if str(item or "").strip()
+        ]
+        if (
+            len(cleaned) == 1
+            and len(cleaned[0].encode("utf-8")) <= TTS_TEXT_MAX_BYTES
+        ):
+            return cleaned
 
         natural_units: list[str] = []
-        for text in texts:
+        for text in cleaned:
             sentences = [
                 item.strip()
                 for item in re.findall(r".+?(?:[。！？!?；;]+|$)", text)
@@ -349,47 +360,35 @@ class VolcengineTtsProvider:
         return chunks
 
     @staticmethod
-    def _timing_weight(text: str) -> float:
-        """Estimate relative spoken time without adding another alignment API."""
-
-        weight = 0.0
-        for character in str(text or ""):
-            if character.isspace():
-                continue
-            if character in "，、,:：":
-                weight += 0.35
-            elif character in "。！？!?；;…":
-                weight += 0.7
-            else:
-                weight += 1.0
-        return max(1.0, weight)
-
-    @classmethod
-    def _estimate_segment_timeline(
-        cls,
+    def _measured_segment_timeline(
         script: ScriptDraft,
         spoken_texts: list[str],
+        measured_durations: list[float],
         total_duration: float,
     ) -> list[NarrationAudioSegment]:
-        weights = [cls._timing_weight(text) for text in spoken_texts]
-        total_weight = sum(weights)
+        """Bind each beat to measured audio, normalized only for concat rounding."""
+
+        if len(measured_durations) != len(script.beats):
+            raise ProviderUnavailable("旁白逐段实测时长不完整")
+        measured_total = sum(float(item) for item in measured_durations)
+        if measured_total <= 0 or total_duration <= 0:
+            raise ProviderUnavailable("旁白逐段实测时长无效")
+        scale = total_duration / measured_total
         cursor = 0.0
         segments: list[NarrationAudioSegment] = []
-        cumulative_weight = 0.0
-        for index, (beat, text, weight) in enumerate(
-            zip(script.beats, spoken_texts, weights)
+        for index, (beat, text, duration) in enumerate(
+            zip(script.beats, spoken_texts, measured_durations)
         ):
-            cumulative_weight += weight
             end = (
                 total_duration
-                if index == len(spoken_texts) - 1
-                else round(total_duration * cumulative_weight / total_weight, 3)
+                if index == len(measured_durations) - 1
+                else min(total_duration, cursor + float(duration) * scale)
             )
-            end = min(total_duration, max(cursor + 0.001, end))
+            if end <= cursor:
+                raise ProviderUnavailable("旁白逐段实测时间轴无法建立")
             segments.append(NarrationAudioSegment(
                 segment_id=beat.id,
                 text=text,
-                # Every timing row points at the one canonical narration asset.
                 asset_id="narration_full",
                 start_seconds=round(cursor, 3),
                 duration_seconds=round(end - cursor, 3),
@@ -561,47 +560,64 @@ class VolcengineTtsProvider:
         )
         audio_dir = workspace / "audio"
         spoken_texts = [self._prepare_text(item.narration) for item in script.beats]
-        chunks = self._synthesis_chunks(spoken_texts)
-        if not chunks:
+        if not spoken_texts or any(not item for item in spoken_texts):
             raise ProviderUnavailable("完整口播稿没有可合成内容")
 
-        chunk_paths: list[Path] = []
-        chunk_durations: list[float] = []
-        for index, text in enumerate(chunks, 1):
-            path = audio_dir / (
-                "narration.mp3" if len(chunks) == 1 else f"chunk_{index:02d}.mp3"
-            )
-            duration = await self._synthesize_segment(
-                text,
-                path,
-                voice_id=selected_voice,
-                speed_ratio=normalized_speed,
-                on_usage=on_usage,
-            )
-            if duration <= 0:
-                raise ProviderUnavailable("完整旁白音频时长无效")
-            chunk_paths.append(path)
-            chunk_durations.append(duration)
+        beat_paths: list[Path] = []
+        beat_durations: list[float] = []
+        for beat_index, text in enumerate(spoken_texts, 1):
+            parts = self._synthesis_chunks([text])
+            if not parts:
+                raise ProviderUnavailable("旁白段落没有可合成内容")
+            part_paths: list[Path] = []
+            part_durations: list[float] = []
+            for part_index, part in enumerate(parts, 1):
+                path = audio_dir / (
+                    f"beat_{beat_index:02d}.mp3"
+                    if len(parts) == 1
+                    else f"beat_{beat_index:02d}_part_{part_index:02d}.mp3"
+                )
+                duration = await self._synthesize_segment(
+                    part,
+                    path,
+                    voice_id=selected_voice,
+                    speed_ratio=normalized_speed,
+                    on_usage=on_usage,
+                )
+                if duration <= 0:
+                    raise ProviderUnavailable("旁白段落实测时长无效")
+                part_paths.append(path)
+                part_durations.append(duration)
+            if len(part_paths) == 1:
+                beat_path = part_paths[0]
+                beat_duration = part_durations[0]
+            else:
+                beat_path = await self._concat_segments(
+                    part_paths,
+                    audio_dir / f"beat_{beat_index:02d}.wav",
+                    gap_seconds=0.0,
+                )
+                beat_duration = await self._probe_duration(beat_path)
+            beat_paths.append(beat_path)
+            beat_durations.append(beat_duration)
 
-        if len(chunk_paths) == 1:
-            full_path = chunk_paths[0]
-            total_duration = round(chunk_durations[0], 3)
-            media_type = "audio/mpeg"
-            sample_rate = 24000
-        else:
-            # This is only the API-limit fallback for unusually long manual
-            # scripts. Temporary chunks are never uploaded or rendered.
-            full_path = await self._concat_segments(
-                chunk_paths,
-                audio_dir / "narration.wav",
-                gap_seconds=0.0,
-            )
-            total_duration = round(await self._probe_duration(full_path), 3)
-            media_type = "audio/wav"
-            sample_rate = 48000
+        # ScriptBeat is the semantic edit unit. Synthesizing exactly those
+        # units preserves real provider timing without adding a second ASR or
+        # alignment service; zero-gap concatenation keeps the approved wording.
+        full_path = await self._concat_segments(
+            beat_paths,
+            audio_dir / "narration.wav",
+            gap_seconds=0.0,
+        )
+        total_duration = round(await self._probe_duration(full_path), 3)
+        media_type = "audio/wav"
+        sample_rate = 48000
 
-        segments = self._estimate_segment_timeline(
-            script, spoken_texts, total_duration
+        segments = self._measured_segment_timeline(
+            script,
+            spoken_texts,
+            beat_durations,
+            total_duration,
         )
         generated = [GeneratedFile(
             asset_id="narration_full",

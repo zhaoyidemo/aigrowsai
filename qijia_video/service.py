@@ -74,6 +74,7 @@ from qijia_video.contracts import (
     VerifiedFact,
     VerifiedQuote,
     content_hash,
+    storyboard_review_hash,
     timestamp,
 )
 from qijia_video.cost_analysis import (
@@ -1793,7 +1794,16 @@ class QijiaVideoService:
                 # The service owns duration metadata because it knows the
                 # frozen TTS speed. Rebind only after verifying the exact
                 # provider-returned script that the critic/reviewer assessed.
+                if (
+                    review.reviewed_draft_hash
+                    and review.reviewed_draft_hash != provider_script_hash
+                ):
+                    raise QualityGateFailed(
+                        "终稿语义验收没有绑定 Provider 返回的最终脚本"
+                    )
                 review.input_hash = generated_script_hash
+                if review.reviewed_draft_hash:
+                    review.reviewed_draft_hash = generated_script_hash
             if review.input_hash != generated_script_hash:
                 raise QualityGateFailed("脚本审核结果没有绑定当前脚本")
             job.script = script
@@ -2604,6 +2614,10 @@ class QijiaVideoService:
             timings = self._director_timing_map(job)
             if job.storyboard_plan:
                 artifact_hash = job.storyboard_plan.input_hash
+                director_review = job.storyboard_plan.director_review
+                reviewed_plan_hash = storyboard_review_hash(
+                    job.storyboard_plan
+                )
                 returned_ids = [
                     beat_id
                     for shot in job.storyboard_plan.shots
@@ -2622,6 +2636,14 @@ class QijiaVideoService:
                             or job.director_treatment.input_hash != artifact_hash
                             or not job.asset_bible
                             or job.asset_bible.input_hash != artifact_hash
+                            or (
+                                director_review is not None
+                                and (
+                                    not director_review.passed
+                                    or director_review.reviewed_plan_hash
+                                    != reviewed_plan_hash
+                                )
+                            )
                         )
                     )
                     or job.visual_bible.director_skill_id
@@ -2732,6 +2754,8 @@ class QijiaVideoService:
                 if context
                 for role in context.reference_roles
             ]
+            director_review = plan.director_review
+            reviewed_plan_hash = storyboard_review_hash(plan)
             if (
                 plan.schema_version != '3.0'
                 or plan.input_hash != expected_hash
@@ -2754,6 +2778,10 @@ class QijiaVideoService:
                         or director_treatment.input_hash != expected_hash
                         or not asset_bible
                         or asset_bible.input_hash != expected_hash
+                        or not director_review
+                        or not director_review.passed
+                        or director_review.reviewed_plan_hash
+                        != reviewed_plan_hash
                     )
                 )
             ):
@@ -2765,7 +2793,7 @@ class QijiaVideoService:
                     float(timings[beat_id]) for beat_id in shot.beat_ids
                 ) > SEEDANCE_MAX_NATURAL_CHAPTER_SECONDS:
                     raise ProviderUnavailable(
-                        'Director 把超过十秒的旁白章节错误分配为八秒视频'
+                        'Director 把超过十秒的旁白章节错误分配为视频'
                     )
             job.storyboard_plan = plan
             job.director_treatment = director_treatment
@@ -2926,6 +2954,8 @@ class QijiaVideoService:
         shot: StoryboardShot,
         *,
         has_reference_image: bool = False,
+        available_reference_ids: set[str] | None = None,
+        reference_order: list[str] | None = None,
     ) -> str:
         if QijiaVideoService._uses_single_owner_director(job):
             if (
@@ -2942,10 +2972,15 @@ class QijiaVideoService:
                 has_reference_image=has_reference_image,
                 asset_bible=job.asset_bible,
                 available_reference_ids=(
-                    {'approved_style_frame'}
-                    if job.pipeline_version == PipelineVersion.QUALITY_FIRST
-                    else {'global_reference'}
+                    available_reference_ids
+                    if available_reference_ids is not None
+                    else (
+                        {'approved_style_frame'}
+                        if job.pipeline_version == PipelineVersion.QUALITY_FIRST
+                        else {'global_reference'}
+                    )
                 ),
+                reference_order=reference_order,
             )
         settings = QijiaVideoService._generation_settings(job)
         return compile_first_frame_prompt(
@@ -2981,6 +3016,7 @@ class QijiaVideoService:
         job: VideoJob,
         shot_id: str,
         revision_intent: str,
+        duration_seconds: int = SEEDANCE_SHOT_DURATION_SECONDS,
     ) -> str:
         storyboard_shot = (
             next(
@@ -3025,6 +3061,7 @@ class QijiaVideoService:
                 opening_direction=cls._opening_direction_for_shot(job, shot_id),
                 revision_intent=revision_intent,
                 asset_bible=job.asset_bible,
+                duration_seconds=duration_seconds,
             )
         return compile_video_prompt(
             settings.seedance_prompt,
@@ -3101,6 +3138,26 @@ class QijiaVideoService:
             return job
         if not job.director_treatment or not job.visual_bible or not job.asset_bible:
             raise InvalidTransition('v4 视觉开发样片缺少导演方案或 AssetBible')
+        source_card = self._source_card_for_job(job)
+        reference_asset = (
+            AssetRef.model_validate(source_card.reference_assets[0])
+            if source_card.reference_assets
+            else None
+        )
+        reference_image_url = (
+            await self.storage.signed_get_url(reference_asset, expires=21600)
+            if reference_asset
+            else ''
+        )
+        if reference_image_url and not any(
+            item.reference_id == 'global_reference'
+            for item in job.asset_bible.references
+        ):
+            raise QualityGateFailed('Director 未声明上传参考图的具体职责')
+        comparison_seed = int(content_hash({
+            'job_id': job.id,
+            'stage': 'style_frame_comparison',
+        })[:8], 16) & 0x7FFFFFFF
         for variant in range(1, 4):
             candidate_id = f'style_frame_{variant:02d}'
             candidate = next(
@@ -3119,8 +3176,11 @@ class QijiaVideoService:
                     job.visual_bible,
                     job.asset_bible,
                     variant=variant,
+                    has_reference_image=bool(reference_image_url),
                 )
-                seed = secrets.randbits(31)
+                # A/B/C share one event and one seed so the editor compares
+                # visual treatment rather than three unrelated compositions.
+                seed = comparison_seed
                 self._report(
                     progress,
                     message=f'正在生成视觉开发样片 {variant}/3…',
@@ -3128,13 +3188,17 @@ class QijiaVideoService:
                     percent=46 + variant,
                 )
                 try:
-                    # Visual development deliberately does not resend the
-                    # creator's uploaded reference. That private asset remains
-                    # scoped to the already-authorized final-shot generation.
-                    generated = await self.image_provider.generate(
-                        prompt,
-                        seed=seed,
-                    )
+                    if reference_image_url:
+                        generated = await self.image_provider.generate(
+                            prompt,
+                            seed=seed,
+                            reference_image_url=reference_image_url,
+                        )
+                    else:
+                        generated = await self.image_provider.generate(
+                            prompt,
+                            seed=seed,
+                        )
                 except ProviderUnavailable:
                     job = await self._persist_usage_record(
                         job,
@@ -3268,11 +3332,16 @@ class QijiaVideoService:
             if selected_style_frame and selected_style_frame.asset
             else ''
         )
-        effective_reference_url = (
-            style_frame_url
-            if job.pipeline_version == PipelineVersion.QUALITY_FIRST
-            else reference_image_url
-        )
+        reference_ids: list[str] = []
+        reference_urls: list[str] = []
+        if reference_image_url:
+            reference_ids.append('global_reference')
+            reference_urls.append(reference_image_url)
+        if job.pipeline_version == PipelineVersion.QUALITY_FIRST:
+            if not style_frame_url:
+                raise QualityGateFailed('请先确认一张视觉开发样片')
+            reference_ids.append('approved_style_frame')
+            reference_urls.append(style_frame_url)
         target_indices = [
             index
             for index, shot in enumerate(job.storyboard_plan.shots)
@@ -3309,7 +3378,9 @@ class QijiaVideoService:
                 prompt = self._first_frame_prompt(
                     job,
                     shot,
-                    has_reference_image=bool(effective_reference_url),
+                    has_reference_image=bool(reference_urls),
+                    available_reference_ids=set(reference_ids),
+                    reference_order=reference_ids,
                 )
                 if not candidate:
                     # Ark ImageGenerations defines Seedream seed as signed int32.
@@ -3330,11 +3401,17 @@ class QijiaVideoService:
                     )
 
                     try:
-                        if effective_reference_url:
+                        if len(reference_urls) > 1:
                             generated = await self.image_provider.generate(
                                 prompt,
                                 seed=seed,
-                                reference_image_url=effective_reference_url,
+                                reference_image_urls=reference_urls,
+                            )
+                        elif reference_urls:
+                            generated = await self.image_provider.generate(
+                                prompt,
+                                seed=seed,
+                                reference_image_url=reference_urls[0],
                             )
                         else:
                             generated = await self.image_provider.generate(
@@ -3503,11 +3580,6 @@ class QijiaVideoService:
                     raise QualityGateFailed(
                         f"分镜 {shot.shot_id} 缺少已选中的首帧资产"
                     )
-                prompt = cls._compile_shot_revision_prompt(
-                    job,
-                    shot.shot_id,
-                    '',
-                )
                 shot_timings = [
                     narration_timing[beat_id]
                     for beat_id in shot.beat_ids
@@ -3524,6 +3596,12 @@ class QijiaVideoService:
                         if shot_timings
                         else SEEDANCE_SHOT_DURATION_SECONDS,
                     ),
+                )
+                prompt = cls._compile_shot_revision_prompt(
+                    job,
+                    shot.shot_id,
+                    '',
+                    duration_seconds=duration_seconds,
                 )
                 requests.append(VisualGenerationRequest(
                     request_id=shot.shot_id,
@@ -5606,7 +5684,10 @@ class QijiaVideoService:
             if len(cleaned_intent) > 600:
                 raise QualityGateFailed("镜头修改意图不能超过 600 个字符")
             compiled_prompt = self._compile_shot_revision_prompt(
-                job, shot_id, cleaned_intent
+                job,
+                shot_id,
+                cleaned_intent,
+                duration_seconds=current.duration_seconds,
             )
         requested_model = str(seedance_model or "").strip()
         if not requested_model:

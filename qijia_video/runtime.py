@@ -43,6 +43,7 @@ from qijia_video.model_registry import (
     QUALITY_DIRECTOR_INPUT_TOKEN_RANGE,
     QUALITY_DIRECTOR_OUTPUT_TOKEN_RANGE,
     QUALITY_DIRECTOR_REQUEST_COUNT,
+    QUALITY_DIRECTOR_REQUEST_COUNT_RANGE,
     model_display_name,
 )
 from qijia_video.settings import settings
@@ -196,7 +197,23 @@ class QijiaVideoRuntime:
 
     def capabilities(self) -> dict:
         renderer_ready, renderer_detail = self.renderer.available()
-        missing: list[str] = list(settings.standalone_configuration_errors())
+        base_missing = list(settings.standalone_configuration_errors())
+        script_missing = list(base_missing)
+        if not self.script_provider.configured:
+            script_missing.append("OPENROUTER_API_KEY")
+        storage_missing: list[str] = []
+        if not getattr(self.storage, "configured", True):
+            storage_missing.append(
+                "VOLCENGINE_TOS_ACCESS_KEY_ID / VOLCENGINE_TOS_SECRET_ACCESS_KEY / "
+                "VOLCENGINE_TOS_BUCKET"
+            )
+        if self.storage.name != "tos":
+            storage_missing.append("QIJIA_VIDEO_STORAGE=tos")
+        reference_upload_missing = list(dict.fromkeys([
+            *script_missing,
+            *storage_missing,
+        ]))
+        missing: list[str] = list(base_missing)
         if not (
             self.script_provider.configured
             and self.storyboard_provider.configured
@@ -210,16 +227,10 @@ class QijiaVideoRuntime:
             missing.append("ARK_API_KEY")
         if not renderer_ready:
             missing.append("Remotion 运行依赖")
-        if not getattr(self.storage, "configured", True):
-            missing.append(
-                "VOLCENGINE_TOS_ACCESS_KEY_ID / VOLCENGINE_TOS_SECRET_ACCESS_KEY / "
-                "VOLCENGINE_TOS_BUCKET"
-            )
+        missing.extend(storage_missing)
         # Seedance must fetch the selected first frame through HTTPS. Local
         # storage is therefore valid only for the explicit mock CLI, never for
         # the real Web workflow (on Railway or a developer machine).
-        if self.storage.name != "tos":
-            missing.append("QIJIA_VIDEO_STORAGE=tos")
         supported_seedance_models = {
             SEEDANCE_EFFICIENT_MODEL,
             SEEDANCE_BALANCED_MODEL,
@@ -238,6 +249,7 @@ class QijiaVideoRuntime:
                 seedance_model=configured_seedance_model,
             )
             active_seedance_model = configured_seedance_model
+        missing = list(dict.fromkeys(missing))
         generation_ready = not missing
         public_generation_defaults = {
             "visual_style_id": generation_defaults.visual_style_id,
@@ -305,7 +317,7 @@ class QijiaVideoRuntime:
                 ),
                 "model_id": self.script_provider.model,
                 "provider": self.script_provider.name,
-                "detail": "xhigh 初稿 · high 独立审稿 · xhigh 终稿",
+                "detail": "xhigh 初稿 · high 独立审稿 · xhigh 重写 · high 终稿验收",
                 "configuration_source": MODEL_REGISTRY_SOURCE,
             },
             {
@@ -316,7 +328,7 @@ class QijiaVideoRuntime:
                 ),
                 "model_id": self.storyboard_provider.model,
                 "provider": self.storyboard_provider.name,
-                "detail": "xhigh 视觉开发 · xhigh 正式分镜",
+                "detail": "xhigh 视觉开发 · xhigh 正式分镜 · high 独立审片 · 必要时修订复审",
                 "configuration_source": MODEL_REGISTRY_SOURCE,
             },
             {
@@ -380,6 +392,9 @@ class QijiaVideoRuntime:
                 ),
                 "director_after_script_approval": {
                     "request_count": QUALITY_DIRECTOR_REQUEST_COUNT,
+                    "request_count_range": list(
+                        QUALITY_DIRECTOR_REQUEST_COUNT_RANGE
+                    ),
                     "input_token_range": list(
                         QUALITY_DIRECTOR_INPUT_TOKEN_RANGE
                     ),
@@ -389,7 +404,7 @@ class QijiaVideoRuntime:
                 },
                 "usd_to_cny_rate": USD_TO_CNY_RATE,
                 "basis": (
-                    "按 OpenRouter 模型目录公开价和两阶段 Director 的预期/上限 "
+                    "按 OpenRouter 模型目录公开价和 Director 正常三次、审片修订时最多五次的 "
                     "token 区间预估；实际调用以响应 usage.cost 为准，上游路由价格可能不同"
                 ),
             },
@@ -405,6 +420,10 @@ class QijiaVideoRuntime:
                 "detail": renderer_detail,
             },
             "storage": self.storage.name,
+            "script_generation_ready": not script_missing,
+            "script_missing_configuration": script_missing,
+            "reference_upload_ready": not reference_upload_missing,
+            "reference_upload_missing_configuration": reference_upload_missing,
             "real_generation_ready": generation_ready,
             "production_ready": generation_ready and self.storage.name == "tos",
             "missing_configuration": missing,

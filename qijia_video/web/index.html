@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>齐家 AI 知识视频工作台</title>
-  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.35.0">
+  <link rel="stylesheet" href="/qijia-video/assets/app.css?v=1.37.0">
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到工作区</a>
@@ -33,11 +33,11 @@
     <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
 
     <nav class="workspace-tabs" role="tablist" aria-label="工作区">
-      <button id="topic-tab" class="workspace-tab active" type="button" role="tab" aria-selected="true" aria-controls="topic-workspace" data-workspace-tab="topics">今日选题</button>
-      <button id="production-tab" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="production-workspace" data-workspace-tab="production">视频生产</button>
+      <button id="topic-tab" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="topic-workspace" data-workspace-tab="topics">今日选题</button>
+      <button id="production-tab" class="workspace-tab active" type="button" role="tab" aria-selected="true" aria-controls="production-workspace" data-workspace-tab="production">视频生产</button>
     </nav>
 
-    <section id="topic-workspace" class="workspace-view" role="tabpanel" aria-labelledby="topic-tab">
+    <section id="topic-workspace" class="workspace-view" role="tabpanel" aria-labelledby="topic-tab" hidden>
       <div class="topic-workspace-grid">
         <aside class="topic-sidebar">
           <section class="panel topic-start-panel">
@@ -101,7 +101,7 @@
       </div>
     </section>
 
-    <section id="production-workspace" class="workspace-view" role="tabpanel" aria-labelledby="production-tab" hidden>
+    <section id="production-workspace" class="workspace-view" role="tabpanel" aria-labelledby="production-tab">
     <div class="production-view-tabs" role="tablist" aria-label="视频生产页面">
       <button class="production-view-tab active" type="button" role="tab" aria-selected="true" data-production-pane="create">新建视频</button>
       <button class="production-view-tab" type="button" role="tab" aria-selected="false" data-production-pane="jobs">视频任务 <span id="production-task-count">0</span></button>
@@ -182,7 +182,7 @@
                 <span id="reference-file-name"></span>
               </div>
             </div>
-            <p class="field-hint">系统会逐个镜头判断参考图用于人物、服装、物件、场景还是风格，不会自动照搬全部属性，也不会把图片内容当作事实依据。JPG、PNG 或 WebP，最大 10 MB。</p>
+            <p class="field-hint">上传后，参考图会发送给 OpenRouter 导演模型进行职责分析，并发送给火山引擎 Seedream 生成 3 张视觉样片和正式首帧。系统只保留导演声明的人物、服装、物件、场景、构图或风格属性，不会把图片内容当作事实依据。请勿上传不希望交由这两个服务处理的敏感图片。JPG、PNG 或 WebP，最大 10 MB。</p>
           </section>
 
           <div id="manual-intake-actions" class="actions source-form-actions">
@@ -479,6 +479,6 @@
     </div>
     </section>
   </main>
-  <script type="module" src="/qijia-video/assets/app.js?v=1.35.0"></script>
+  <script type="module" src="/qijia-video/assets/app.js?v=1.37.0"></script>
 </body>
 </html>

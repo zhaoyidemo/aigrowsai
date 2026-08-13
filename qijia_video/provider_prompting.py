@@ -47,6 +47,18 @@ def _legacy_adapter(adapter: ProviderAdapterSnapshot) -> bool:
     return major < 2
 
 
+def _uses_manifest_framework(adapter: ProviderAdapterSnapshot) -> bool:
+    """New adapters opt into their frozen H3-derived method text explicitly."""
+
+    try:
+        major, minor, *_ = (
+            int(item) for item in str(adapter.version).split('.')
+        )
+    except (TypeError, ValueError):
+        return False
+    return (major, minor) >= (2, 1)
+
+
 def _asset_anchors(asset_bible: AssetBible | None) -> str:
     if not asset_bible:
         return ''
@@ -62,18 +74,34 @@ def _asset_anchors(asset_bible: AssetBible | None) -> str:
 def _reference_contract(
     asset_bible: AssetBible | None,
     available_reference_ids: set[str] | None = None,
+    reference_order: list[str] | None = None,
 ) -> str:
     if not asset_bible or not asset_bible.references:
         return ''
+    position_by_id = {
+        reference_id: index
+        for index, reference_id in enumerate(reference_order or [], 1)
+        if reference_id
+    }
     rows = []
-    for item in asset_bible.references:
+    references = sorted(
+        asset_bible.references,
+        key=lambda item: position_by_id.get(item.reference_id, 10_000),
+    )
+    for item in references:
         if (
             available_reference_ids is not None
             and item.reference_id not in available_reference_ids
         ):
             continue
+        position = position_by_id.get(item.reference_id)
+        reference_label = (
+            f'参考图 {position}（{item.reference_id}）'
+            if position is not None
+            else item.reference_id
+        )
         rows.append(
-            f'{item.reference_id} 只控制 {"、".join(item.roles)}；'
+            f'{reference_label}只控制 {"、".join(item.roles)}；'
             f'保留 {"、".join(item.preserve) or "已声明属性"}；'
             f'允许改变 {"、".join(item.allow_change) or "未声明属性"}；'
             f'不得迁移 {"、".join(item.forbidden_transfer) or "无关属性"}'
@@ -87,19 +115,38 @@ def compile_style_frame_prompt(
     asset_bible: AssetBible,
     *,
     variant: int,
+    has_reference_image: bool = False,
 ) -> str:
     """Create one representative frame for visual approval, not a shot."""
 
     emphasis = {
-        1: '重点检验核心主体、贯穿道具和身份连续性。',
-        2: '重点检验主场景、前中后景层次、色彩与材质系统。',
-        3: '重点检验一个具体行动、环境反馈和风格特有的运动前状态。',
+        1: '方案 A：强调主体层级、负空间和第一眼阅读顺序。',
+        2: '方案 B：强调材质触感、色彩关系和光线塑形。',
+        3: '方案 C：强调空间纵深、动作前状态和环境反馈。',
     }.get(int(variant), '重点检验完整视觉系统。')
+    representative_scene = treatment.chapter_progression[
+        min(len(treatment.chapter_progression) - 1, len(treatment.chapter_progression) // 2)
+    ]
+    reference = (
+        _reference_contract(
+            asset_bible,
+            {'global_reference'},
+            ['global_reference'],
+        )
+        if has_reference_image
+        else ''
+    )
+    if has_reference_image and not reference:
+        reference = (
+            '参考图 1（global_reference）只承担 Director 已声明的身份、场景、'
+            '物件、构图或风格职责；不得自动继承其他属性。'
+        )
     return _join(
         '视觉开发样片，竖屏 9:16，单幅完整画面，不是拼版、设定表或多格分镜。',
         f'视觉命题：{treatment.visual_thesis}',
         f'风格落实：{treatment.style_application}',
-        f'代表性场景：{treatment.chapter_progression[min(max(variant - 1, 0), len(treatment.chapter_progression) - 1)]}',
+        f'三张样片共同使用的代表性事件：{representative_scene}',
+        '不得改变这一事件的主体、场景、动作、道具和结果，只比较视觉处理。',
         emphasis,
         '核心主体：' + '；'.join(asset_bible.subjects[:4]),
         ('关键场景：' + '；'.join(asset_bible.locations[:3])),
@@ -115,7 +162,7 @@ def compile_style_frame_prompt(
             '必须排除：' + '；'.join(bible.forbidden_elements[:5])
             if bible.forbidden_elements else ''
         ),
-        '本样片不使用参考图，仅依据上述视觉方案独立呈现最终成片质感。',
+        reference if has_reference_image else '本样片没有输入参考图，不得虚构参考素材约束。',
         '画面必须像最终成片中的一个成熟镜头，主体行动一眼可读，底部保留字幕安全区。'
         '不要可读文字、Logo、水印、界面、色板、标注线或无关装饰。',
     )
@@ -129,13 +176,18 @@ def compile_image_provider_prompt(
     has_reference_image: bool,
     asset_bible: AssetBible | None = None,
     available_reference_ids: set[str] | None = None,
+    reference_order: list[str] | None = None,
 ) -> str:
     if not _legacy_adapter(adapter):
         if shot.context is None:
             raise ValueError('v4 图片编译必须包含 ShotContextIR')
         context = shot.context
         reference = (
-            _reference_contract(asset_bible, available_reference_ids)
+            _reference_contract(
+                asset_bible,
+                available_reference_ids,
+                reference_order,
+            )
             if has_reference_image
             else ''
         )
@@ -146,6 +198,11 @@ def compile_image_provider_prompt(
             )
         return _join(
             '竖屏 9:16 单幅画面。',
+            (
+                '生成方法：' + adapter.image_framework
+                if _uses_manifest_framework(adapter)
+                else ''
+            ),
             f'决定性事件：{context.concrete_event or context.semantic_goal}',
             f'主体与空间：{context.subject}；{context.blocking}',
             f'可见动作和结果：{context.action}；画面停在 {context.end_state}',
@@ -157,6 +214,11 @@ def compile_image_provider_prompt(
                 f'{bible.composition_system}'
             ),
             _asset_anchors(asset_bible),
+            (
+                '参考职责总则：' + adapter.reference_policy
+                if has_reference_image and _uses_manifest_framework(adapter)
+                else ''
+            ),
             reference,
             (
                 '保持连续：'
@@ -165,6 +227,7 @@ def compile_image_provider_prompt(
                 )
             ),
             '底部保留干净字幕安全区。画面中不要出现可读文字、Logo、水印或多格分镜。',
+            '硬边界：' + '；'.join(adapter.negative_rules),
         )
     reference = (
         '【参考素材保留协议】' + adapter.reference_policy
@@ -190,6 +253,7 @@ def compile_video_provider_prompt(
     opening_direction: str = '',
     revision_intent: str = '',
     asset_bible: AssetBible | None = None,
+    duration_seconds: int = 8,
 ) -> str:
     if not _legacy_adapter(adapter):
         if shot.context is None:
@@ -208,6 +272,11 @@ def compile_video_provider_prompt(
         return _join(
             '输入模式：首帧驱动的无声 I2V。首帧是最高且唯一视觉基准；其中的身份、'
             '造型、材质、空间、构图、色彩和光线全部保持，不重新设计画面。',
+            (
+                '生成方法：' + adapter.video_framework
+                if _uses_manifest_framework(adapter)
+                else ''
+            ),
             f'起始状态：{context.start_state}；{context.blocking}',
             f'主要动作链：{context.action}',
             f'环境反馈与结束状态：{context.end_state}',
@@ -216,8 +285,9 @@ def compile_video_provider_prompt(
             ('风格运动语法：' + motion_grammar if motion_grammar else ''),
             opening_direction,
             revision,
-            '八秒内只完成这一条动作链和一种克制运镜。不要新增人物、道具、'
+            f'在 {max(4, min(15, int(duration_seconds)))} 秒内只完成这一条动作链和一种克制运镜。不要新增人物、道具、'
             '文字、镜头切换或风格；不要生成对白、音乐、音效和旁白。',
+            '硬边界：' + '；'.join(adapter.negative_rules),
         )
     revision = (
         '【本次编辑意图】在不改变主体身份、事实关系、首帧和起止状态的前提下：'

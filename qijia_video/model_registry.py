@@ -15,13 +15,13 @@ PRODUCTION_TEXT_MODEL = "deepseek/deepseek-v4-pro"
 # selected upstream route can have a different price.
 PRODUCTION_TEXT_INPUT_USD_PER_MILLION = 0.435
 PRODUCTION_TEXT_OUTPUT_USD_PER_MILLION = 0.87
-# At script review, the three Script Skill requests have already happened. A
-# fresh v4 job still has two xhigh Director requests ahead. The lower bound is
-# a normal structured response; the upper bound reserves both configured
-# completion limits plus a bounded allowance for their combined inputs.
-QUALITY_DIRECTOR_REQUEST_COUNT = 2
-QUALITY_DIRECTOR_INPUT_TOKEN_RANGE = (12_000, 80_000)
-QUALITY_DIRECTOR_OUTPUT_TOKEN_RANGE = (24_000, 192_000)
+# At script review, the four normal Script Skill requests have already happened.
+# Director normally runs visual development, formal chapters and independent
+# review. One failed review adds one bounded revision plus one final review.
+QUALITY_DIRECTOR_REQUEST_COUNT = 3
+QUALITY_DIRECTOR_REQUEST_COUNT_RANGE = (3, 5)
+QUALITY_DIRECTOR_INPUT_TOKEN_RANGE = (18_000, 240_000)
+QUALITY_DIRECTOR_OUTPUT_TOKEN_RANGE = (26_000, 368_000)
 SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-0-pro-fast-251015"
 SEEDANCE_BALANCED_MODEL = "doubao-seedance-1-5-pro-251215"
 SEEDANCE_FLAGSHIP_MODEL = "doubao-seedance-2-0-260128"

@@ -1387,6 +1387,24 @@ class StoryboardShot(ContractModel):
         return self
 
 
+class DirectorReview(ContractModel):
+    """Independent review bound to immutable directing semantics."""
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    passed: bool = False
+    quality_scores: dict[str, int] = Field(default_factory=dict)
+    strengths: list[str] = Field(default_factory=list, max_length=6)
+    revision_requests: list[dict[str, Any]] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+    reviewed_plan_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    revision_count: int = Field(default=0, ge=0, le=1)
+    model_id: str = Field(default="", max_length=256)
+    prompt_version: str = Field(default="", max_length=128)
+    reviewed_at: str = Field(default="", max_length=64)
+
+
 class StoryboardPlan(ContractModel):
     schema_version: Literal['1.0', '2.0', '3.0'] = SCHEMA_VERSION
     shots: list[StoryboardShot] = Field(min_length=3, max_length=13)
@@ -1394,6 +1412,7 @@ class StoryboardPlan(ContractModel):
     prompt_version: str = Field(default="", max_length=128)
     input_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     created_at: str
+    director_review: DirectorReview | None = None
 
     @model_validator(mode="after")
     def validate_shots(self):
@@ -1438,7 +1457,7 @@ class StoryboardPlan(ContractModel):
             ):
                 raise ValueError('StoryboardPlan v3 的起止状态必须发生可见变化')
             allowed_reference_roles = {
-                'identity', 'wardrobe', 'object', 'location', 'style'
+                'identity', 'wardrobe', 'object', 'location', 'style', 'composition'
             }
             if any(
                 role not in allowed_reference_roles
@@ -2009,6 +2028,16 @@ def canonical_json(value: BaseModel | dict[str, Any]) -> str:
 def content_hash(value: BaseModel | dict[str, Any] | bytes) -> str:
     payload = value if isinstance(value, bytes) else canonical_json(value).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def storyboard_review_hash(plan: StoryboardPlan) -> str:
+    """Hash Director-owned semantics without later editor/runtime selections."""
+
+    payload = plan.model_dump(mode="json", exclude={"director_review"})
+    for shot in payload.get("shots", []):
+        shot.pop("selected_candidate_id", None)
+        shot.pop("selected_media_id", None)
+    return content_hash(payload)
 
 
 def timestamp(value: datetime | None = None) -> str:

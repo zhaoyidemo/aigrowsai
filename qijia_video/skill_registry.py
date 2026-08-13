@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from qijia_video.lazy_registry import LazyRegistryProxy
+
 from qijia_video.contracts import (
     ContentFormat,
     ContentSkillSnapshot,
@@ -316,4 +318,4 @@ class ContentSkillRegistry:
         ]
 
 
-default_skill_registry = ContentSkillRegistry.load()
+default_skill_registry = LazyRegistryProxy(ContentSkillRegistry.load)

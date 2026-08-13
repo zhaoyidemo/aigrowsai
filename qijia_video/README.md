@@ -1,17 +1,17 @@
 # 模块边界
 
-`qijia_video` 是以家庭教育为默认场景、可扩展到其他知识内容领域的短视频生产模块。普通创作入口原子冻结一个自然语言 `creative_request`。生产 Web 新任务统一使用 `Pipeline v4`：原始请求和用户材料直接进入唯一 Script Skill，以“主笔—独立批评—主笔重写”三个隔离上下文交付最终 `ScriptDraft`；人工确认并完成 TTS 后，Director Skill 用两阶段导演流程交付视觉方案。H3 方法只在脚本之后负责多模态参考角色和供应商提示词编译，不再改写创作起点。视频创作主链不启用外部检索。
+`qijia_video` 是以家庭教育为默认场景、可扩展到其他知识内容领域的短视频生产模块。普通创作入口原子冻结一个自然语言 `creative_request`。生产 Web 新任务统一使用 `Pipeline v4`：原始请求和用户材料直接进入唯一 Script Skill，以“主笔初稿—独立批评—主笔重写—终稿验收”交付最终 `ScriptDraft`；人工确认并完成逐段实测 TTS 后，Director Skill 用两阶段导演与独立审片流程交付视觉方案。H3 方法只在脚本之后负责多模态参考角色和供应商提示词编译，不再改写创作起点。视频创作主链不启用外部检索。
 
 - `contracts.py`：原始创作输入、历史来源卡兼容、脚本、分镜、生成请求、资产、发布包和抖音播放快照协议；
-- `content_skills/`：只供 `Pipeline v1/v2/v3` 历史快照恢复，不参与 v4 新任务；
+- `content_skills/`：只供 `Pipeline v1/v2/v3` 历史快照恢复，按需加载，不参与或阻塞 v4 新任务；
 - `skill_registry.py`：Skill 校验、按内容格式路由、公开目录与任务不可变快照；
-- `prompt_adapters/`、`prompt_adapter_registry.py`：只供历史 v3 快照恢复；v4 不执行 H3 前置改写；
+- `prompt_adapters/`、`prompt_adapter_registry.py`：只供历史 v3 快照恢复并按需加载；v4 不执行 H3 前置改写；
 - `script_skills/`、`script_skill_registry.py`：版本化脚本方法；v4 的 `insight-led-scriptwriter` 统领主笔、批评与重写，只对外交付最终 `ScriptDraft`；
-- `director_skills/`、`director_skill_registry.py`、`director_prompting.py`：版本化 Director Skill，基于确认脚本与真实 TTS 时长，先交付 `DirectorTreatment + VisualBible + AssetBible`，再交付 `StoryboardPlan + ShotContextIR`；
+- `director_skills/`、`director_skill_registry.py`、`director_prompting.py`：版本化 Director Skill，基于确认脚本与真实 TTS 时长，先交付 `DirectorTreatment + VisualBible + AssetBible`，再交付 `StoryboardPlan + ShotContextIR`，最后由隔离上下文独立审片并在必要时完成一次受控修订；
 - `visual_styles/`、`visual_style_registry.py`：独立 Visual Style，定义媒介、资产设计、材质、色彩、光线、运动语法和可观察的审美验收标准；
 - `provider_adapters/`、`provider_adapter_registry.py`、`provider_prompting.py`：在导演之后以 H3 多模态方法分配参考图角色，并把冻结视觉语义编译为当前图片/视频模型的自然提示词；
 - `prompt_orchestration.py`：v4 只组合原始输入、用户材料与 Script Skill；同时保留历史链路编译能力；
-- `prompt_writing_profiles/`、`visual_prompting.py`：仅保留给 `Pipeline v1` 历史任务恢复；
+- `prompt_writing_profiles/`、`visual_prompting.py`：仅保留给 `Pipeline v1` 历史任务恢复，旧 Profile 注册表按需加载；
 - `service.py`：状态机、完整生产链路、逐镜头混合素材版本、抖音回流与单视频 ROI；
 - `ports.py`：生成 Provider、抖音播放读取、存储、渲染和仓储端口；
 - `infrastructure/`：OpenRouter、火山引擎、TOS、PostgreSQL、FFmpeg 与 Remotion 适配器；
@@ -30,11 +30,11 @@
 
 Remotion 位于仓库根目录 `video_renderer/`，只读取 `render_manifest.json` 与本地化素材，不访问数据库，也不调用生成模型。
 
-新任务只接受创作者真正能决定的原始请求、核对材料、Visual Style、可选视觉参考、画质、配音和视频模型规格。v4 不创建 Content Policy、EvidencePolicy、CreativeBrief、EditorialPlan、研究简报或 H3 前置产物；Script Skill、Director Skill、Visual Style 与 Provider Adapter 版本由服务端冻结。三次脚本请求均不携带搜索工具：主笔使用 `deepseek/deepseek-v4-pro` 的 `xhigh` 推理，独立批评使用隔离上下文的 `high` 推理，最终由主笔在新上下文中以 `xhigh` 重写，只对外保留最终 `ScriptDraft`。
+新任务只接受创作者真正能决定的原始请求、核对材料、Visual Style、可选视觉参考、画质、配音和视频模型规格。v4 不创建 Content Policy、EvidencePolicy、CreativeBrief、EditorialPlan、研究简报或 H3 前置产物；Script Skill、Director Skill、Visual Style 与 Provider Adapter 版本由服务端冻结。四次脚本请求均不携带搜索工具：主笔使用 `deepseek/deepseek-v4-pro` 的 `xhigh` 推理写初稿，独立批评使用隔离上下文的 `high` 推理，主笔在新上下文中以 `xhigh` 重写，最后由另一隔离上下文以 `high` 验收并把审核哈希绑定到最终 `ScriptDraft`。
 
-脚本确认后，TTS 提供真实段落时长。Director Skill 使用两次 `deepseek/deepseek-v4-pro` `xhigh` 调用：第一阶段确定导演处理、全片视觉圣经、资产圣经和合法章节数量，第二阶段只能逐一填充已锁定的 `chapter_01...chapter_N` 槽位，再完成具体事件、主体调度、摄影机、连续性与图片/视频媒介设计。系统随后先付费生成 3 张风格样片并暂停，用户选定一张后才批量生成正式镜头；选中的样片是正式首帧的唯一视觉基线，原始上传参考不再被重复发送给图片模型。
+脚本确认后，TTS 按 `ScriptBeat` 分别合成、实测每段音频并零间隔拼成唯一完整旁白。Director Skill 前两次使用 `deepseek/deepseek-v4-pro` `xhigh`：第一阶段确定导演处理、全片视觉圣经、资产圣经和合法章节数量，第二阶段只能逐一填充已锁定的 `chapter_01...chapter_N` 槽位，再完成具体事件、主体调度、摄影机、连续性与图片/视频媒介设计；第三次隔离上下文以 `high` 独立审片，必要时追加一次 `xhigh` 修订和一次 `high` 复审。系统随后以 H3 Provider Adapter `2.1.0` 的冻结方法生成 3 张同事件风格样片并暂停，用户选定一张后才批量生成正式镜头。若用户上传参考图，三张样片都把原图作为 `global_reference` 发送给 Seedream；正式首帧再按“原图、已选样片”的固定顺序同时输入，并分别遵守身份/场景职责与已确认风格职责。
 
-脚本确认页的整单区间包含已经发生的三次脚本 `usage.cost`、未来两次 Director 目录价预估、完整 TTS、3 张视觉样片、全部预计正式首帧和最多三段 Seedance。后续画面用量卡只汇总 Seedream 与 Seedance，但同时覆盖视觉样片、正式首帧和所有视频版本；脚本、Director 与 TTS 保留在任务总账，任何无价格调用均显示为待对账。
+脚本确认页的整单区间包含已经发生的四次脚本 `usage.cost`、未来 Director 正常 3 次至最多 5 次的目录价预估、完整 TTS、3 张视觉样片、全部预计正式首帧和最多三段 Seedance。后续画面用量卡只汇总 Seedream 与 Seedance，但同时覆盖视觉样片、正式首帧和所有视频版本；脚本、Director 与 TTS 保留在任务总账，任何无价格调用均显示为待对账。
 
 创建页以自然语言主输入为第一动作，只保留视觉风格这个常用选择，并用同一场景的真实样片进行比较。脚本、导演、选题编辑、图片、视频与配音的具体型号只在 `model_registry.py` 管理，Railway 不提供型号覆盖入口。页面通过 `/capabilities.runtime_models` 展示后端实际加载的模型及精确 ID；这些信息只读，不形成第二套前端配置。内部角色和中间规划不作为创建控件，冻结版本仍进入发布包审计快照。
 

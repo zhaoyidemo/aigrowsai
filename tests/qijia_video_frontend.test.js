@@ -34,6 +34,28 @@ test('qijia video uses an independent page and API namespace', () => {
   assert.match(login, /autocomplete="current-password"/);
 });
 
+test('video production is the default workspace and uses stage-specific readiness', () => {
+  assert.match(
+    page,
+    /id="production-tab"[^>]*class="workspace-tab active"[^>]*aria-selected="true"/,
+  );
+  assert.match(page, /id="topic-workspace"[^>]*hidden/);
+  assert.match(
+    page,
+    /id="production-workspace"[^>]*role="tabpanel"[^>]*aria-labelledby="production-tab">/,
+  );
+  assert.match(app, /workspaceTab: 'production'/);
+  assert.match(app, /switchWorkspace\('production'\)/);
+  assert.match(app, /capability\.script_generation_ready/);
+  assert.match(app, /capability\.reference_upload_ready/);
+  assert.match(app, /选题研究未配置（不影响视频创作）/);
+  assert.match(app, /async function ensureTopicRunsLoaded/);
+  assert.doesNotMatch(
+    app,
+    /Promise\.all\(\[loadAll\([^)]*\), loadTopicRuns\(\)\]\)/,
+  );
+});
+
 test('video creation uses model knowledge without external retrieval', () => {
   assert.match(page, /id="creative-request-form"/);
   assert.match(page, /系统直接生成口播稿 · 不联网 · 不生成前置研究简报/);
@@ -248,10 +270,14 @@ test('model knowledge boundary is visible without a pre-script planning artifact
 test('creation intake hides internal architecture behind creator-facing choices', () => {
   assert.match(page, /同一场景的真实样片，只比较视觉语言/);
   assert.match(page, /有需要保持一致的人物、场景或画面风格吗/);
-  assert.match(page, /人物、服装、物件、场景还是风格/);
+  assert.match(page, /人物、服装、物件、场景、构图或风格属性/);
   const referenceStart = page.indexOf('id="manual-reference-input"');
   const referenceEnd = page.indexOf('id="manual-intake-actions"');
-  assert.doesNotMatch(page.slice(referenceStart, referenceEnd), /ShotContextIR|Director Skill/);
+  const referenceSection = page.slice(referenceStart, referenceEnd);
+  assert.match(referenceSection, /OpenRouter/);
+  assert.match(referenceSection, /火山引擎 Seedream/);
+  assert.match(referenceSection, /敏感图片/);
+  assert.doesNotMatch(referenceSection, /ShotContextIR|Director Skill/);
   assert.doesNotMatch(page, /创作链路与技术信息/);
   assert.doesNotMatch(page, /Prompt Adapter|Script Skill|Provider Adapter/);
 });
@@ -311,8 +337,9 @@ test('creation intake offers one optional global reference image without extra f
   assert.match(page, /id="reference-image-input"/);
   assert.match(page, /accept="image\/jpeg,image\/png,image\/webp"/);
   assert.match(page, /上传 1 张参考图（可选）/);
-  assert.match(page, /系统会逐个镜头判断参考图用于人物、服装、物件、场景还是风格/);
-  assert.match(page, /不会自动照搬全部属性，也不会把图片内容当作事实依据/);
+  assert.match(page, /发送给 OpenRouter 导演模型进行职责分析/);
+  assert.match(page, /发送给火山引擎 Seedream 生成 3 张视觉样片和正式首帧/);
+  assert.match(page, /不会把图片内容当作事实依据/);
   assert.doesNotMatch(page, /id="reference-image-input"[^>]*multiple/);
   assert.match(app, /referenceImageFile/);
   assert.match(app, /\/jobs\/creative-request-with-reference/);

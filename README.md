@@ -1,21 +1,21 @@
 # 齐家 AI 知识视频工作台
 
-面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的选题与短视频生产服务。生产 Web 新任务使用 `Pipeline v4`：用户原始请求不经研究简报、Content Policy、EvidencePolicy、CreativeBrief、EditorialPlan 或 H3 前置改写，直接进入唯一 Script Skill；脚本确认后才进入配音、两阶段导演、H3 多模态提示词编译和混合制作。视频创作主链不联网，模型可直接使用用户材料与自身已有知识。
+面向齐家 AI 家庭教练抖音账号、同时可扩展到其他内容领域的选题与短视频生产服务。生产 Web 新任务使用 `Pipeline v4`：用户原始请求不经研究简报、Content Policy、EvidencePolicy、CreativeBrief、EditorialPlan 或 H3 前置改写，直接进入唯一 Script Skill；脚本确认后才进入逐段精确配音、两阶段导演与独立审片、H3 多模态提示词编译和混合制作。视频创作主链不联网，模型可直接使用用户材料与自身已有知识。
 
 环境变量中的管理员账号可以创建、启停同事账号，授予或收回工作台使用权限，并重置密码。同事可以查看团队创建的全部内容、成本和抖音效果，只能修改和继续执行自己创建的内容；管理员可以管理全部内容。
 
 ## v4 职责边界
 
-- Script Skill：`insight-led-scriptwriter@1.1.0` 直接读取原始请求与用户材料。`deepseek/deepseek-v4-pro` 先以 `xhigh` 写初稿，再以独立上下文 `high` 审稿，最后由同一主编以 `xhigh` 重写；唯一业务交付是 `ScriptDraft`，不包含视觉决策。
-- Director Skill：脚本人工确认且 TTS 完成后，`animated-explainer@2.1.0` 固定使用 `deepseek/deepseek-v4-pro xhigh` 分两次调用。第一阶段锁定 `DirectorTreatment + VisualBible + AssetBible` 以及合法章节数量，第二阶段通过固定的 `chapter_01...chapter_N` 槽位生成 `StoryboardPlan + ShotContextIR`，不得重新增减章节。人类可读的 Skill 文档、来源说明与媒体平台语法不会进入模型请求；运行时只编译创作规则、视觉风格、脚本、真实时长和可选参考图。任何 403 都在原模型调用处终止，不通过切换模型掩盖。
-- OpenRouter 传输层：脚本、导演和选题编辑只发送单一 `deepseek/deepseek-v4-pro` 模型请求，不携带 `models` 备用列表。完成长度使用该模型通过 OpenRouter 声明支持的 `max_tokens`；结构化输出直接依赖模型端严格 JSON Schema。
+- Script Skill：`insight-led-scriptwriter@1.1.0` 直接读取原始请求与用户材料。`deepseek/deepseek-v4-pro` 依次执行 `xhigh` 初稿、隔离上下文 `high` 独立审稿、主编 `xhigh` 重写和隔离上下文 `high` 终稿验收；终审结果绑定最终脚本哈希，唯一业务交付仍是 `ScriptDraft`，不包含视觉决策。
+- Director Skill：脚本人工确认且 TTS 完成后，`animated-explainer@2.1.0` 使用同一 `deepseek/deepseek-v4-pro`。前两次 `xhigh` 调用分别锁定 `DirectorTreatment + VisualBible + AssetBible` 和固定 `chapter_01...chapter_N` 槽位内的 `StoryboardPlan + ShotContextIR`；第三次隔离上下文 `high` 独立审片。只有审片发现关键问题时才允许一次 `xhigh` 定向修订并再次 `high` 复审，因此正常 3 次、最多 5 次。人类文档、来源说明与媒体平台语法不会进入模型请求。任何 403 都在原模型调用处终止，不通过切换模型掩盖。
+- OpenRouter 传输层：脚本、导演和选题编辑只发送单一 `deepseek/deepseek-v4-pro` 模型请求，不携带 `models` 备用列表。完成长度使用该模型通过 OpenRouter 声明支持的 `max_tokens`；结构化结果既受模型端严格 JSON Schema 约束，也在本地再次校验完整字段、评分、章节和审核结论。
 - Visual Style：四套风格只定义资产、材质、造型、色彩、构图、运动语法和验收标准，不选择论点，也不改写导演事件。
-- H3 Provider Adapter：只在脚本与导演之后工作，把参考图职责整理为多模态 Context IR，并把冻结的导演产物编译为 Seedream/Seedance 自然语言提示词；不参与脚本创作。
+- H3 Provider Adapter：只在脚本与导演之后工作，把参考图职责整理为多模态 Context IR，并把冻结的导演产物连同版本化图片/视频框架、负向边界和真实视频时长编译为 Seedream/Seedance 自然语言提示词；不参与脚本创作。三张视觉开发样片固定比较同一代表性事件；若用户上传参考图，三张样片都按 Director 声明的职责使用原图。正式首帧再按固定顺序同时输入原图与已选样片，分别保持身份/场景和已确认风格。
 - 媒体生产：先生成三张视觉开发样片，由编辑锁定一张，再为未上传自有素材的章节调用 Seedream 5 Lite 和测试期默认 Seedance 1.5 Pro。样片确认是正式批量生成前唯一新增的人工质量门。
 
 两种纸艺 Visual Style、电影级风格化 3D Visual Style 与 H3 Provider Adapter 借鉴了 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 的多模态提示词结构、参考职责分离、纸张拼贴、纸艺定格和风格化三维动画方法；这里只提炼通用制作原则，不复刻特定工作流或品牌风格，不耦合 MiniMax 模型，也不新增 MiniMax API Key。`animated-explainer@2.1.0` 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中具体事件、调度、摄影机与连续性原则，不引入其研究、脚本、语音或 CLI 链路。
 
-生产新任务只冻结 `input_snapshot`、`script_skill_snapshot`、`director_skill_snapshot`、`visual_style_snapshot` 与 `provider_adapter_snapshot`；`skill_snapshot` 和 `prompt_adapter_snapshot` 必须为空。Content Skill 与旧 H3 Script Adapter 只用于读取、恢复 v1/v2/v3 历史任务，不进入 v4 创建链路。只有 Visual Style 是公开选择，目录接口为 `GET /api/qijia-video/visual-styles`。
+生产新任务只冻结 `input_snapshot`、`script_skill_snapshot`、`director_skill_snapshot`、`visual_style_snapshot` 与 `provider_adapter_snapshot`；`skill_snapshot` 和 `prompt_adapter_snapshot` 必须为空。Content Skill、旧 H3 Script Adapter 与 Prompt Writing Profile 只用于读取、恢复 v1/v2/v3 历史任务，并采用按需加载，不进入或阻塞 v4 创建链路。只有 Visual Style 是公开选择，目录接口为 `GET /api/qijia-video/visual-styles`。
 
 工作台创建区只展示自然语言主输入、四种同场景视觉样片、可选参考图和生产规格。内部 Adapter、Policy、Script Skill、Director Skill、Provider、模型名与中间规划不在创建页或脚本确认页展示。发布包的 `pipeline_snapshot.json` 仍记录冻结版本，供故障审计而非参与创作。
 
@@ -31,15 +31,16 @@
 两种入口汇入统一生产链路
   → 原子冻结原始 CreativeInput、唯一 Script Skill、唯一 Director Skill、Visual Style 与 Provider Adapter
   → 原始输入与用户材料直接进入 Script Skill；不生成研究简报、Content/Evidence Policy、CreativeBrief 或 EditorialPlan
-  → 脚本主编 xhigh 初稿 → 独立 high 审稿 → 同一主编 xhigh 重写，只返回最终 ScriptDraft
+  → 脚本主编 xhigh 初稿 → 独立 high 审稿 → 同一主编 xhigh 重写 → 独立 high 验收终稿
   → 人工修改并确认脚本；确认后的 ScriptDraft 成为内容唯一真相
-  → 豆包 TTS 2.0 完整旁白
+  → 豆包 TTS 2.0 按 ScriptBeat 合成并实测每段时长，再无缝拼成一条完整旁白
   → Director 第一阶段交付 DirectorTreatment、VisualBible 与 AssetBible
   → Director 第二阶段按真实 TTS 时长交付 StoryboardPlan 与 ShotContextIR
+  → 独立 Director Critic 审片；必要时只做一次定向修订与复审
   → 图片为默认媒介；仅在连续动作不可替代时使用视频，全片最多 3 段但不要求凑满
-  → H3 Provider Adapter 编译三张 Seedream 视觉开发样片 → 人工锁定一张
+  → H3 Provider Adapter 编译三张 Seedream 视觉开发样片；若有上传参考图则按已声明职责共同使用 → 人工锁定一张
   → 按文字分镜连续上传自有图片 / 视频，并一次确认视觉与素材安排
-  → H3 Provider Adapter 只为未上传素材的章节编译 Seedream 5 Lite / Seedance 1.5 Pro 提示词
+  → H3 Provider Adapter 只为未上传素材的章节编译 Seedream 5 Lite / Seedance 1.5 Pro 提示词；正式首帧按序使用原图与已选样片
   → Remotion 合成 480P / 720P / 1080P 竖屏成片（新任务默认 1080P）
   → 人工混合制作：逐镜头保留 AI，或连续上传自有图片 / 视频并暂存修改
   → 一次应用全部待处理镜头，只重新合成和自动质检 1 次
@@ -54,11 +55,11 @@
 
 新任务不预设图片或视频数量。Script Skill 先写完整论证，Director Skill 再按确认脚本与真实 TTS 时长规划章节，不逐句配图、不重复构图，也不为配额拆镜。每章必须先成立一个可观察的具体事件，隐喻只能作为可选辅助。每个视觉章节生成一张 Seedream 图；只有连续动作、状态转变或镜头运动对理解不可替代、章节旁白不超过 10 秒且动作可在 8 秒内完成时才继续生成 Seedance，最多 3 段但可以为 0。成本按实际章节与实际视频数计算。历史任务中已经冻结的固定数量仍按原规格恢复。
 
-v4 脚本确认后固定先进入视觉开发和素材安排，不再提供“是否先安排素材”的旧复选框。系统生成正式旁白、两阶段导演产物和三张视觉样片后暂停；此时尚未生成正式镜头。编辑锁定一张样片，并可连续上传多个自有镜头素材；上传和选择只做校验、转码与保存，不触发 AI 生成或 Remotion 渲染。一次确认后，Seedream 和 Seedance 只处理没有自有素材的镜头，再由 Remotion 合成和质检首版成片一次。
+v4 脚本确认后固定先进入视觉开发和素材安排，不再提供“是否先安排素材”的旧复选框。系统生成正式旁白、两阶段导演产物、独立审片结果和三张同事件视觉样片后暂停；此时尚未生成正式镜头。编辑锁定一张样片，并可连续上传多个自有镜头素材；上传和选择只做校验、转码与保存，不触发 AI 生成或 Remotion 渲染。一次确认后，Seedream 和 Seedance 只处理没有自有素材的镜头，再由 Remotion 合成和质检首版成片一次。
 
 成片确认前仍可继续逐镜头混合制作：每个章节都可以保留 AI 素材，也可以上传 JPG、PNG、WebP 图片（最大 20 MB）或 MP4、MOV、WebM 视频（最大 200 MB）。生产环境由服务端签发短期 TOS PUT 地址，浏览器直传并显示进度，再以小型确认请求启动后台处理，避免大文件请求经过 Cloudflare/Railway 后触发 524。上传图片会完成格式校验，上传视频会先由 FFmpeg 转为静音 H.264、从开头截取，并在不足章节时长时冻结最后一帧；这些结果先作为“待应用修改”暂存，不会立即重渲染成片。编辑可以继续替换多个镜头、逐个或全部撤销，最后点击一次批量应用，由 Remotion 只合成和质检一次。上传、历史上传版本和 AI 版本都保留在任务中，可随时选择；任何一次处理、渲染或质检失败都不会覆盖上一版可确认成片，待应用清单也会保留以便重试。
 
-旁白只开放火山引擎公开的 3 个 Seed-TTS 2.0 音色：Vivi 2.0、流畅女声、儒雅逸辰；语速只开放 `1.0x / 1.1x / 1.2x`，新任务默认 `1.2x`，历史任务保持 `1.0x`。脚本确认页可以用真实开场旁白试听，单次最多 60 字、费用写入任务成本账本，同一页面内相同脚本/音色/语速的重复播放不会再次调用。正式配音完成后，字幕时间轴、图片章节和必要视频的剪辑位置统一按实际音频时长计算，而不是机械压缩旧时间轴。音色 ID 依据[火山引擎 TTS 更新说明](https://www.volcengine.com/docs/6561/162929?lang=en)，三档产品语速依据[火山引擎语速参数说明](https://www.volcengine.com/docs/6348/1807452?lang=zh)分别映射为 `speech_rate=0/10/20`。
+旁白只开放火山引擎公开的 3 个 Seed-TTS 2.0 音色：Vivi 2.0、流畅女声、儒雅逸辰；语速只开放 `1.0x / 1.1x / 1.2x`，新任务默认 `1.2x`，历史任务保持 `1.0x`。脚本确认页可以用真实开场旁白试听，单次最多 60 字、费用写入任务成本账本，同一页面内相同脚本/音色/语速的重复播放不会再次调用。正式配音以每个 `ScriptBeat` 为语义与计时单元分别合成、实测音频时长并零间隔拼接为唯一旁白资产；字幕、Director 章节和剪辑位置直接使用这些实测边界，不再按字数比例猜测。音色 ID 依据[火山引擎 TTS 更新说明](https://www.volcengine.com/docs/6561/162929?lang=en)，三档产品语速依据[火山引擎语速参数说明](https://www.volcengine.com/docs/6348/1807452?lang=zh)分别映射为 `speech_rate=0/10/20`。
 
 ## 抖音效果回流（一期）
 
@@ -111,7 +112,7 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 
 报表只显示人民币，“已计成本”统一计算为：`供应商回传金额 + 有计价依据的估算`。所有原始 USD 成本固定按 `1 USD = ¥6.7` 换算，底层账本仍保存供应商原始币种和金额，便于对账。供应商未回传金额、Token 缺失或网络结果未知的调用显示为“待对账”，不会按 0 元伪装成完整成本。页面提供团队效果、10 倍目标进度、视频排行、时间趋势、供应商、生产阶段、创建人、每项内容、最近调用明细，以及成本与效果两份 CSV 导出。
 
-默认估算依据为 TikHub 选题研究及短链解析 `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、TikHub 抖音效果回流 `$0.002/成功请求`（`¥0.0134/成功请求`）、DeepSeek V4 Pro 目录价 `$0.435/百万输入 tokens + $0.87/百万输出 tokens`、Seedream `¥0.22/张`、Seedance 1.0 Pro Fast 无声视频 `¥4.2/百万 tokens`、Seedance 1.5 Pro 无声视频 `¥8/百万 tokens`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。脚本确认页使用三次已发生脚本调用的真实 `usage.cost`，并补入尚未执行的两次 Director token 区间预估；画面用量卡同时计入 3 张视觉样片、所有正式首帧及全部 Seedance 版本。OpenRouter 实际上游价格可能不同，发生后始终以响应 `usage.cost` 取代目录价判断。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) 和[火山引擎豆包大模型计价](https://www.volcengine.com/product/doubao/)为准。
+默认估算依据为 TikHub 选题研究及短链解析 `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、TikHub 抖音效果回流 `$0.002/成功请求`（`¥0.0134/成功请求`）、DeepSeek V4 Pro 目录价 `$0.435/百万输入 tokens + $0.87/百万输出 tokens`、Seedream `¥0.22/张`、Seedance 1.0 Pro Fast 无声视频 `¥4.2/百万 tokens`、Seedance 1.5 Pro 无声视频 `¥8/百万 tokens`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。脚本确认页使用四次已发生脚本调用的真实 `usage.cost`，并补入尚未执行的 Director 正常 3 次、审片修订时最多 5 次的 token 区间预估；画面用量卡同时计入 3 张视觉样片、所有正式首帧及全部 Seedance 版本。OpenRouter 实际上游价格可能不同，发生后始终以响应 `usage.cost` 取代目录价判断。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) 和[火山引擎豆包大模型计价](https://www.volcengine.com/product/doubao/)为准。
 
 范围刻意只包含模型与数据 API，不包含 Railway、TOS、带宽、人工、税费和购买积分手续费。账本上线前的脚本与分镜没有持久化 OpenRouter `usage`，无法可靠反推；历史图片、视频和语音仅在有保存产物或 Token 时按当前配置补算，并明确标记为历史估算。
 
@@ -212,7 +213,7 @@ node --test tests/qijia_video_frontend.test.js
 npm.cmd run typecheck --prefix video_renderer
 ```
 
-真实部署验收至少包括：登录，确认创建页“当前生产模型”与 `/capabilities.runtime_models` 完全一致；用统一创作请求检查 `pipeline_version=v4`、原始输入逐字冻结、`skill_snapshot=null`、`prompt_adapter_snapshot=null` 且没有外部检索；确认脚本产生“初稿 xhigh、独立审稿 high、主编重写 xhigh”三条 OpenRouter 用量记录。人工确认脚本后，核对两阶段 Director 产物、三张视觉样片和样片选择门；确认样片前不得出现正式首帧或 Seedance 请求。随后验证自有素材跳过对应 AI 生成、测试期 Seedance 1.5 Pro 默认且方舟真实可提交、Remotion 成片、发布包、成本数据、服务重启恢复及 v1/v2/v3 历史任务读取。
+真实部署验收至少包括：登录后默认进入视频生产，确认创建页“当前生产模型”与 `/capabilities.runtime_models` 完全一致，并验证选题未配置不会锁死脚本入口；用统一创作请求检查 `pipeline_version=v4`、原始输入逐字冻结、`skill_snapshot=null`、`prompt_adapter_snapshot=null` 且没有外部检索；确认脚本产生“初稿 xhigh、独立审稿 high、主编重写 xhigh、终稿验收 high”四条 OpenRouter 用量记录，终审哈希与最终脚本一致。人工确认脚本后，核对逐段实测 TTS 时间轴、两阶段 Director 产物、独立审片结果、三张同事件视觉样片和样片选择门；确认样片前不得出现正式首帧或 Seedance 请求。随后验证自有素材跳过对应 AI 生成、测试期 Seedance 1.5 Pro 默认且方舟真实可提交、Remotion 成片、发布包、成本数据、服务重启恢复及 v1/v2/v3 历史任务读取。
 
 ## 数据边界
 

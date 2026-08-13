@@ -449,10 +449,12 @@ async def create_direct_job(
     user: dict = Depends(get_current_user),
 ):
     capability = runtime.capabilities()
-    if not capability["real_generation_ready"]:
-        missing = "、".join(capability.get("missing_configuration") or [])
+    if not capability["script_generation_ready"]:
+        missing = "、".join(
+            capability.get("script_missing_configuration") or []
+        )
         raise ProviderUnavailable(
-            "真实短视频链路尚未配置完成" + (f"：{missing}" if missing else "")
+            "脚本创作链路尚未配置完成" + (f"：{missing}" if missing else "")
         )
     actor = actor_from_user(user)
     job = await runtime.service.create_direct_job(
@@ -483,10 +485,13 @@ async def create_direct_job_with_reference(
     user: dict = Depends(get_current_user),
 ):
     capability = runtime.capabilities()
-    if not capability["real_generation_ready"]:
-        missing = "、".join(capability.get("missing_configuration") or [])
+    if not capability["reference_upload_ready"]:
+        missing = "、".join(
+            capability.get("reference_upload_missing_configuration") or []
+        )
         raise ProviderUnavailable(
-            "真实短视频链路尚未配置完成" + (f"：{missing}" if missing else "")
+            "脚本与参考图存储尚未配置完成"
+            + (f"：{missing}" if missing else "")
         )
     try:
         settings_payload = json.loads(generation_settings or "{}")

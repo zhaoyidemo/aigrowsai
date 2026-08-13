@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "display_name": "Seedream + Seedance 媒体适配器",
   "description": "用 H3 Context-IR 的参考职责与时间线方法，把已确认的视觉方案、资产圣经和 ShotContextIR 编译为简洁的 Seedream 与 Seedance 提示词。",
   "default": true,

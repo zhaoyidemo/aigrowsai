@@ -15,6 +15,7 @@ from pydantic import BaseModel, ValidationError
 from qijia_video.contracts import (
     AssetBible,
     CreativeBrief,
+    DirectorReview,
     DirectorTreatment,
     EditorialPlan,
     ProviderUsageRecord,
@@ -26,6 +27,7 @@ from qijia_video.contracts import (
     ShotContextIR,
     VisualBible,
     content_hash,
+    storyboard_review_hash,
     timestamp,
 )
 from qijia_video.director_prompting import assert_provider_neutral_runtime_prompt
@@ -46,11 +48,11 @@ from qijia_video.tts_options import (
 SCRIPT_PROMPT_VERSION = "qijia_script_v14_single_creative_brief"
 SCRIPT_SKILL_PROMPT_VERSION = 'qijia_script_v15_editorial_plan'
 DIRECT_SCRIPT_PROMPT_VERSION = 'qijia_script_v16_direct_draft'
-QUALITY_SCRIPT_PROMPT_VERSION = 'qijia_script_v21_provider_neutral'
+QUALITY_SCRIPT_PROMPT_VERSION = 'qijia_script_v22_final_audit'
 STORYBOARD_PROMPT_VERSION = "qijia_storyboard_v12_semantic_adaptive"
 DIRECTOR_PROMPT_VERSION = 'qijia_director_v13_shot_context_ir'
 DIRECTOR_V3_PROMPT_VERSION = 'qijia_director_v20_concrete_event'
-DIRECTOR_QUALITY_PROMPT_VERSION = 'qijia_director_v33_domain_contract'
+DIRECTOR_QUALITY_PROMPT_VERSION = 'qijia_director_v34_independent_review'
 OPENROUTER_REASONING_EFFORT = "high"
 OPENROUTER_REQUEST_TIMEOUT_SECONDS = 600.0
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
@@ -259,6 +261,28 @@ _DIRECT_SCRIPT_RESPONSE_SCHEMA['required'] = [
     if item != 'creative_brief'
 ]
 
+_SCRIPT_QUALITY_SCORE_KEYS = (
+    'input_fidelity',
+    'central_insight',
+    'argument_progression',
+    'specificity',
+    'spoken_language',
+    'originality',
+    'factual_discipline',
+)
+
+_DIRECTOR_QUALITY_SCORE_KEYS = (
+    'script_fidelity',
+    'visual_thesis_execution',
+    'event_specificity',
+    'narrative_progression',
+    'continuity',
+    'camera_readability',
+    'media_discipline',
+    'producibility',
+)
+
+
 _SCRIPT_CRITIQUE_RESPONSE_SCHEMA = {
     'type': 'object',
     'properties': {
@@ -267,15 +291,7 @@ _SCRIPT_CRITIQUE_RESPONSE_SCHEMA = {
             'type': 'object',
             'properties': {
                 key: {'type': 'integer', 'minimum': 1, 'maximum': 10}
-                for key in (
-                    'input_fidelity',
-                    'central_insight',
-                    'argument_progression',
-                    'specificity',
-                    'spoken_language',
-                    'originality',
-                    'factual_discipline',
-                )
+                for key in _SCRIPT_QUALITY_SCORE_KEYS
             },
             'required': [
                 'input_fidelity',
@@ -343,6 +359,197 @@ _SCRIPT_CRITIQUE_RESPONSE_SCHEMA = {
     ],
     'additionalProperties': False,
 }
+
+_FINAL_SCRIPT_REVIEW_RESPONSE_SCHEMA = deepcopy(_SCRIPT_CRITIQUE_RESPONSE_SCHEMA)
+_FINAL_SCRIPT_REVIEW_RESPONSE_SCHEMA['properties']['verdict']['enum'] = [
+    'pass',
+    'revise',
+]
+
+
+def _director_review_response_schema(chapter_ids: list[str]) -> dict:
+    """Bind semantic review findings to the exact locked chapter slots."""
+
+    score_keys = _DIRECTOR_QUALITY_SCORE_KEYS
+    return {
+        'type': 'object',
+        'properties': {
+            'verdict': {'type': 'string', 'enum': ['pass', 'revise']},
+            'quality_scores': {
+                'type': 'object',
+                'properties': {
+                    key: {'type': 'integer', 'minimum': 1, 'maximum': 10}
+                    for key in score_keys
+                },
+                'required': list(score_keys),
+                'additionalProperties': False,
+            },
+            'strengths': {
+                'type': 'array',
+                'maxItems': 5,
+                'items': {'type': 'string'},
+            },
+            'revision_requests': {
+                'type': 'array',
+                'maxItems': 10,
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'priority': {
+                            'type': 'string',
+                            'enum': ['critical', 'important', 'polish'],
+                        },
+                        'chapter_id': {
+                            'type': 'string',
+                            'enum': list(chapter_ids),
+                        },
+                        'issue': {'type': 'string'},
+                        'instruction': {'type': 'string'},
+                    },
+                    'required': [
+                        'priority',
+                        'chapter_id',
+                        'issue',
+                        'instruction',
+                    ],
+                    'additionalProperties': False,
+                },
+            },
+        },
+        'required': [
+            'verdict',
+            'quality_scores',
+            'strengths',
+            'revision_requests',
+        ],
+        'additionalProperties': False,
+    }
+
+
+def _validated_review_payload(
+    payload: dict,
+    *,
+    label: str,
+    score_keys: tuple[str, ...],
+    verdicts: set[str],
+    chapter_ids: set[str] | None = None,
+    include_script_fields: bool = False,
+) -> dict:
+    """Reject incomplete reviews even if an upstream ignores strict JSON."""
+
+    expected_fields = {
+        'verdict',
+        'quality_scores',
+        'strengths',
+        'revision_requests',
+    }
+    if include_script_fields:
+        expected_fields.update({'factual_risks', 'preserve'})
+    try:
+        if not isinstance(payload, dict) or set(payload) != expected_fields:
+            raise ValueError('root fields')
+        if payload.get('verdict') not in verdicts:
+            raise ValueError('verdict')
+
+        scores = payload.get('quality_scores')
+        if not isinstance(scores, dict) or set(scores) != set(score_keys):
+            raise ValueError('quality score fields')
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 1 <= value <= 10
+            for value in scores.values()
+        ):
+            raise ValueError('quality score values')
+
+        strengths = payload.get('strengths')
+        max_strengths = 4 if include_script_fields else 5
+        if (
+            not isinstance(strengths, list)
+            or len(strengths) > max_strengths
+            or any(
+                not isinstance(item, str) or not item.strip()
+                for item in strengths
+            )
+        ):
+            raise ValueError('strengths')
+
+        revisions = payload.get('revision_requests')
+        max_revisions = 8 if include_script_fields else 10
+        if not isinstance(revisions, list) or len(revisions) > max_revisions:
+            raise ValueError('revision requests')
+        revision_fields = {'priority', 'issue', 'instruction'}
+        if chapter_ids is not None:
+            revision_fields.add('chapter_id')
+        for item in revisions:
+            if not isinstance(item, dict) or set(item) != revision_fields:
+                raise ValueError('revision request fields')
+            if item.get('priority') not in {
+                'critical',
+                'important',
+                'polish',
+            }:
+                raise ValueError('revision priority')
+            if (
+                chapter_ids is not None
+                and item.get('chapter_id') not in chapter_ids
+            ):
+                raise ValueError('revision chapter')
+            if any(
+                not isinstance(item.get(key), str) or not item[key].strip()
+                for key in ('issue', 'instruction')
+            ):
+                raise ValueError('revision text')
+        has_blocking_revision = any(
+            item['priority'] in {'critical', 'important'}
+            for item in revisions
+        )
+        if payload['verdict'] == 'pass' and has_blocking_revision:
+            raise ValueError('pass with blocking revision')
+        if (
+            chapter_ids is not None
+            and payload['verdict'] == 'revise'
+            and not has_blocking_revision
+        ):
+            raise ValueError('director revise without blocking revision')
+
+        if include_script_fields:
+            preserve = payload.get('preserve')
+            if (
+                not isinstance(preserve, list)
+                or len(preserve) > 6
+                or any(
+                    not isinstance(item, str) or not item.strip()
+                    for item in preserve
+                )
+            ):
+                raise ValueError('preserve')
+            risks = payload.get('factual_risks')
+            if not isinstance(risks, list) or len(risks) > 8:
+                raise ValueError('factual risks')
+            for item in risks:
+                if (
+                    not isinstance(item, dict)
+                    or set(item) != {'claim', 'risk', 'action'}
+                ):
+                    raise ValueError('factual risk fields')
+                if item.get('action') not in {
+                    'remove',
+                    'rephrase',
+                    'manual_check',
+                }:
+                    raise ValueError('factual risk action')
+                if any(
+                    not isinstance(item.get(key), str)
+                    or not item[key].strip()
+                    for key in ('claim', 'risk')
+                ):
+                    raise ValueError('factual risk text')
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProviderUnavailable(
+            f'{label}返回内容不符合质量审查契约'
+        ) from exc
+    return payload
 
 
 _STORYBOARD_RESPONSE_SCHEMA = {
@@ -1885,7 +2092,7 @@ class OpenRouterScriptProvider:
         *,
         on_usage: UsageRecorder | None = None,
     ) -> tuple[ScriptDraft, ScriptReview]:
-        """Run one writer, one independent critic, then the same writer again."""
+        """Run draft, isolated critique, rewrite, and a final-bound audit."""
 
         if not self.configured:
             raise ProviderUnavailable(
@@ -1922,7 +2129,6 @@ class OpenRouterScriptProvider:
             reasoning_effort='xhigh',
         )
         draft = self._script_from_generated(card, draft_response.data)
-        draft_hash = content_hash(draft)
         critique_prompt = (
             '独立审阅下面这篇口播初稿。你的职责不是把观点改得中立、保险或四平八稳，'
             '而是发现它为什么还不够精彩、不够具体或不够成立。重点检查：是否忠实回应'
@@ -1958,7 +2164,13 @@ class OpenRouterScriptProvider:
             on_usage=on_usage,
             reasoning_effort='high',
         )
-        critique = critique_response.data
+        critique = _validated_review_payload(
+            critique_response.data,
+            label='脚本独立审稿',
+            score_keys=_SCRIPT_QUALITY_SCORE_KEYS,
+            verdicts={'revise', 'polish'},
+            include_script_fields=True,
+        )
         revision_prompt = (
             prompt
             + '\n\n【你的初稿】\n'
@@ -1995,23 +2207,76 @@ class OpenRouterScriptProvider:
             reasoning_effort='xhigh',
         )
         final_script = self._script_from_generated(card, final_response.data)
+        final_hash = content_hash(final_script)
+        final_review_prompt = (
+            '独立验收下面这份已经重写完成的最终口播。你审查的是终稿本身，不能沿用或'
+            '猜测初稿评分。重点检查它是否忠实回应用户输入、中心判断是否鲜明、论证是否'
+            '持续推进、抽象观点是否落到具体处境与后果、口语是否自然，以及精确事实是否'
+            '超出用户材料与模型稳定知识。不要因为作品有立场、锋芒或取舍就要求中立化。'
+            '只有存在会实质损害作品成立、忠实度或事实可靠性的关键问题时，verdict 才写 '
+            'revise；只有润色建议时仍写 pass。只返回 Review JSON，不重写脚本。\n\n'
+            + prompt
+            + '\n\n【待验收终稿】\n'
+            + json.dumps(final_script.model_dump(mode='json'), ensure_ascii=False)
+        )
+        final_review_response = await _openrouter_json_request(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            messages=[
+                {
+                    'role': 'system',
+                    'content': (
+                        '你是与主笔上下文隔离的终稿验收编辑。你的评分和意见必须只绑定'
+                        '眼前终稿；保护真正有力量的判断，不用四平八稳替代作品质量。'
+                    ),
+                },
+                {'role': 'user', 'content': final_review_prompt},
+            ],
+            label='脚本终稿独立验收',
+            schema_name='qijia_script_final_review_v1',
+            response_schema=_FINAL_SCRIPT_REVIEW_RESPONSE_SCHEMA,
+            max_completion_tokens=16_000,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+            operation='script_final_review',
+            on_usage=on_usage,
+            reasoning_effort='high',
+        )
+        final_assessment = _validated_review_payload(
+            final_review_response.data,
+            label='脚本终稿独立验收',
+            score_keys=_SCRIPT_QUALITY_SCORE_KEYS,
+            verdicts={'pass', 'revise'},
+            include_script_fields=True,
+        )
         review = await self.review(card, final_script)
         review.quality_scores = {
             str(key): int(value)
-            for key, value in dict(critique.get('quality_scores') or {}).items()
+            for key, value in dict(
+                final_assessment.get('quality_scores') or {}
+            ).items()
         }
-        review.strengths = list(critique.get('strengths') or [])
-        review.revision_requests = list(critique.get('revision_requests') or [])
-        review.factual_risks = list(critique.get('factual_risks') or [])
-        review.preserve = list(critique.get('preserve') or [])
-        review.reviewed_draft_hash = draft_hash
+        review.strengths = list(final_assessment.get('strengths') or [])
+        review.revision_requests = list(
+            final_assessment.get('revision_requests') or []
+        )
+        review.factual_risks = list(final_assessment.get('factual_risks') or [])
+        review.preserve = list(final_assessment.get('preserve') or [])
+        review.reviewed_draft_hash = final_hash
+        if final_assessment.get('verdict') == 'revise':
+            review.passed = False
+            review.blocking_reasons.append(
+                '终稿独立语义验收发现仍需主编修订的关键问题'
+            )
         review.model_id = (
             f'{draft_response.model_id} writer + '
             f'{critique_response.model_id} critic + '
-            f'{final_response.model_id} revision'
+            f'{final_response.model_id} revision + '
+            f'{final_review_response.model_id} final-review'
         )
         review.prompt_version = QUALITY_SCRIPT_PROMPT_VERSION
-        review.input_hash = content_hash(final_script)
+        review.input_hash = final_hash
         review.reviewed_at = timestamp()
         return final_script, review
 
@@ -2134,7 +2399,7 @@ class OpenRouterStoryboardProvider:
         reference_image_url: str = '',
         on_usage: UsageRecorder | None = None,
     ) -> tuple[DirectorTreatment, VisualBible, AssetBible, StoryboardPlan]:
-        """Develop the visual world first, then plan shots in a fresh call."""
+        """Develop and plan in isolated calls, then audit with one bounded revision."""
 
         if not self.configured:
             raise ProviderUnavailable('真实分镜生成未配置：请设置 OPENROUTER_API_KEY')
@@ -2341,79 +2606,238 @@ class OpenRouterStoryboardProvider:
             on_usage=on_usage,
             reasoning_effort='xhigh',
         )
-        raw_chapters = shot_response.data.get('chapters')
-        if (
-            not isinstance(raw_chapters, dict)
-            or set(raw_chapters) != set(chapter_ids)
-        ):
-            actual_count = (
-                len(raw_chapters) if isinstance(raw_chapters, dict) else 0
-            )
-            raise ProviderUnavailable(
-                'Director 第二阶段未完整交付已锁定的章节槽位'
-                f'（expected={chapter_count}，actual={actual_count}）'
-            )
-        raw_shots = [raw_chapters[chapter_id] for chapter_id in chapter_ids]
-        returned_groups = [
-            list(item.get('beat_ids') or []) if isinstance(item, dict) else []
-            for item in raw_shots
-        ]
-        if not _beat_groups_cover_script(returned_groups, expected_beat_ids):
-            raise ProviderUnavailable('Director Skill 未按顺序完整覆盖确认脚本')
-        selected_types = [
-            str(item.get('visual_type') or '') for item in raw_shots
-        ]
-        if (
-            any(item not in {'image', 'video'} for item in selected_types)
-            or sum(item == 'video' for item in selected_types) > 3
-        ):
-            raise ProviderUnavailable('Director Skill 返回了无效的图片/视频分配')
         beats_by_id = {item.id: item for item in script.beats}
-        shots: list[StoryboardShot] = []
-        try:
-            event_keys: set[str] = set()
-            for index, (raw, beat_ids, visual_type) in enumerate(
-                zip(raw_shots, returned_groups, selected_types),
-                1,
+
+        def build_plan(payload: dict, *, model_id: str) -> StoryboardPlan:
+            raw_chapters = payload.get('chapters')
+            if (
+                not isinstance(raw_chapters, dict)
+                or set(raw_chapters) != set(chapter_ids)
             ):
-                chapter_duration = sum(
-                    float(narration_durations[beat_id]) for beat_id in beat_ids
+                actual_count = (
+                    len(raw_chapters) if isinstance(raw_chapters, dict) else 0
                 )
-                if visual_type == 'video' and chapter_duration > 10.0:
-                    raise ValueError('video chapter exceeds narration limit')
-                context = ShotContextIR.model_validate(raw.get('context'))
-                event_key = re.sub(r'\s+', '', context.concrete_event).casefold()
-                if not event_key or event_key in event_keys:
-                    raise ValueError('duplicate concrete event')
-                event_keys.add(event_key)
-                if (
-                    re.sub(r'\s+', '', context.start_state).casefold()
-                    == re.sub(r'\s+', '', context.end_state).casefold()
+                raise ProviderUnavailable(
+                    'Director 未完整交付已锁定的章节槽位'
+                    f'（expected={chapter_count}，actual={actual_count}）'
+                )
+            raw_shots = [raw_chapters[chapter_id] for chapter_id in chapter_ids]
+            returned_groups = [
+                list(item.get('beat_ids') or []) if isinstance(item, dict) else []
+                for item in raw_shots
+            ]
+            if not _beat_groups_cover_script(returned_groups, expected_beat_ids):
+                raise ProviderUnavailable('Director 未按顺序完整覆盖确认脚本')
+            selected_types = [
+                str(item.get('visual_type') or '') for item in raw_shots
+            ]
+            if (
+                any(item not in {'image', 'video'} for item in selected_types)
+                or sum(item == 'video' for item in selected_types) > 3
+            ):
+                raise ProviderUnavailable('Director 返回了无效的图片/视频分配')
+            shots: list[StoryboardShot] = []
+            try:
+                event_keys: set[str] = set()
+                for index, (raw, beat_ids, visual_type) in enumerate(
+                    zip(raw_shots, returned_groups, selected_types),
+                    1,
                 ):
-                    raise ValueError('identical start and end states')
-                shots.append(StoryboardShot(
-                    shot_id=f'shot_{index:02d}',
-                    segment_id=beat_ids[0],
-                    beat_ids=beat_ids,
-                    narration_excerpt='\n'.join(
-                        beats_by_id[beat_id].narration for beat_id in beat_ids
-                    ),
-                    visual_type=visual_type,
-                    visual_intent=context.semantic_goal,
-                    context=context,
-                ))
-            plan = StoryboardPlan(
-                schema_version='3.0',
-                shots=shots,
-                model_id=shot_response.model_id,
-                prompt_version=DIRECTOR_QUALITY_PROMPT_VERSION,
-                input_hash=input_hash,
-                created_at=timestamp(),
+                    chapter_duration = sum(
+                        float(narration_durations[beat_id]) for beat_id in beat_ids
+                    )
+                    if visual_type == 'video' and chapter_duration > 10.0:
+                        raise ValueError('video chapter exceeds narration limit')
+                    context = ShotContextIR.model_validate(raw.get('context'))
+                    event_key = re.sub(
+                        r'\s+', '', context.concrete_event
+                    ).casefold()
+                    if not event_key or event_key in event_keys:
+                        raise ValueError('duplicate concrete event')
+                    event_keys.add(event_key)
+                    if (
+                        re.sub(r'\s+', '', context.start_state).casefold()
+                        == re.sub(r'\s+', '', context.end_state).casefold()
+                    ):
+                        raise ValueError('identical start and end states')
+                    shots.append(StoryboardShot(
+                        shot_id=f'shot_{index:02d}',
+                        segment_id=beat_ids[0],
+                        beat_ids=beat_ids,
+                        narration_excerpt='\n'.join(
+                            beats_by_id[beat_id].narration for beat_id in beat_ids
+                        ),
+                        visual_type=visual_type,
+                        visual_intent=context.semantic_goal,
+                        context=context,
+                    ))
+                return StoryboardPlan(
+                    schema_version='3.0',
+                    shots=shots,
+                    model_id=model_id,
+                    prompt_version=DIRECTOR_QUALITY_PROMPT_VERSION,
+                    input_hash=input_hash,
+                    created_at=timestamp(),
+                )
+            except (KeyError, TypeError, ValueError, ValidationError) as exc:
+                raise ProviderUnavailable(
+                    'Director 返回内容不符合可执行分镜契约'
+                ) from exc
+
+        def plan_chapters(candidate: StoryboardPlan) -> dict[str, dict]:
+            return {
+                chapter_id: {
+                    'beat_ids': list(shot.beat_ids),
+                    'visual_type': shot.visual_type,
+                    'context': shot.context.model_dump(mode='json'),
+                }
+                for chapter_id, shot in zip(chapter_ids, candidate.shots)
+            }
+
+        async def audit_plan(
+            candidate: StoryboardPlan,
+            *,
+            audit_round: int,
+        ) -> tuple[dict, _OpenRouterJsonResponse, str]:
+            reviewed_hash = storyboard_review_hash(candidate)
+            audit_input = json.dumps(
+                {
+                    'input_type': 'independent_storyboard_review',
+                    'locked_visual_direction': treatment.model_dump(mode='json'),
+                    'locked_visual_world': visual_bible.model_dump(mode='json'),
+                    'locked_assets': asset_bible.model_dump(mode='json'),
+                    'script_beats': beat_payload,
+                    'chapters': plan_chapters(candidate),
+                },
+                ensure_ascii=False,
+                indent=2,
             )
-        except (KeyError, TypeError, ValueError, ValidationError) as exc:
-            raise ProviderUnavailable(
-                'Director 第二阶段返回内容不符合可执行分镜契约'
-            ) from exc
+            audit_response = await _openrouter_json_request(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                model=self.model,
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': (
+                            '你是与前两阶段上下文隔离的资深审片导演。只审查已经交付的'
+                            '章节方案，不重写脚本。检查每章是否把旁白推进转化为具体事件，'
+                            '主体调度、起止变化和摄影机是否可读，章节是否真正递进，连续性'
+                            '是否成立，图片与视频选择是否必要且可生产。保护鲜明、有风险但'
+                            '成立的导演决定；不要用安全、抽象、通用的画面替代它们。只有'
+                            '关键或重要问题会实质降低成片时才 verdict=revise；纯润色意见'
+                            '仍 verdict=pass。只返回审片 JSON。'
+                        ),
+                    },
+                    {'role': 'user', 'content': audit_input},
+                ],
+                label=(
+                    '导演独立审片'
+                    if audit_round == 1
+                    else '导演修订后复审'
+                ),
+                schema_name='qijia_director_review_v1',
+                response_schema=_director_review_response_schema(chapter_ids),
+                max_completion_tokens=24_000,
+                timeout_seconds=self.timeout_seconds,
+                transport=self.transport,
+                operation='director_critique',
+                on_usage=on_usage,
+                reasoning_effort='high',
+            )
+            audit = _validated_review_payload(
+                audit_response.data,
+                label=(
+                    '导演独立审片'
+                    if audit_round == 1
+                    else '导演修订后复审'
+                ),
+                score_keys=_DIRECTOR_QUALITY_SCORE_KEYS,
+                verdicts={'pass', 'revise'},
+                chapter_ids=set(chapter_ids),
+            )
+            return audit, audit_response, reviewed_hash
+
+        plan = build_plan(shot_response.data, model_id=shot_response.model_id)
+        audit, audit_response, reviewed_hash = await audit_plan(
+            plan,
+            audit_round=1,
+        )
+        revision_count = 0
+        if audit.get('verdict') == 'revise':
+            revision_input = json.dumps(
+                {
+                    'input_type': 'storyboard_revision',
+                    'locked_visual_direction': treatment.model_dump(mode='json'),
+                    'locked_visual_world': visual_bible.model_dump(mode='json'),
+                    'locked_assets': asset_bible.model_dump(mode='json'),
+                    'locked_chapter_slots': [
+                        {
+                            'chapter_id': chapter_id,
+                            'narrative_task': treatment.chapter_progression[index],
+                        }
+                        for index, chapter_id in enumerate(chapter_ids)
+                    ],
+                    'script_beats': beat_payload,
+                    'current_chapters': plan_chapters(plan),
+                    'independent_review': audit,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            revision_response = await _openrouter_json_request(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                model=self.model,
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': (
+                            '你是正式分镜的修订导演。视觉方案、资产、章节数量、旁白归属'
+                            '和已有优点全部锁定；只修复独立审片指出的关键或重要问题。'
+                            '每个 beat_id 仍必须按原顺序出现且只出现一次，视频不超过三段，'
+                            '不要把具体事件改回抽象象征或通用配图。只返回完整章节 JSON。'
+                        ),
+                    },
+                    {'role': 'user', 'content': revision_input},
+                ],
+                label='导演分镜修订',
+                schema_name='qijia_director_shot_revision_v1',
+                response_schema=_director_shot_plan_response_schema(chapter_ids),
+                max_completion_tokens=STORYBOARD_MAX_COMPLETION_TOKENS,
+                timeout_seconds=self.timeout_seconds,
+                transport=self.transport,
+                operation='storyboard_revision',
+                on_usage=on_usage,
+                reasoning_effort='xhigh',
+            )
+            plan = build_plan(
+                revision_response.data,
+                model_id=revision_response.model_id,
+            )
+            revision_count = 1
+            audit, audit_response, reviewed_hash = await audit_plan(
+                plan,
+                audit_round=2,
+            )
+            if audit.get('verdict') != 'pass':
+                raise ProviderUnavailable(
+                    'Director 独立审片在一次受控修订后仍未通过，请重新生成视觉方案'
+                )
+        plan.director_review = DirectorReview(
+            passed=True,
+            quality_scores={
+                str(key): int(value)
+                for key, value in dict(audit.get('quality_scores') or {}).items()
+            },
+            strengths=list(audit.get('strengths') or []),
+            revision_requests=list(audit.get('revision_requests') or []),
+            reviewed_plan_hash=reviewed_hash,
+            revision_count=revision_count,
+            model_id=audit_response.model_id,
+            prompt_version=DIRECTOR_QUALITY_PROMPT_VERSION,
+            reviewed_at=timestamp(),
+        )
         return treatment, visual_bible, asset_bible, plan
 
     async def generate_director_plan(

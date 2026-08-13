@@ -24,9 +24,11 @@ const state = {
   referenceImageFile: null,
   referenceImagePreviewUrl: '',
   scriptEditorDraft: null,
-  workspaceTab: 'topics',
+  workspaceTab: 'production',
   productionPane: 'create',
   topicRuns: [],
+  topicRunsLoaded: false,
+  topicLoadPromise: null,
   selectedTopicRun: null,
   activeTopicTask: null,
   topicPollingTaskId: '',
@@ -231,10 +233,25 @@ function updateScriptApprovalAction() {
 function updateCreationIntake() {
   const handoffOpen = !$('#topic-handoff').hidden;
   $('#manual-intake-intro').hidden = handoffOpen;
-  $('#manual-intake-intro').textContent = '写下完整要求，系统直接生成口播稿 · 不联网 · 不生成前置研究简报';
+  const needsReferenceStorage = !!state.referenceImageFile;
+  const capability = state.capabilities || {};
+  const ready = needsReferenceStorage
+    ? capability.reference_upload_ready !== false
+    : capability.script_generation_ready !== false;
+  const missing = needsReferenceStorage
+    ? capability.reference_upload_missing_configuration
+    : capability.script_missing_configuration;
+  $('#manual-intake-intro').textContent = ready
+    ? '写下完整要求，系统直接生成口播稿 · 不联网 · 不生成前置研究简报'
+    : `脚本入口待配置：${(missing || []).join('、') || '配置不完整'}`;
   $('#creative-request-form').hidden = handoffOpen;
   $('#manual-reference-input').hidden = handoffOpen;
   $('#manual-intake-actions').hidden = handoffOpen;
+  const submit = $('#source-submit-button');
+  if (submit) {
+    submit.dataset.locked = String(!ready);
+    submit.disabled = state.busy || !ready;
+  }
 }
 
 function visualStyles() {
@@ -268,10 +285,10 @@ function visualStylePreviewKey(styleId) {
 
 function visualStylePreviewAsset(styleId) {
   const assets = {
-    [DEFAULT_VISUAL_STYLE_ID]: '/qijia-video/assets/style-previews/modern-editorial.webp?v=1.35.0',
-    'paper-collage-explainer': '/qijia-video/assets/style-previews/paper-collage.webp?v=1.35.0',
-    'papercraft-stop-motion': '/qijia-video/assets/style-previews/papercraft-stop-motion.webp?v=1.35.0',
-    'stylized-3d-animation': '/qijia-video/assets/style-previews/stylized-3d-animation.webp?v=1.35.0',
+    [DEFAULT_VISUAL_STYLE_ID]: '/qijia-video/assets/style-previews/modern-editorial.webp?v=1.37.0',
+    'paper-collage-explainer': '/qijia-video/assets/style-previews/paper-collage.webp?v=1.37.0',
+    'papercraft-stop-motion': '/qijia-video/assets/style-previews/papercraft-stop-motion.webp?v=1.37.0',
+    'stylized-3d-animation': '/qijia-video/assets/style-previews/stylized-3d-animation.webp?v=1.37.0',
   };
   return assets[styleId] || assets[DEFAULT_VISUAL_STYLE_ID];
 }
@@ -739,6 +756,7 @@ function clearReferenceImage() {
   $('#reference-preview').hidden = true;
   $('#reference-empty').hidden = false;
   $('#remove-reference-image').hidden = true;
+  updateCreationIntake();
 }
 
 function setReferenceImage(file) {
@@ -762,6 +780,7 @@ function setReferenceImage(file) {
   $('#reference-empty').hidden = true;
   $('#remove-reference-image').hidden = false;
   notify('');
+  updateCreationIntake();
 }
 
 function notify(message, error = false) {
@@ -812,6 +831,7 @@ function setBusy(busy) {
     input.disabled = busy || !canEditResource(state.selectedJob);
   });
   if (!busy) {
+    updateCreationIntake();
     updateScriptLengthStatus();
     renderTopicControls();
     renderTopicDetail();
@@ -1235,22 +1255,27 @@ function renderCapabilities() {
   const data = state.capabilities;
   if (!data) return;
   $('#account-management-link').hidden = data.actor?.role !== 'admin';
+  const scriptReady = data.script_generation_ready !== false;
   const videoReady = !!data.real_generation_ready;
   const topicReady = !!data.topic_research?.ready;
-  const ready = videoReady && topicReady;
+  const ready = scriptReady;
   node.classList.toggle('ready', ready);
   node.classList.toggle('warning', !ready);
   const parts = [
-    topicReady
-      ? '家庭教育选题研究已就绪'
-      : `选题研究待配置：${(data.topic_research?.missing_configuration || []).join('、') || '配置不完整'}`,
+    scriptReady
+      ? '脚本创作已就绪'
+      : `脚本创作待配置：${(data.script_missing_configuration || []).join('、') || '配置不完整'}`,
     videoReady
       ? `视频生产已就绪 · ${data.storage} 存储`
       : `视频生产待配置：${(data.missing_configuration || []).join('、') || data.renderer?.detail || '配置不完整'}`,
+    topicReady
+      ? '选题研究已就绪（独立功能）'
+      : '选题研究未配置（不影响视频创作）',
   ];
   node.querySelector('span:last-child').textContent = parts.join(' ｜ ');
   renderRuntimeModels();
   renderTopicControls();
+  updateCreationIntake();
 }
 
 function renderJobs() {
@@ -2352,6 +2377,9 @@ function pendingDirectorCostRange(job) {
     low: cost(inputRange[0], outputRange[0]),
     high: cost(inputRange[1], outputRange[1]),
     requestCount: Math.max(0, Number(estimate.request_count) || 0),
+    requestCountRange: Array.isArray(estimate.request_count_range)
+      ? estimate.request_count_range.map(Number)
+      : [],
     model: String(pricing.model || ''),
     basis: String(pricing.basis || ''),
   };
@@ -2402,7 +2430,7 @@ function renderScriptCostEstimate(job) {
   breakdownNode.textContent = [
     `已发生且可计价 ${formatCny(incurred)}`,
     directorCost
-      ? `待执行 Director ${directorCost.requestCount} 次（${directorCost.model || 'OpenRouter'}）约 ${formatCny(directorLow)}–${formatCny(directorHigh)}`
+      ? `待执行 Director ${directorCost.requestCountRange.length === 2 ? `${directorCost.requestCountRange[0]}–${directorCost.requestCountRange[1]}` : directorCost.requestCount} 次（${directorCost.model || 'OpenRouter'}）约 ${formatCny(directorLow)}–${formatCny(directorHigh)}`
       : '',
     `完整旁白 ${characterCount} 字约 ${formatCny(ttsCost)}`,
     reusesVisuals
@@ -2955,6 +2983,7 @@ function updateVisibleTopicRun(run) {
 async function loadTopicRuns({selectRunId = ''} = {}) {
   const runs = await api('GET', '/topic-research/runs');
   state.topicRuns = runs;
+  state.topicRunsLoaded = true;
   const targetId = selectRunId || state.selectedTopicRun?.id || runs[0]?.id || '';
   state.selectedTopicRun = runs.find((item) => item.id === targetId) || runs[0] || null;
   if (state.activeTopicTask?.task_id !== state.selectedTopicRun?.last_run_task_id) {
@@ -2962,6 +2991,24 @@ async function loadTopicRuns({selectRunId = ''} = {}) {
   }
   renderTopicRuns();
   renderTopicDetail();
+}
+
+async function ensureTopicRunsLoaded() {
+  if (state.topicRunsLoaded) return;
+  if (state.topicLoadPromise) return state.topicLoadPromise;
+  state.topicLoadPromise = (async () => {
+    await loadTopicRuns();
+    const runningTopic = state.topicRuns.find(
+      (run) => run.status === 'running'
+        && run.created_by === state.capabilities?.actor?.username,
+    );
+    if (runningTopic) await resumeTopicTask(runningTopic);
+  })();
+  try {
+    await state.topicLoadPromise;
+  } finally {
+    state.topicLoadPromise = null;
+  }
 }
 
 function stopTopicPolling() {
@@ -3117,12 +3164,18 @@ document.querySelector('.workspace-tabs').addEventListener('click', (event) => {
   const button = event.target.closest('[data-workspace-tab]');
   if (!button) return;
   switchWorkspace(button.dataset.workspaceTab);
+  if (button.dataset.workspaceTab === 'topics') {
+    ensureTopicRunsLoaded().catch((error) => notify(error.message, true));
+  }
 });
 document.querySelector('.workspace-tabs').addEventListener('keydown', (event) => {
   if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
   event.preventDefault();
   const tab = state.workspaceTab === 'topics' ? 'production' : 'topics';
   switchWorkspace(tab);
+  if (tab === 'topics') {
+    ensureTopicRunsLoaded().catch((error) => notify(error.message, true));
+  }
   document.querySelector(`[data-workspace-tab="${tab}"]`)?.focus();
 });
 $('.production-view-tabs').addEventListener('click', (event) => {
@@ -4224,18 +4277,13 @@ $('#remove-reference-image').addEventListener('click', () => {
 async function init() {
   try {
     const initialJobId = new URLSearchParams(window.location.search).get('job') || '';
-    switchWorkspace(initialJobId ? 'production' : 'topics');
+    switchWorkspace('production');
     switchProductionPane(initialJobId ? 'jobs' : 'create');
     state.capabilities = await api('GET', '/capabilities');
     renderCapabilities();
     initializePromptFields();
-    await Promise.all([loadAll({selectJobId: initialJobId}), loadTopicRuns()]);
+    await loadAll({selectJobId: initialJobId});
     resumeSelectedTask().catch((error) => notify(error.message, true));
-    const runningTopic = state.topicRuns.find(
-      (run) => run.status === 'running'
-        && run.created_by === state.capabilities?.actor?.username,
-    );
-    if (runningTopic) resumeTopicTask(runningTopic).catch((error) => notify(error.message, true));
   }
   catch (error) { notify(error.message, true); $('#system-status').classList.add('warning'); }
 }

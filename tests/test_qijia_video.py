@@ -51,6 +51,7 @@ from qijia_video.contracts import (
     VideoJob,
     VisualGenerationRequest,
     content_hash,
+    storyboard_review_hash,
     timestamp,
 )
 from qijia_video.errors import (
@@ -91,8 +92,11 @@ from qijia_video.infrastructure.script_providers import (
     _director_shot_plan_response_schema,
     _director_treatment_response_schema,
     _openrouter_completion_limit_key,
+    _SCRIPT_QUALITY_SCORE_KEYS,
     _validate_director_artifact,
+    _validated_review_payload,
 )
+from qijia_video.lazy_registry import LazyRegistryProxy
 from qijia_video.model_registry import (
     MODEL_REGISTRY_SOURCE,
     PRODUCTION_MODELS,
@@ -253,6 +257,7 @@ class PassingQualityChecker:
 class RecordingImageProvider(MockImageProvider):
     def __init__(self):
         self.reference_image_urls: list[str] = []
+        self.reference_image_batches: list[list[str]] = []
         self.prompts: list[str] = []
 
     async def generate(
@@ -261,17 +266,69 @@ class RecordingImageProvider(MockImageProvider):
         *,
         seed: int,
         reference_image_url: str = "",
+        reference_image_urls: list[str] | None = None,
     ):
-        self.reference_image_urls.append(reference_image_url)
+        references = list(reference_image_urls or [])
+        if reference_image_url and reference_image_url not in references:
+            references.insert(0, reference_image_url)
+        self.reference_image_urls.append(references[0] if references else "")
+        self.reference_image_batches.append(references)
         self.prompts.append(prompt)
         return await super().generate(
             prompt,
             seed=seed,
             reference_image_url=reference_image_url,
+            reference_image_urls=reference_image_urls,
         )
 
 
 class QijiaVideoContractTests(unittest.TestCase):
+    def test_legacy_registry_proxy_loads_once_on_first_use(self):
+        factory_calls: list[int] = []
+
+        class Registry:
+            value = "loaded"
+
+        def factory():
+            factory_calls.append(1)
+            return Registry()
+
+        proxy = LazyRegistryProxy(factory)
+        self.assertEqual(factory_calls, [])
+        self.assertIn("deferred", repr(proxy))
+        self.assertEqual(proxy.value, "loaded")
+        self.assertEqual(proxy.value, "loaded")
+        self.assertEqual(factory_calls, [1])
+        self.assertIn("loaded", repr(proxy))
+
+    def test_local_review_contract_rejects_incomplete_upstream_json(self):
+        payload = {
+            "verdict": "pass",
+            "quality_scores": {
+                key: 8 for key in _SCRIPT_QUALITY_SCORE_KEYS
+            },
+            "strengths": ["中心判断成立"],
+            "revision_requests": [{
+                "priority": "critical",
+                "issue": "终稿仍未回应输入",
+                "instruction": "重新建立中心判断",
+            }],
+            "factual_risks": [],
+            "preserve": [],
+        }
+
+        with self.assertRaisesRegex(
+            ProviderUnavailable,
+            "脚本终稿独立验收返回内容不符合质量审查契约",
+        ):
+            _validated_review_payload(
+                payload,
+                label="脚本终稿独立验收",
+                score_keys=_SCRIPT_QUALITY_SCORE_KEYS,
+                verdicts={"pass", "revise"},
+                include_script_fields=True,
+            )
+
     def test_openrouter_completion_limit_uses_gateway_standard_parameter(self):
         for model in (PRODUCTION_TEXT_MODEL, "test/model"):
             self.assertEqual(
@@ -1214,6 +1271,12 @@ class QijiaVideoContractTests(unittest.TestCase):
         }
         plan = StoryboardPlan.model_validate(payload)
         self.assertEqual(len(plan.shots), 3)
+        reviewed_hash = storyboard_review_hash(plan)
+        plan.shots[0].selected_candidate_id = "frame_shot_01_01"
+        plan.shots[0].selected_media_id = "upload_shot_01_01"
+        self.assertEqual(storyboard_review_hash(plan), reviewed_hash)
+        plan.shots[0].context.action = "改写了导演决定的主体动作"
+        self.assertNotEqual(storyboard_review_hash(plan), reviewed_hash)
 
         duplicate_event = json.loads(json.dumps(payload))
         duplicate_event['shots'][1]['context']['concrete_event'] = (
@@ -1396,6 +1459,38 @@ class SeedreamProviderContractTests(unittest.IsolatedAsyncioTestCase):
             item for item in requests if item.url.host == "media.volces.com"
         )
         self.assertNotIn("authorization", media_request.headers)
+
+    async def test_generate_preserves_ordered_reference_images(self):
+        reference_urls = [
+            "https://private.volces.com/original.png",
+            "https://private.volces.com/approved-style.png",
+        ]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            self.assertEqual(body["image"], reference_urls)
+            return httpx.Response(200, json={
+                "model": "doubao-seedream-5-0-lite-260128",
+                "data": [{
+                    "url": "https://media.volces.com/frame.png",
+                    "size": "1440x2560",
+                }],
+                "usage": {"total_tokens": 1234},
+            })
+
+        provider = SeedreamImageProvider(
+            api_key="test-key",
+            model="doubao-seedream-5-0-lite-260128",
+            base_url="https://ark.cn-beijing.volces.com/api/v3",
+            size="1440x2560",
+            allowed_download_hosts=(".volces.com",),
+            transport=httpx.MockTransport(handler),
+        )
+        await provider.generate(
+            "竖屏动画首帧",
+            seed=42,
+            reference_image_urls=reference_urls,
+        )
 
     async def test_ambiguous_image_submit_is_not_retried(self):
         calls = 0
@@ -2015,7 +2110,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(script.source_card_id, card.id)
         self.assertEqual(script.video_title, "真正重要的是判断标准")
 
-    async def test_openrouter_quality_script_uses_writer_critic_writer_calls(self):
+    async def test_openrouter_quality_script_reviews_the_final_rewrite(self):
         calls: list[dict] = []
 
         def script_payload(title: str, suffix: str = "") -> dict:
@@ -2064,6 +2159,18 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             "factual_risks": [],
             "preserve": ["开场判断"],
         }
+        final_review = {
+            **critique,
+            "verdict": "pass",
+            "quality_scores": {
+                **critique["quality_scores"],
+                "central_insight": 9,
+                "specificity": 8,
+            },
+            "strengths": ["终稿的中心判断与具体代价已经形成闭环"],
+            "revision_requests": [],
+            "preserve": ["终稿开场判断"],
+        }
 
         def handler(request: httpx.Request) -> httpx.Response:
             body = json.loads(request.content)
@@ -2071,6 +2178,8 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             schema_name = body["response_format"]["json_schema"]["name"]
             if schema_name == "qijia_script_critique_v1":
                 result = critique
+            elif schema_name == "qijia_script_final_review_v1":
+                result = final_review
             elif schema_name == "qijia_quality_script_final_v1":
                 result = script_payload("最终稿", "具体代价")
             else:
@@ -2101,10 +2210,10 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             "【用户原始创作请求｜原文】\n黄宗羲及这段话的思想力量",
         )
 
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         self.assertEqual(
             [item["reasoning"]["effort"] for item in calls],
-            ["xhigh", "high", "xhigh"],
+            ["xhigh", "high", "xhigh", "high"],
         )
         self.assertTrue(all(item["model"] == "deepseek/deepseek-v4-pro" for item in calls))
         self.assertTrue(all("models" not in item for item in calls))
@@ -2120,15 +2229,16 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "qijia_quality_script_draft_v1",
                 "qijia_script_critique_v1",
                 "qijia_quality_script_final_v1",
+                "qijia_script_final_review_v1",
             ],
         )
         self.assertNotIn("【硬性政策】", calls[0]["messages"][1]["content"])
         self.assertNotIn("H3 Prompt Adapter", calls[0]["messages"][1]["content"])
         self.assertEqual(script.video_title, "最终稿")
-        self.assertEqual(review.quality_scores["central_insight"], 8)
-        self.assertEqual(review.revision_requests, critique["revision_requests"])
+        self.assertEqual(review.quality_scores["central_insight"], 9)
+        self.assertEqual(review.revision_requests, [])
         self.assertEqual(review.input_hash, content_hash(script))
-        self.assertNotEqual(review.reviewed_draft_hash, content_hash(script))
+        self.assertEqual(review.reviewed_draft_hash, content_hash(script))
 
     async def test_openrouter_reports_truncated_json_with_the_exact_stage(self):
         def handler(_: httpx.Request) -> httpx.Response:
@@ -2605,6 +2715,21 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "references": [],
             },
         }
+        director_review = {
+            "verdict": "pass",
+            "quality_scores": {
+                "script_fidelity": 9,
+                "visual_thesis_execution": 8,
+                "event_specificity": 8,
+                "narrative_progression": 8,
+                "continuity": 8,
+                "camera_readability": 8,
+                "media_discipline": 9,
+                "producibility": 9,
+            },
+            "strengths": ["事件、调度与章节递进清楚"],
+            "revision_requests": [],
+        }
 
         def handler(request: httpx.Request) -> httpx.Response:
             body = json.loads(request.content)
@@ -2621,6 +2746,8 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             schema_name = body["response_format"]["json_schema"]["name"]
             if schema_name == "qijia_director_treatment_v3":
                 result = treatment_payload
+            elif schema_name == "qijia_director_review_v1":
+                result = director_review
             else:
                 result = {
                     "chapters": {
@@ -2658,14 +2785,18 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
         self.assertEqual(
             [item["reasoning"]["effort"] for item in calls],
-            ["xhigh", "xhigh"],
+            ["xhigh", "xhigh", "high"],
         )
         self.assertEqual(
             [item["response_format"]["json_schema"]["name"] for item in calls],
-            ["qijia_director_treatment_v3", "qijia_director_shot_plan_v3"],
+            [
+                "qijia_director_treatment_v3",
+                "qijia_director_shot_plan_v3",
+                "qijia_director_review_v1",
+            ],
         )
         first_schema = calls[0]["response_format"]["json_schema"]["schema"]
         second_schema = calls[1]["response_format"]["json_schema"]["schema"]
@@ -2713,6 +2844,11 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bible.director_skill_version, "2.1.0")
         self.assertEqual(assets.motion_grammar, ["单一动作链", "克制跟随"])
         self.assertEqual([shot.beat_ids for shot in plan.shots], groups)
+        self.assertTrue(plan.director_review.passed)
+        self.assertEqual(
+            plan.director_review.reviewed_plan_hash,
+            storyboard_review_hash(plan),
+        )
 
     async def test_quality_director_terms_403_is_not_retried_and_is_diagnosed(self):
         card = SourceCard(
@@ -2951,7 +3087,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 '{"code":0,"sequence":"not-a-number"}'
             )
 
-    async def test_tts_synthesizes_normal_script_once_and_keeps_one_audio_asset(self):
+    async def test_tts_measures_each_script_beat_and_keeps_one_audio_asset(self):
         provider = VolcengineTtsProvider(
             endpoint="https://openspeech.bytedance.com/api/v3/tts/unidirectional",
             resource_id="seed-tts-2.0",
@@ -2966,6 +3102,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
         script = await TemplateScriptProvider().generate(card)
         synthesized_texts: list[str] = []
+        measured_durations: list[float] = []
 
         async def synthesize_segment(text: str, path: Path, **options) -> float:
             synthesized_texts.append(text)
@@ -2976,20 +3113,35 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(options["speed_ratio"], 1.0)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"full-audio")
-            return 48.0
+            duration = 6.0 + len(synthesized_texts)
+            measured_durations.append(duration)
+            return duration
+
+        async def concat_segments(sources, destination, **options):
+            self.assertEqual(options["gap_seconds"], 0.0)
+            self.assertEqual(len(sources), len(script.beats))
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"joined-audio")
+            return destination
+
+        async def probe_duration(path):
+            self.assertEqual(path.read_bytes(), b"joined-audio")
+            return sum(measured_durations)
 
         provider._synthesize_segment = synthesize_segment
+        provider._concat_segments = concat_segments
+        provider._probe_duration = probe_duration
         with tempfile.TemporaryDirectory() as directory:
             manifest, generated = await provider.synthesize(script, Path(directory))
 
-        self.assertEqual(len(synthesized_texts), 1)
-        synthesized_without_spacing = "".join(synthesized_texts[0].split())
-        self.assertTrue(all(
-            "".join(
-                VolcengineTtsProvider._prepare_text(item.narration).split()
-            ) in synthesized_without_spacing
-            for item in script.beats
-        ))
+        self.assertEqual(len(synthesized_texts), len(script.beats))
+        self.assertEqual(
+            synthesized_texts,
+            [
+                VolcengineTtsProvider._prepare_text(item.narration)
+                for item in script.beats
+            ],
+        )
         self.assertEqual(len(generated), 1)
         self.assertEqual(generated[0].asset_id, "narration_full")
         self.assertEqual(
@@ -2997,6 +3149,10 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             {"narration_full"},
         )
         self.assertEqual(manifest.segments[0].start_seconds, 0.0)
+        self.assertEqual(
+            [item.duration_seconds for item in manifest.segments],
+            measured_durations,
+        )
         self.assertAlmostEqual(
             manifest.segments[-1].start_seconds
             + manifest.segments[-1].duration_seconds,
@@ -3513,7 +3669,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "insight-led-scriptwriter",
         )
         self.assertEqual(job.director_skill_snapshot.version, "2.1.0")
-        self.assertEqual(job.provider_adapter_snapshot.version, "2.0.0")
+        self.assertEqual(job.provider_adapter_snapshot.version, "2.1.0")
         self.assertEqual(job.generation_settings.seedance_model, SEEDANCE_BALANCED_MODEL)
 
         job = await self.service.generate_script(job.id, self.actor)
@@ -3523,6 +3679,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(job.editorial_plan)
         self.assertTrue(job.script_review.quality_scores)
         self.assertEqual(job.script_review.input_hash, job.script_hash)
+        self.assertEqual(
+            job.script_review.reviewed_draft_hash,
+            job.script_hash,
+        )
 
         job = await self.service.approve_script(
             job.id,
@@ -3541,6 +3701,10 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(job.visual_bible)
         self.assertIsNotNone(job.asset_bible)
         self.assertEqual(len(job.style_frame_candidates), 3)
+        self.assertEqual(
+            len({item.seed for item in job.style_frame_candidates}),
+            1,
+        )
         self.assertTrue(all(item.asset for item in job.style_frame_candidates))
         self.assertEqual(job.first_frame_candidates, [])
         self.assertEqual(job.visual_requests, [])
@@ -3585,6 +3749,75 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(
             value == selected_url
             for value in image_provider.reference_image_urls[3:]
+        ))
+
+    async def test_quality_first_reference_reaches_style_and_formal_seedream_requests(self):
+        reference_path = self.root / "quality-reference.png"
+        reference_path.write_bytes(MockImageProvider._PNG)
+        reference_asset = await self.storage.put_file(
+            object_key="qijia-video/reference-images/quality-test.png",
+            path=reference_path,
+            asset_id="quality_reference_image",
+            media_type="image/png",
+        )
+        image_provider = RecordingImageProvider()
+        self.service.image_provider = image_provider
+
+        job = await self.service.create_direct_job(
+            "黄宗羲，以及大丈夫行事论是非不论利害这段话，请解释它今天的力量。",
+            self.actor,
+            reference_assets=[reference_asset.model_dump(mode="json")],
+        )
+        job = await self.service.generate_script(job.id, self.actor)
+        job = await self.service.approve_script(
+            job.id,
+            job.revision,
+            job.script_hash,
+            self.actor,
+        )
+        job = await self.service.produce(job.id, self.actor)
+
+        original_url = await self.storage.signed_get_url(
+            reference_asset,
+            expires=21600,
+        )
+        self.assertEqual(
+            image_provider.reference_image_batches,
+            [[original_url], [original_url], [original_url]],
+        )
+        self.assertTrue(all(
+            "参考图 1（global_reference）" in prompt
+            for prompt in image_provider.prompts[:3]
+        ))
+
+        selected = job.style_frame_candidates[0]
+        job = await self.service.select_style_frame(
+            job.id,
+            selected.candidate_id,
+            job.revision,
+            self.actor,
+        )
+        job = await self.service.confirm_pre_generation_media(
+            job.id,
+            job.revision,
+            self.actor,
+        )
+        job = await self.service.produce(job.id, self.actor)
+
+        selected_url = await self.storage.signed_get_url(
+            selected.asset,
+            expires=21600,
+        )
+        formal_batches = image_provider.reference_image_batches[3:]
+        self.assertEqual(len(formal_batches), len(job.storyboard_plan.shots))
+        self.assertTrue(all(
+            batch == [original_url, selected_url]
+            for batch in formal_batches
+        ))
+        self.assertTrue(all(
+            "参考图 1（global_reference）" in prompt
+            and "参考图 2（approved_style_frame）" in prompt
+            for prompt in image_provider.prompts[3:]
         ))
 
     async def test_generic_source_card_requires_evidence_before_verification(self):
@@ -3698,7 +3931,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.provider_adapter_snapshot.adapter_id,
             "seedream-seedance",
         )
-        self.assertEqual(job.provider_adapter_snapshot.version, "2.0.0")
+        self.assertEqual(job.provider_adapter_snapshot.version, "2.1.0")
         self.assertEqual(
             job.visual_style_snapshot.style_id,
             "paper-collage-explainer",
@@ -3723,6 +3956,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         job = await self.service.generate_script(job.id, self.actor)
         self.assertIsNone(job.editorial_plan)
         self.assertIsNone(job.creative_brief)
+        self.assertEqual(job.script_review.input_hash, job.script_hash)
         compiled = self.service._storyboard_base_style(job)
         self.assertIn("【工作目标】", compiled)
         self.assertIn("已确认脚本", compiled)
@@ -3767,7 +4001,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertTrue(all(
             "最高且唯一视觉基准" in item.prompt
-            and "八秒内只完成这一条动作链" in item.prompt
+            and f"{item.duration_seconds} 秒内只完成这一条动作链" in item.prompt
             and "【Director Skill 动态语言】" not in item.prompt
             for item in job.visual_requests
         ))
@@ -6154,6 +6388,15 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"]["module"], "qijia_video")
         self.assertEqual(response.json()["data"]["pipeline_version"], "v4")
+        capabilities = response.json()["data"]
+        self.assertEqual(
+            capabilities["script_generation_ready"],
+            not capabilities["script_missing_configuration"],
+        )
+        self.assertEqual(
+            capabilities["reference_upload_ready"],
+            not capabilities["reference_upload_missing_configuration"],
+        )
         self.assertNotIn("mock", response.json()["data"]["script_provider"])
         self.assertNotIn("mock", response.json()["data"]["tts_provider"])
         self.assertNotIn("mock", response.json()["data"]["video_provider"])
@@ -6208,9 +6451,10 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         self.assertEqual(
             openrouter_pricing["director_after_script_approval"],
             {
-                "request_count": 2,
-                "input_token_range": [12000, 80000],
-                "output_token_range": [24000, 192000],
+                "request_count": 3,
+                "request_count_range": [3, 5],
+                "input_token_range": [18000, 240000],
+                "output_token_range": [26000, 368000],
             },
         )
         self.assertIn("usage.cost", openrouter_pricing["basis"])

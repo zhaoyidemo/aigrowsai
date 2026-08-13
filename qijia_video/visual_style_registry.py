@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from qijia_video.lazy_registry import LazyRegistryProxy
+
 from qijia_video.contracts import (
     DEFAULT_PROMPT_WRITING_PROFILE_ID,
     DEFAULT_VISUAL_STYLE_ID,
@@ -456,4 +458,6 @@ class PromptWritingProfileRegistry:
 
 
 default_visual_style_registry = VisualStyleRegistry.load()
-default_prompt_writing_profile_registry = PromptWritingProfileRegistry.load()
+default_prompt_writing_profile_registry = LazyRegistryProxy(
+    PromptWritingProfileRegistry.load
+)
