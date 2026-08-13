@@ -52,6 +52,7 @@ DIRECTOR_PROMPT_VERSION = 'qijia_director_v13_shot_context_ir'
 DIRECTOR_V3_PROMPT_VERSION = 'qijia_director_v20_concrete_event'
 DIRECTOR_QUALITY_PROMPT_VERSION = 'qijia_director_v33_domain_contract'
 OPENROUTER_REASONING_EFFORT = "high"
+OPENROUTER_REQUEST_TIMEOUT_SECONDS = 600.0
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 STORYBOARD_MAX_COMPLETION_TOKENS = 128_000
 UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
@@ -1541,7 +1542,7 @@ class OpenRouterScriptProvider:
         base_url: str,
         model: str,
         transport: httpx.AsyncBaseTransport | None = None,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float = OPENROUTER_REQUEST_TIMEOUT_SECONDS,
     ):
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "https://openrouter.ai/api").strip()
@@ -2767,7 +2768,7 @@ class OpenRouterStoryboardProvider:
         base_url: str,
         model: str,
         transport: httpx.AsyncBaseTransport | None = None,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float = OPENROUTER_REQUEST_TIMEOUT_SECONDS,
     ):
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "https://openrouter.ai/api").strip()

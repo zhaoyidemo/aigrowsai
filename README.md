@@ -6,9 +6,9 @@
 
 ## v4 职责边界
 
-- Script Skill：`insight-led-scriptwriter@1.1.0` 直接读取原始请求与用户材料。`deepseek/deepseek-v4-flash` 先以 `xhigh` 写初稿，再以独立上下文 `high` 审稿，最后由同一主编以 `xhigh` 重写；唯一业务交付是 `ScriptDraft`，不包含视觉决策。
-- Director Skill：脚本人工确认且 TTS 完成后，`animated-explainer@2.1.0` 固定使用 `deepseek/deepseek-v4-flash xhigh` 分两次调用。第一阶段锁定 `DirectorTreatment + VisualBible + AssetBible` 以及合法章节数量，第二阶段通过固定的 `chapter_01...chapter_N` 槽位生成 `StoryboardPlan + ShotContextIR`，不得重新增减章节。人类可读的 Skill 文档、来源说明与媒体平台语法不会进入模型请求；运行时只编译创作规则、视觉风格、脚本、真实时长和可选参考图。任何 403 都在原模型调用处终止，不通过切换模型掩盖。
-- OpenRouter 传输层：脚本、导演和选题编辑只发送单一 `deepseek/deepseek-v4-flash` 模型请求，不携带 `models` 备用列表。完成长度使用该模型通过 OpenRouter 声明支持的 `max_tokens`；结构化输出直接依赖模型端严格 JSON Schema。
+- Script Skill：`insight-led-scriptwriter@1.1.0` 直接读取原始请求与用户材料。`deepseek/deepseek-v4-pro` 先以 `xhigh` 写初稿，再以独立上下文 `high` 审稿，最后由同一主编以 `xhigh` 重写；唯一业务交付是 `ScriptDraft`，不包含视觉决策。
+- Director Skill：脚本人工确认且 TTS 完成后，`animated-explainer@2.1.0` 固定使用 `deepseek/deepseek-v4-pro xhigh` 分两次调用。第一阶段锁定 `DirectorTreatment + VisualBible + AssetBible` 以及合法章节数量，第二阶段通过固定的 `chapter_01...chapter_N` 槽位生成 `StoryboardPlan + ShotContextIR`，不得重新增减章节。人类可读的 Skill 文档、来源说明与媒体平台语法不会进入模型请求；运行时只编译创作规则、视觉风格、脚本、真实时长和可选参考图。任何 403 都在原模型调用处终止，不通过切换模型掩盖。
+- OpenRouter 传输层：脚本、导演和选题编辑只发送单一 `deepseek/deepseek-v4-pro` 模型请求，不携带 `models` 备用列表。完成长度使用该模型通过 OpenRouter 声明支持的 `max_tokens`；结构化输出直接依赖模型端严格 JSON Schema。
 - Visual Style：三套风格只定义资产、材质、造型、色彩、构图、运动语法和验收标准，不选择论点，也不改写导演事件。
 - H3 Provider Adapter：只在脚本与导演之后工作，把参考图职责整理为多模态 Context IR，并把冻结的导演产物编译为 Seedream/Seedance 自然语言提示词；不参与脚本创作。
 - 媒体生产：先生成三张视觉开发样片，由编辑锁定一张，再为未上传自有素材的章节调用 Seedream 5 Lite 和测试期默认 Seedance 1.5 Pro。样片确认是正式批量生成前唯一新增的人工质量门。
@@ -111,7 +111,7 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 
 报表只显示人民币，“已计成本”统一计算为：`供应商回传金额 + 有计价依据的估算`。所有原始 USD 成本固定按 `1 USD = ¥6.7` 换算，底层账本仍保存供应商原始币种和金额，便于对账。供应商未回传金额、Token 缺失或网络结果未知的调用显示为“待对账”，不会按 0 元伪装成完整成本。页面提供团队效果、10 倍目标进度、视频排行、时间趋势、供应商、生产阶段、创建人、每项内容、最近调用明细，以及成本与效果两份 CSV 导出。
 
-默认估算依据为 TikHub 选题研究及短链解析 `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、TikHub 抖音效果回流 `$0.002/成功请求`（`¥0.0134/成功请求`）、Seedream `¥0.22/张`、Seedance 1.0 Pro Fast 无声视频 `¥4.2/百万 tokens`、Seedance 1.5 Pro 无声视频 `¥8/百万 tokens`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。OpenRouter 的供应商响应金额同样按固定汇率换算。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) 和[火山引擎豆包大模型计价](https://www.volcengine.com/product/doubao/)为准。
+默认估算依据为 TikHub 选题研究及短链解析 `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、TikHub 抖音效果回流 `$0.002/成功请求`（`¥0.0134/成功请求`）、DeepSeek V4 Pro 目录价 `$0.435/百万输入 tokens + $0.87/百万输出 tokens`、Seedream `¥0.22/张`、Seedance 1.0 Pro Fast 无声视频 `¥4.2/百万 tokens`、Seedance 1.5 Pro 无声视频 `¥8/百万 tokens`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。脚本确认页使用三次已发生脚本调用的真实 `usage.cost`，并补入尚未执行的两次 Director token 区间预估；画面用量卡同时计入 3 张视觉样片、所有正式首帧及全部 Seedance 版本。OpenRouter 实际上游价格可能不同，发生后始终以响应 `usage.cost` 取代目录价判断。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) 和[火山引擎豆包大模型计价](https://www.volcengine.com/product/doubao/)为准。
 
 范围刻意只包含模型与数据 API，不包含 Railway、TOS、带宽、人工、税费和购买积分手续费。账本上线前的脚本与分镜没有持久化 OpenRouter `usage`，无法可靠反推；历史图片、视频和语音仅在有保存产物或 Token 时按当前配置补算，并明确标记为历史估算。
 

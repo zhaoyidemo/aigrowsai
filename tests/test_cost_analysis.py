@@ -15,6 +15,7 @@ from qijia_video.contracts import (
     SEEDANCE_BALANCED_MODEL,
     SEEDANCE_EFFICIENT_MODEL,
     SEEDANCE_FLAGSHIP_MODEL,
+    StyleFrameCandidate,
     VideoJob,
 )
 from qijia_video.cost_analysis import (
@@ -433,6 +434,14 @@ class CostAnalysisTests(unittest.TestCase):
     def test_historical_artifacts_use_current_price_only_when_snapshot_is_missing(self):
         job = video_job(
             usage_records=[],
+            style_frame_candidates=[StyleFrameCandidate(
+                candidate_id="style_frame_01",
+                variant=1,
+                prompt="克制的纸张拼贴视觉样片",
+                seed=1,
+                model_id="doubao-seedream-5-0-lite-260128",
+                created_at=NOW_TEXT,
+            )],
             first_frame_candidates=[FirstFrameCandidate(
                 candidate_id="frame_shot_01_01",
                 shot_id="shot_01",
@@ -473,7 +482,16 @@ class CostAnalysisTests(unittest.TestCase):
             tts_price_per_10000_characters=5,
         )
 
-        self.assertAlmostEqual(result["summary"]["estimated_cny"], 4.822)
+        self.assertAlmostEqual(result["summary"]["estimated_cny"], 5.042)
+        self.assertEqual(
+            {row["stage"] for row in result["events"]},
+            {
+                "seedream_style_frame",
+                "seedream_image",
+                "seedance_video",
+                "tts_synthesis",
+            },
+        )
         self.assertTrue(all(
             row["valuation"] == "estimated_current_price"
             for row in result["events"]

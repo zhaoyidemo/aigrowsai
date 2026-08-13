@@ -238,51 +238,58 @@ def _job_events(
     }
     fallback_time = _parse_time(job.updated_at or job.created_at)
 
-    for candidate in job.first_frame_candidates:
-        key = ("seedream_image", candidate.candidate_id)
-        if key in recorded:
-            continue
-        snapshot = candidate.estimated_cost_cny
-        production_provider = not _is_mock_provider(candidate.model_id)
-        amount = (
-            _number(snapshot)
-            if snapshot is not None
-            else _number(seedream_price_per_image)
-        )
-        priced = production_provider and (
-            snapshot is not None or seedream_price_per_image > 0
-        )
-        events.append(CostEvent(
-            event_id=f"legacy_seedream_{job.id}_{candidate.candidate_id}",
-            scope_type="video_job",
-            scope_id=job.id,
-            title=_job_title(job),
-            creator=job.created_by or "未知",
-            scope_status=job.state.value,
-            occurred_at=_parse_time(candidate.created_at, fallback_time),
-            stage="seedream_image",
-            provider="volcengine-seedream",
-            model_id=candidate.model_id,
-            request_id=candidate.candidate_id,
-            total_tokens=candidate.usage_total_tokens,
-            quantity=1,
-            unit="image",
-            estimated_cny=amount if priced else 0,
-            priced=priced,
-            valuation=(
-                "unpriced"
-                if not priced
-                else "estimated_snapshot"
+    image_artifacts = (
+        ("seedream_style_frame", job.style_frame_candidates),
+        ("seedream_image", job.first_frame_candidates),
+    )
+    for operation, candidates in image_artifacts:
+        for candidate in candidates:
+            key = (operation, candidate.candidate_id)
+            if key in recorded:
+                continue
+            snapshot = candidate.estimated_cost_cny
+            production_provider = not _is_mock_provider(candidate.model_id)
+            amount = (
+                _number(snapshot)
                 if snapshot is not None
-                else "estimated_current_price"
-            ),
-            note=(
-                "测试 Provider 不计入生产费用"
-                if not production_provider
-                else candidate.pricing_basis
-                or "历史图片按当前配置刊例价补算；火山方舟账单优先"
-            ),
-        ))
+                else _number(seedream_price_per_image)
+            )
+            priced = production_provider and (
+                snapshot is not None or seedream_price_per_image > 0
+            )
+            events.append(CostEvent(
+                event_id=(
+                    f"legacy_{operation}_{job.id}_{candidate.candidate_id}"
+                ),
+                scope_type="video_job",
+                scope_id=job.id,
+                title=_job_title(job),
+                creator=job.created_by or "未知",
+                scope_status=job.state.value,
+                occurred_at=_parse_time(candidate.created_at, fallback_time),
+                stage=operation,
+                provider="volcengine-seedream",
+                model_id=candidate.model_id,
+                request_id=candidate.candidate_id,
+                total_tokens=candidate.usage_total_tokens,
+                quantity=1,
+                unit="image",
+                estimated_cny=amount if priced else 0,
+                priced=priced,
+                valuation=(
+                    "unpriced"
+                    if not priced
+                    else "estimated_snapshot"
+                    if snapshot is not None
+                    else "estimated_current_price"
+                ),
+                note=(
+                    "测试 Provider 不计入生产费用"
+                    if not production_provider
+                    else candidate.pricing_basis
+                    or "历史图片按当前配置刊例价补算；火山方舟账单优先"
+                ),
+            ))
 
     versions_by_task = {
         item.task.provider_task_id: item.created_at

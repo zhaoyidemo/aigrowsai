@@ -325,7 +325,7 @@ class OpenRouterTopicEditor:
                 },
             ],
             "reasoning": {"effort": "high", "exclude": True},
-            # DeepSeek V4 Flash advertises max_tokens through OpenRouter's
+            # DeepSeek V4 Pro advertises max_tokens through OpenRouter's
             # user-scoped model metadata.
             "max_tokens": 6000,
             "response_format": {

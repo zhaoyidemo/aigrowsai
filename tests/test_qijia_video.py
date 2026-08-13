@@ -79,6 +79,7 @@ from qijia_video.infrastructure.mock_providers import (
 )
 from qijia_video.infrastructure.script_providers import (
     OPENROUTER_REASONING_EFFORT,
+    OPENROUTER_REQUEST_TIMEOUT_SECONDS,
     OpenRouterScriptProvider,
     OpenRouterStoryboardProvider,
     SCRIPT_MAX_COMPLETION_TOKENS,
@@ -2060,7 +2061,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 result = script_payload("初稿")
             return httpx.Response(200, json={
                 "id": f"request-{len(calls)}",
-                "model": "deepseek/deepseek-v4-flash",
+                "model": "deepseek/deepseek-v4-pro",
                 "choices": [{"message": {"content": json.dumps(
                     result, ensure_ascii=False
                 )}}],
@@ -2069,7 +2070,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         provider = OpenRouterScriptProvider(
             api_key="test-key",
             base_url="https://openrouter.ai/api",
-            model="deepseek/deepseek-v4-flash",
+            model="deepseek/deepseek-v4-pro",
             transport=httpx.MockTransport(handler),
         )
         card = SourceCard(
@@ -2089,7 +2090,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             [item["reasoning"]["effort"] for item in calls],
             ["xhigh", "high", "xhigh"],
         )
-        self.assertTrue(all(item["model"] == "deepseek/deepseek-v4-flash" for item in calls))
+        self.assertTrue(all(item["model"] == "deepseek/deepseek-v4-pro" for item in calls))
         self.assertTrue(all("models" not in item for item in calls))
         self.assertTrue(all("tools" not in item for item in calls))
         self.assertTrue(all("plugins" not in item for item in calls))
@@ -2617,7 +2618,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 }
             return httpx.Response(200, json={
                 "id": f"director-{len(calls)}",
-                "model": "deepseek/deepseek-v4-flash",
+                "model": "deepseek/deepseek-v4-pro",
                 "choices": [{"message": {"content": json.dumps(
                     result, ensure_ascii=False
                 )}}],
@@ -2626,7 +2627,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         provider = OpenRouterStoryboardProvider(
             api_key="test-key",
             base_url="https://openrouter.ai/api",
-            model="deepseek/deepseek-v4-flash",
+            model="deepseek/deepseek-v4-pro",
             transport=httpx.MockTransport(handler),
         )
 
@@ -2714,12 +2715,12 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             if request.method == "GET":
                 self.assertEqual(request.url.path, "/api/v1/models/user")
                 return httpx.Response(200, json={
-                    "data": [{"id": "deepseek/deepseek-v4-flash"}],
+                    "data": [{"id": "deepseek/deepseek-v4-pro"}],
                 })
             body = json.loads(request.content)
             self.assertEqual(request.headers["X-OpenRouter-Metadata"], "enabled")
             if len(calls) == 1:
-                self.assertEqual(body["model"], "deepseek/deepseek-v4-flash")
+                self.assertEqual(body["model"], "deepseek/deepseek-v4-pro")
                 return httpx.Response(
                     403,
                     headers={
@@ -2741,7 +2742,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                             },
                         },
                         "openrouter_metadata": {
-                            "requested": "deepseek/deepseek-v4-flash",
+                            "requested": "deepseek/deepseek-v4-pro",
                             "region": "sin",
                             "summary": "available=1",
                             "attempt": 0,
@@ -2749,7 +2750,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                                 "total": 1,
                                 "available": [{
                                     "provider": "DeepSeek",
-                                    "model": "deepseek/deepseek-v4-flash",
+                                    "model": "deepseek/deepseek-v4-pro",
                                     "selected": False,
                                 }],
                             },
@@ -2764,7 +2765,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         provider = OpenRouterStoryboardProvider(
             api_key="test-key",
             base_url="https://openrouter.ai/api",
-            model="deepseek/deepseek-v4-flash",
+            model="deepseek/deepseek-v4-pro",
             transport=httpx.MockTransport(handler),
         )
         with self.assertRaises(ProviderUnavailable) as caught:
@@ -2831,7 +2832,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         provider = OpenRouterStoryboardProvider(
             api_key="test-key",
             base_url="https://openrouter.ai/api",
-            model="deepseek/deepseek-v4-flash",
+            model="deepseek/deepseek-v4-pro",
             transport=httpx.MockTransport(handler),
         )
         with self.assertRaises(ProviderUnavailable) as caught:
@@ -6105,7 +6106,8 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             loaded = QijiaVideoSettings(_env_file=None)
         self.assertFalse(hasattr(loaded, "QIJIA_VIDEO_SCRIPT_MODEL"))
         self.assertFalse(hasattr(loaded, "QIJIA_VIDEO_SEEDANCE_MODEL"))
-        self.assertEqual(PRODUCTION_TEXT_MODEL, "deepseek/deepseek-v4-flash")
+        self.assertEqual(PRODUCTION_TEXT_MODEL, "deepseek/deepseek-v4-pro")
+        self.assertEqual(OPENROUTER_REQUEST_TIMEOUT_SECONDS, 600.0)
         self.assertEqual(
             {
                 PRODUCTION_MODELS.script,
@@ -6182,6 +6184,20 @@ class QijiaVideoPermissionTests(unittest.TestCase):
             response.json()["data"]["seedance_pricing"]["default_model"],
             SEEDANCE_BALANCED_MODEL,
         )
+        openrouter_pricing = response.json()["data"]["openrouter_pricing"]
+        self.assertEqual(openrouter_pricing["model"], PRODUCTION_TEXT_MODEL)
+        self.assertEqual(openrouter_pricing["input_usd_per_million_tokens"], 0.435)
+        self.assertEqual(openrouter_pricing["output_usd_per_million_tokens"], 0.87)
+        self.assertEqual(openrouter_pricing["usd_to_cny_rate"], 6.7)
+        self.assertEqual(
+            openrouter_pricing["director_after_script_approval"],
+            {
+                "request_count": 2,
+                "input_token_range": [12000, 80000],
+                "output_token_range": [24000, 192000],
+            },
+        )
+        self.assertIn("usage.cost", openrouter_pricing["basis"])
         self.assertNotIn(
             "seedance_prompt",
             response.json()["data"]["generation_defaults"],

@@ -520,6 +520,14 @@ function taskSeedanceCost(task) {
   return tokens && rate ? tokens * rate / 1000000 : 0;
 }
 
+function generatedImageCost(candidate, currentRate) {
+  const snapshot = candidate?.estimated_cost_cny;
+  if (snapshot !== null && snapshot !== undefined && Number.isFinite(Number(snapshot))) {
+    return Math.max(0, Number(snapshot));
+  }
+  return Math.max(0, Number(currentRate) || 0);
+}
+
 function updateProductionSpecSummary() {
   const node = $('#production-spec-summary');
   if (!node) return;
@@ -1551,6 +1559,15 @@ function shotStatus(task, hasPreview) {
 function renderSeedanceUsage(job) {
   const section = $('#seedance-usage-summary');
   const requests = job?.visual_requests || [];
+  const visualOperations = new Set([
+    'seedream_style_frame', 'seedream_image', 'seedance_video',
+  ]);
+  const visualRecords = (job?.usage_records || []).filter(
+    (record) => visualOperations.has(record.operation),
+  );
+  const styleFrames = (job?.style_frame_candidates || []).filter(
+    (candidate) => candidate.asset,
+  );
   const firstFrames = (job?.first_frame_candidates || []).filter(
     (candidate) => candidate.asset,
   );
@@ -1567,7 +1584,11 @@ function renderSeedanceUsage(job) {
     );
   }
   const tasks = [...attempts.values()];
-  section.hidden = requests.length === 0 && tasks.length === 0 && firstFrames.length === 0;
+  section.hidden = requests.length === 0
+    && tasks.length === 0
+    && styleFrames.length === 0
+    && firstFrames.length === 0
+    && visualRecords.length === 0;
   if (section.hidden) return;
 
   const totalTokens = tasks.reduce(
@@ -1579,11 +1600,48 @@ function renderSeedanceUsage(job) {
     0,
     Number(state.capabilities?.seedream_pricing?.yuan_per_image) || 0,
   );
-  const seedanceCost = tasks.reduce(
-    (total, task) => total + taskSeedanceCost(task),
+  const pricedRecordKeys = new Set(
+    visualRecords
+      .filter((record) => usageRecordCostCny(record) !== null && record.request_id)
+      .map((record) => `${record.operation}:${record.request_id}`),
+  );
+  const recordedCostFor = (operation) => visualRecords
+    .filter((record) => record.operation === operation)
+    .reduce((total, record) => total + (usageRecordCostCny(record) || 0), 0);
+  const unrecordedStyleFrameCost = styleFrames.reduce(
+    (total, candidate) => total + (
+      pricedRecordKeys.has(`seedream_style_frame:${candidate.candidate_id}`)
+        ? 0
+        : generatedImageCost(candidate, imageRate)
+    ),
     0,
   );
-  const seedreamCost = firstFrames.length * imageRate;
+  const unrecordedFirstFrameCost = firstFrames.reduce(
+    (total, candidate) => total + (
+      pricedRecordKeys.has(`seedream_image:${candidate.candidate_id}`)
+        ? 0
+        : generatedImageCost(candidate, imageRate)
+    ),
+    0,
+  );
+  const unrecordedSeedanceCost = tasks.reduce(
+    (total, task) => total + (
+      pricedRecordKeys.has(`seedance_video:${task.provider_task_id}`)
+        ? 0
+        : taskSeedanceCost(task)
+    ),
+    0,
+  );
+  const styleFrameCost = recordedCostFor('seedream_style_frame')
+    + unrecordedStyleFrameCost;
+  const firstFrameCost = recordedCostFor('seedream_image')
+    + unrecordedFirstFrameCost;
+  const seedanceCost = recordedCostFor('seedance_video')
+    + unrecordedSeedanceCost;
+  const knownVisualCost = styleFrameCost + firstFrameCost + seedanceCost;
+  const unpricedVisualCount = visualRecords.filter(
+    (record) => usageRecordCostCny(record) === null,
+  ).length;
   const firstRequest = requests[0];
   const durations = requests.map((request) => Number(request.duration_seconds) || 0).filter(Boolean);
   const minDuration = durations.length ? Math.min(...durations) : 0;
@@ -1594,17 +1652,20 @@ function renderSeedanceUsage(job) {
   $('#seedance-token-total').textContent = totalTokens
     ? `${formatTokens(totalTokens)} tokens`
     : '等待方舟返回';
-  $('#seedance-cost-estimate').textContent = seedanceCost || seedreamCost
-    ? `约 ¥${(seedanceCost + seedreamCost).toFixed(2)}`
-    : '—';
+  $('#seedance-cost-estimate').textContent = knownVisualCost
+    ? `约 ¥${knownVisualCost.toFixed(2)}${unpricedVisualCount ? ` + ${unpricedVisualCount} 笔待对账` : ''}`
+    : unpricedVisualCount ? `${unpricedVisualCount} 笔待对账` : '—';
   $('#seedance-spec').textContent = firstRequest
-    ? `${firstFrames.length} 张首帧 · ${requests.length} 段视频 · ${durationLabel} · ${firstRequest.resolution} · ${seedanceModelInfo(seedanceModelForRequest(job, firstRequest))?.short_label || 'Seedance'}`
-    : `${firstFrames.length} 张首帧 · ${tasks.length} 个镜头`;
-  $('#seedance-usage-status').textContent = `首帧 ${firstFrames.length} 张 · Seedance 累计 ${tasks.length} 次 · tokens 已记录 ${recordedCount}/${tasks.length}`;
-  const frameUsage = firstFrames.length
-    ? `<div class="usage-row"><span>Seedream 首帧 · ${firstFrames.length} 张</span><span>${imageRate ? `约 ¥${seedreamCost.toFixed(2)}` : '已生成'}</span></div>`
+    ? `${styleFrames.length} 张视觉样片 · ${firstFrames.length} 张正式首帧 · ${requests.length} 段视频 · ${durationLabel} · ${firstRequest.resolution} · ${seedanceModelInfo(seedanceModelForRequest(job, firstRequest))?.short_label || 'Seedance'}`
+    : `${styleFrames.length} 张视觉样片 · ${firstFrames.length} 张正式首帧 · ${tasks.length} 个视频版本`;
+  $('#seedance-usage-status').textContent = `视觉样片 ${styleFrames.length} 张 · 正式首帧 ${firstFrames.length} 张 · Seedance 累计 ${tasks.length} 次 · tokens 已记录 ${recordedCount}/${tasks.length}${unpricedVisualCount ? ` · ${unpricedVisualCount} 笔待对账` : ''}`;
+  const styleFrameUsage = styleFrames.length
+    ? `<div class="usage-row"><span>Seedream 视觉样片 · ${styleFrames.length} 张</span><span>${styleFrameCost ? `约 ¥${styleFrameCost.toFixed(2)}` : '已生成'}</span></div>`
     : '';
-  $('#seedance-usage-list').innerHTML = frameUsage + requests.map((request) => {
+  const firstFrameUsage = firstFrames.length
+    ? `<div class="usage-row"><span>Seedream 正式首帧 · ${firstFrames.length} 张</span><span>${firstFrameCost ? `约 ¥${firstFrameCost.toFixed(2)}` : '已生成'}</span></div>`
+    : '';
+  $('#seedance-usage-list').innerHTML = styleFrameUsage + firstFrameUsage + requests.map((request) => {
     const chapterIndex = (job.storyboard_plan?.shots || []).findIndex(
       (shot) => shot.shot_id === request.request_id,
     );
@@ -1633,6 +1694,7 @@ function renderSeedanceUsage(job) {
   $('#seedance-price-basis').textContent = [
     state.capabilities?.seedream_pricing?.basis,
     state.capabilities?.seedance_pricing?.basis,
+    '此处只汇总 Seedream 与 Seedance；脚本、Director 和 TTS 计入任务总账。',
   ].filter(Boolean).join('；');
 }
 
@@ -2254,6 +2316,45 @@ function usageRecordCostCny(record) {
   return null;
 }
 
+function pendingDirectorCostRange(job) {
+  if (job?.pipeline_version !== 'v4' || job?.storyboard_plan) return null;
+  const pricing = state.capabilities?.openrouter_pricing || {};
+  const estimate = pricing.director_after_script_approval || {};
+  const inputRange = Array.isArray(estimate.input_token_range)
+    ? estimate.input_token_range.map(Number)
+    : [];
+  const outputRange = Array.isArray(estimate.output_token_range)
+    ? estimate.output_token_range.map(Number)
+    : [];
+  const inputRate = Number(pricing.input_usd_per_million_tokens);
+  const outputRate = Number(pricing.output_usd_per_million_tokens);
+  const exchangeRate = Number(pricing.usd_to_cny_rate);
+  if (
+    inputRange.length !== 2
+    || outputRange.length !== 2
+    || !inputRange.every(Number.isFinite)
+    || !outputRange.every(Number.isFinite)
+    || !Number.isFinite(inputRate)
+    || !Number.isFinite(outputRate)
+    || !Number.isFinite(exchangeRate)
+    || inputRate < 0
+    || outputRate < 0
+    || exchangeRate <= 0
+  ) return null;
+  const cost = (inputTokens, outputTokens) => (
+    (inputTokens * inputRate + outputTokens * outputRate)
+    / 1000000
+    * exchangeRate
+  );
+  return {
+    low: cost(inputRange[0], outputRange[0]),
+    high: cost(inputRange[1], outputRange[1]),
+    requestCount: Math.max(0, Number(estimate.request_count) || 0),
+    model: String(pricing.model || ''),
+    basis: String(pricing.basis || ''),
+  };
+}
+
 function renderScriptCostEstimate(job) {
   const totalNode = $('#script-cost-total');
   const breakdownNode = $('#script-cost-breakdown');
@@ -2288,13 +2389,19 @@ function renderScriptCostEstimate(job) {
   const videoHigh = reusesVisuals ? 0 : counts.videoCount * (
     estimatedSeedanceCost({...requestBase, duration_seconds: 10}, modelId) || 0
   );
-  const low = incurred + ttsCost + imageCost + videoLow;
-  const high = incurred + ttsCost + imageCost + videoHigh;
+  const directorCost = pendingDirectorCostRange(job);
+  const directorLow = directorCost?.low || 0;
+  const directorHigh = directorCost?.high || 0;
+  const low = incurred + directorLow + ttsCost + imageCost + videoLow;
+  const high = incurred + directorHigh + ttsCost + imageCost + videoHigh;
   totalNode.textContent = Math.abs(high - low) < 0.005
     ? `约 ${formatCny(high)}`
     : `约 ${formatCny(low)}–${formatCny(high)}`;
   breakdownNode.textContent = [
     `已发生且可计价 ${formatCny(incurred)}`,
+    directorCost
+      ? `待执行 Director ${directorCost.requestCount} 次（${directorCost.model || 'OpenRouter'}）约 ${formatCny(directorLow)}–${formatCny(directorHigh)}`
+      : '',
     `完整旁白 ${characterCount} 字约 ${formatCny(ttsCost)}`,
     reusesVisuals
       ? '现有画面直接复用'
@@ -2305,9 +2412,13 @@ function renderScriptCostEstimate(job) {
   ].filter(Boolean).join(' · ');
   basisNode.textContent = [
     '这是整单刊例价区间，不是新增确认门槛；最终按真实旁白、视频时长和供应商账单核算。',
-    job.pipeline_version !== 'v4' && $('#prepare-media-first')?.checked
-      ? '你已选择先安排自有素材，上传后未生成的 AI 画面会从实际费用中扣除。'
-      : '',
+    directorCost?.basis || '',
+    job.pipeline_version === 'v4'
+      ? '这是首版上限口径；后续使用自有素材会扣除未执行的对应 AI 画面，主动重生成的新版本按实际次数另计。'
+      : $('#prepare-media-first')?.checked
+        ? '你已选择先安排自有素材，上传后未生成的 AI 画面会从实际费用中扣除。'
+        : '',
+    '范围仅含模型与数据 API，不含 Railway、TOS、带宽、人工、税费或积分手续费。',
     unpricedCount ? `${unpricedCount} 条调用没有可用价格，未计入区间。` : '',
   ].filter(Boolean).join(' ');
 }

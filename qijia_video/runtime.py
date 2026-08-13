@@ -38,6 +38,11 @@ from qijia_video.infrastructure.video_providers import SeedanceVideoProvider
 from qijia_video.model_registry import (
     MODEL_REGISTRY_SOURCE,
     PRODUCTION_MODELS,
+    PRODUCTION_TEXT_INPUT_USD_PER_MILLION,
+    PRODUCTION_TEXT_OUTPUT_USD_PER_MILLION,
+    QUALITY_DIRECTOR_INPUT_TOKEN_RANGE,
+    QUALITY_DIRECTOR_OUTPUT_TOKEN_RANGE,
+    QUALITY_DIRECTOR_REQUEST_COUNT,
     model_display_name,
 )
 from qijia_video.settings import settings
@@ -364,6 +369,30 @@ class QijiaVideoRuntime:
             "video_model": configured_seedance_model,
             "tts_model": self.tts_provider.resource_id,
             "runtime_models": runtime_models,
+            "openrouter_pricing": {
+                "currency": "USD",
+                "model": self.storyboard_provider.model,
+                "input_usd_per_million_tokens": (
+                    PRODUCTION_TEXT_INPUT_USD_PER_MILLION
+                ),
+                "output_usd_per_million_tokens": (
+                    PRODUCTION_TEXT_OUTPUT_USD_PER_MILLION
+                ),
+                "director_after_script_approval": {
+                    "request_count": QUALITY_DIRECTOR_REQUEST_COUNT,
+                    "input_token_range": list(
+                        QUALITY_DIRECTOR_INPUT_TOKEN_RANGE
+                    ),
+                    "output_token_range": list(
+                        QUALITY_DIRECTOR_OUTPUT_TOKEN_RANGE
+                    ),
+                },
+                "usd_to_cny_rate": USD_TO_CNY_RATE,
+                "basis": (
+                    "按 OpenRouter 模型目录公开价和两阶段 Director 的预期/上限 "
+                    "token 区间预估；实际调用以响应 usage.cost 为准，上游路由价格可能不同"
+                ),
+            },
             "knowledge_mode": "model_knowledge",
             "external_retrieval": False,
             "storyboard_provider": self.storyboard_provider.name,

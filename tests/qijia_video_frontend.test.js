@@ -378,12 +378,18 @@ test('Seedance usage and estimated cost are visible per job', () => {
   assert.match(app, /usage_total_tokens/);
   assert.match(app, /yuan_per_million_tokens/);
   assert.match(app, /yuan_per_image/);
-  assert.match(app, /Seedream 首帧/);
+  assert.match(app, /style_frame_candidates/);
+  assert.match(app, /generatedImageCost/);
+  assert.match(app, /recordedCostFor/);
+  assert.match(app, /pricedRecordKeys/);
+  assert.match(app, /Seedream 视觉样片/);
+  assert.match(app, /Seedream 正式首帧/);
   assert.match(app, /renderSeedanceUsage\(job\)/);
   assert.match(app, /visual_versions/);
   assert.match(app, /Seedance 累计 .* 次/);
   assert.match(app, /taskSeedanceCost/);
   assert.match(app, /estimated_cost_cny/);
+  assert.match(app, /此处只汇总 Seedream 与 Seedance/);
 });
 
 test('AI shots are visible storyboard cards with isolated version controls', () => {
@@ -565,6 +571,9 @@ test('script review shows a whole-job cost range before confirmation', () => {
   assert.match(page, /整单成本预估/);
   assert.match(app, /function renderScriptCostEstimate/);
   assert.match(app, /usageRecordCostCny/);
+  assert.match(app, /function pendingDirectorCostRange/);
+  assert.match(app, /openrouter_pricing/);
+  assert.match(app, /待执行 Director/);
   assert.match(app, /每段 8–10 秒/);
   assert.match(app, /未生成的 AI 画面会从实际费用中扣除/);
   assert.match(styles, /\.script-cost-estimate/);
