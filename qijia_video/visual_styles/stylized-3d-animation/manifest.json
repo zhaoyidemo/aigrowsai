@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "version": "1.0.0",
+  "display_name": "电影级风格化 3D 动画",
+  "description": "用清晰剪影、雕塑化造型、可信材质与电影级灯光呈现具有人物表演和空间纵深的知识叙事。",
+  "default": false,
+  "director_prompt_file": "references/director-prompt.md",
+  "storyboard_rules_file": "references/storyboard-rules.md",
+  "image_rules_file": "references/image-rules.md",
+  "motion_rules_file": "references/motion-rules.md",
+  "negative_rules": [
+    "避免写实真人、平面二维动漫、塑料玩具皮肤和僵硬人偶姿态",
+    "避免幼儿化套模、廉价卡通、过度光泽和无法跨镜头复现的角色造型"
+  ],
+  "tags": ["stylized-3d", "animated-feature", "cinematic", "explainer"]
+}

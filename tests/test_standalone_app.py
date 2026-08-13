@@ -75,6 +75,14 @@ class StandaloneAuthenticationTests(unittest.TestCase):
         self.assertEqual(style_preview.status_code, 200)
         self.assertEqual(style_preview.headers["content-type"], "image/webp")
         self.assertGreater(len(style_preview.content), 0)
+        stylized_3d_preview = self.client.get(
+            "/qijia-video/assets/style-previews/stylized-3d-animation.webp"
+        )
+        self.assertEqual(stylized_3d_preview.status_code, 200)
+        self.assertEqual(
+            stylized_3d_preview.headers["content-type"], "image/webp"
+        )
+        self.assertGreater(len(stylized_3d_preview.content), 0)
 
     def test_wrong_password_fails_without_a_session(self):
         response = self.client.post(

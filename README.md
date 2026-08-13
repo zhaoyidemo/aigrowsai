@@ -9,15 +9,15 @@
 - Script Skill：`insight-led-scriptwriter@1.1.0` 直接读取原始请求与用户材料。`deepseek/deepseek-v4-pro` 先以 `xhigh` 写初稿，再以独立上下文 `high` 审稿，最后由同一主编以 `xhigh` 重写；唯一业务交付是 `ScriptDraft`，不包含视觉决策。
 - Director Skill：脚本人工确认且 TTS 完成后，`animated-explainer@2.1.0` 固定使用 `deepseek/deepseek-v4-pro xhigh` 分两次调用。第一阶段锁定 `DirectorTreatment + VisualBible + AssetBible` 以及合法章节数量，第二阶段通过固定的 `chapter_01...chapter_N` 槽位生成 `StoryboardPlan + ShotContextIR`，不得重新增减章节。人类可读的 Skill 文档、来源说明与媒体平台语法不会进入模型请求；运行时只编译创作规则、视觉风格、脚本、真实时长和可选参考图。任何 403 都在原模型调用处终止，不通过切换模型掩盖。
 - OpenRouter 传输层：脚本、导演和选题编辑只发送单一 `deepseek/deepseek-v4-pro` 模型请求，不携带 `models` 备用列表。完成长度使用该模型通过 OpenRouter 声明支持的 `max_tokens`；结构化输出直接依赖模型端严格 JSON Schema。
-- Visual Style：三套风格只定义资产、材质、造型、色彩、构图、运动语法和验收标准，不选择论点，也不改写导演事件。
+- Visual Style：四套风格只定义资产、材质、造型、色彩、构图、运动语法和验收标准，不选择论点，也不改写导演事件。
 - H3 Provider Adapter：只在脚本与导演之后工作，把参考图职责整理为多模态 Context IR，并把冻结的导演产物编译为 Seedream/Seedance 自然语言提示词；不参与脚本创作。
 - 媒体生产：先生成三张视觉开发样片，由编辑锁定一张，再为未上传自有素材的章节调用 Seedream 5 Lite 和测试期默认 Seedance 1.5 Pro。样片确认是正式批量生成前唯一新增的人工质量门。
 
-两种纸艺 Visual Style 与 H3 Provider Adapter 借鉴了 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 的多模态提示词结构、参考职责分离、纸张拼贴与纸艺定格方法；这里只借鉴方法，不耦合 MiniMax 模型，也不新增 MiniMax API Key。`animated-explainer@2.1.0` 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中具体事件、调度、摄影机与连续性原则，不引入其研究、脚本、语音或 CLI 链路。
+两种纸艺 Visual Style、电影级风格化 3D Visual Style 与 H3 Provider Adapter 借鉴了 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 的多模态提示词结构、参考职责分离、纸张拼贴、纸艺定格和风格化三维动画方法；这里只提炼通用制作原则，不复刻特定工作流或品牌风格，不耦合 MiniMax 模型，也不新增 MiniMax API Key。`animated-explainer@2.1.0` 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中具体事件、调度、摄影机与连续性原则，不引入其研究、脚本、语音或 CLI 链路。
 
 生产新任务只冻结 `input_snapshot`、`script_skill_snapshot`、`director_skill_snapshot`、`visual_style_snapshot` 与 `provider_adapter_snapshot`；`skill_snapshot` 和 `prompt_adapter_snapshot` 必须为空。Content Skill 与旧 H3 Script Adapter 只用于读取、恢复 v1/v2/v3 历史任务，不进入 v4 创建链路。只有 Visual Style 是公开选择，目录接口为 `GET /api/qijia-video/visual-styles`。
 
-工作台创建区只展示自然语言主输入、三种同场景视觉样片、可选参考图和生产规格。内部 Adapter、Policy、Script Skill、Director Skill、Provider、模型名与中间规划不在创建页或脚本确认页展示。发布包的 `pipeline_snapshot.json` 仍记录冻结版本，供故障审计而非参与创作。
+工作台创建区只展示自然语言主输入、四种同场景视觉样片、可选参考图和生产规格。内部 Adapter、Policy、Script Skill、Director Skill、Provider、模型名与中间规划不在创建页或脚本确认页展示。发布包的 `pipeline_snapshot.json` 仍记录冻结版本，供故障审计而非参与创作。
 
 成片阶段的单镜头重生成只接受编辑者填写的 `revision_intent`。服务端会把它与冻结的 `VisualBible`、`ShotContextIR`、首帧和参考图角色通过 Provider Adapter 重新编译；前端只读展示最终提示词，不允许直接编辑或提交。局部修改不会反向改写脚本或导演世界，也不会重做旁白、图片章节或其他视频镜头。
 

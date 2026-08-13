@@ -348,6 +348,7 @@ class QijiaVideoContractTests(unittest.TestCase):
                 "content-skill-default",
                 "paper-collage-explainer",
                 "papercraft-stop-motion",
+                "stylized-3d-animation",
             },
         )
         collage = default_visual_style_registry.resolve(
@@ -355,6 +356,9 @@ class QijiaVideoContractTests(unittest.TestCase):
         )
         papercraft = default_visual_style_registry.resolve(
             "papercraft-stop-motion"
+        )
+        stylized_3d = default_visual_style_registry.resolve(
+            "stylized-3d-animation"
         )
         profile = default_prompt_writing_profile_registry.resolve(
             "h3-prompt-writing"
@@ -366,6 +370,18 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertIn("编辑纸张拼贴", collage.director_prompt)
         self.assertIn("纸片", collage.motion_rules)
         self.assertIn("纸偶关节", papercraft.storyboard_rules)
+        self.assertEqual(stylized_3d.version, "1.0.0")
+        self.assertIn("电影级风格化三维动画", stylized_3d.director_prompt)
+        self.assertIn("次表面透光", stylized_3d.image_rules)
+        self.assertIn("预备—主动作—反馈—稳定", stylized_3d.motion_rules)
+        stylized_3d_prompt = "\n".join((
+            stylized_3d.director_prompt,
+            stylized_3d.storyboard_rules,
+            stylized_3d.image_rules,
+            stylized_3d.motion_rules,
+        ))
+        for provider_or_brand in ("MiniMax", "H3", "Pixar", "Disney"):
+            self.assertNotIn(provider_or_brand, stylized_3d_prompt)
         self.assertIn("先判断输入模式", profile.planning_framework)
         self.assertIn("I2V", profile.planning_framework)
         self.assertIn("一次且仅一次创作决策", profile.creative_brief_framework)
@@ -6231,6 +6247,7 @@ class QijiaVideoPermissionTests(unittest.TestCase):
                 "content-skill-default",
                 "paper-collage-explainer",
                 "papercraft-stop-motion",
+                "stylized-3d-animation",
             },
         )
         tts_pricing = response.json()["data"]["tts_pricing"]

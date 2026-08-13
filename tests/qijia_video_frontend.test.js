@@ -85,6 +85,7 @@ test('creator selects only visual style while internal roles stay server-owned',
     'modern-editorial.webp',
     'paper-collage.webp',
     'papercraft-stop-motion.webp',
+    'stylized-3d-animation.webp',
   ]) {
     const assetPath = path.join(
       root,

@@ -262,14 +262,16 @@ function visualStylePreviewKey(styleId) {
     DEFAULT_VISUAL_STYLE_ID,
     'paper-collage-explainer',
     'papercraft-stop-motion',
+    'stylized-3d-animation',
   ].includes(styleId) ? styleId : DEFAULT_VISUAL_STYLE_ID;
 }
 
 function visualStylePreviewAsset(styleId) {
   const assets = {
-    [DEFAULT_VISUAL_STYLE_ID]: '/qijia-video/assets/style-previews/modern-editorial.webp?v=1.31.0',
-    'paper-collage-explainer': '/qijia-video/assets/style-previews/paper-collage.webp?v=1.31.0',
-    'papercraft-stop-motion': '/qijia-video/assets/style-previews/papercraft-stop-motion.webp?v=1.31.0',
+    [DEFAULT_VISUAL_STYLE_ID]: '/qijia-video/assets/style-previews/modern-editorial.webp?v=1.35.0',
+    'paper-collage-explainer': '/qijia-video/assets/style-previews/paper-collage.webp?v=1.35.0',
+    'papercraft-stop-motion': '/qijia-video/assets/style-previews/papercraft-stop-motion.webp?v=1.35.0',
+    'stylized-3d-animation': '/qijia-video/assets/style-previews/stylized-3d-animation.webp?v=1.35.0',
   };
   return assets[styleId] || assets[DEFAULT_VISUAL_STYLE_ID];
 }
