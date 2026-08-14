@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "display_name": "动画解说导演",
   "description": "先建立视觉命题、视觉规则和资产连续性，再把确认口播与真实 TTS 时长导演成具体、连续、可生产的视觉事件。",
   "default": true,

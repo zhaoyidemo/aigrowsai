@@ -2643,11 +2643,8 @@ class QijiaVideoService:
                             or job.asset_bible.input_hash != artifact_hash
                             or (
                                 director_review is not None
-                                and (
-                                    not director_review.passed
-                                    or director_review.reviewed_plan_hash
-                                    != reviewed_plan_hash
-                                )
+                                and director_review.reviewed_plan_hash
+                                != reviewed_plan_hash
                             )
                         )
                     )
@@ -2726,11 +2723,6 @@ class QijiaVideoService:
                 beat_id for shot in plan.shots for beat_id in shot.beat_ids
             ]
             contexts = [shot.context for shot in plan.shots]
-            event_keys = [
-                re.sub(r'\s+', '', context.concrete_event).casefold()
-                for context in contexts
-                if context
-            ]
             allowed_reference_roles = {
                 'identity',
                 'wardrobe',
@@ -2753,9 +2745,6 @@ class QijiaVideoService:
                 or visual_bible.input_hash != expected_hash
                 or returned_ids != expected_ids
                 or any(context is None for context in contexts)
-                or len(event_keys) != len(plan.shots)
-                or len(set(event_keys)) != len(event_keys)
-                or sum(shot.visual_type == 'video' for shot in plan.shots) > 3
                 or any(role not in allowed_reference_roles for role in reference_roles)
                 or (not self._has_reference_image(job) and reference_roles)
                 or visual_bible.director_skill_id
@@ -2770,22 +2759,14 @@ class QijiaVideoService:
                         or not asset_bible
                         or asset_bible.input_hash != expected_hash
                         or not director_review
-                        or not director_review.passed
                         or director_review.reviewed_plan_hash
                         != reviewed_plan_hash
                     )
                 )
             ):
                 raise ProviderUnavailable(
-                    'Director 未交付完整、唯一且可执行的具体事件方案'
+                    'Director 产物的脚本覆盖或版本绑定不完整'
                 )
-            for shot in plan.shots:
-                if shot.visual_type == 'video' and sum(
-                    float(timings[beat_id]) for beat_id in shot.beat_ids
-                ) > SEEDANCE_MAX_NATURAL_CHAPTER_SECONDS:
-                    raise ProviderUnavailable(
-                        'Director 把超过十秒的旁白章节错误分配为视频'
-                    )
             job.storyboard_plan = plan
             job.director_treatment = director_treatment
             job.asset_bible = asset_bible

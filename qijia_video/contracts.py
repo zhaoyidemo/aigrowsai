@@ -1447,28 +1447,6 @@ class StoryboardPlan(ContractModel):
             if missing_context:
                 raise ValueError('StoryboardPlan v3 的每个镜头都必须包含 ShotContextIR')
             contexts = [item.context for item in self.shots if item.context]
-            missing_events = [
-                item.shot_id
-                for item in self.shots
-                if not item.context.concrete_event or not item.context.blocking
-            ]
-            if missing_events:
-                raise ValueError(
-                    'StoryboardPlan v3 必须提供具体事件与主体调度：'
-                    + '、'.join(missing_events)
-                )
-            event_keys = [
-                ''.join(item.concrete_event.split()).casefold()
-                for item in contexts
-            ]
-            if len(event_keys) != len(set(event_keys)):
-                raise ValueError('StoryboardPlan v3 的具体事件不得重复')
-            if any(
-                ''.join(item.start_state.split()).casefold()
-                == ''.join(item.end_state.split()).casefold()
-                for item in contexts
-            ):
-                raise ValueError('StoryboardPlan v3 的起止状态必须发生可见变化')
             allowed_reference_roles = {
                 'identity', 'wardrobe', 'object', 'location', 'style', 'composition'
             }

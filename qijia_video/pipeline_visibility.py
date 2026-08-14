@@ -139,7 +139,7 @@ def production_pipeline(runtime) -> dict:
         _node(
             "director", 5, "ai_colleague", "AI 同事", "视觉导演",
             director_skill["display_name"],
-            "先分别锁定视觉方向与资产连续性，再按真实 TTS 时长导演分镜并独立审片。",
+            "先分别锁定视觉方向与资产连续性，再按真实 TTS 时长导演扁平分镜；独立审片负责增强质量，不形成技术门禁。",
             "确认脚本、逐段真实时长、视觉风格与参考图",
             "DirectorTreatment、VisualBible、AssetBible、StoryboardPlan",
             capabilities=[_capability(
@@ -148,7 +148,7 @@ def production_pipeline(runtime) -> dict:
             models=[_model(
                 _provider_model_id(runtime.storyboard_provider),
                 runtime.storyboard_provider.name,
-                "视觉方向、资产连续性、分镜、审片与必要修订",
+                "视觉方向、资产连续性、扁平分镜、非阻断审片与必要修订",
             )],
             calls="正常 4 次，最多 6 次",
             operations=[
@@ -459,7 +459,7 @@ def _output_summaries(job, facts: dict) -> dict[str, str]:
         ),
         "director": (
             f"{len(job.storyboard_plan.shots)} 个视觉章节 · "
-            f"独立审片{'通过' if job.storyboard_plan.director_review else '待确认'}"
+            f"独立审片{('通过' if job.storyboard_plan.director_review.passed else '已记录改进建议') if job.storyboard_plan.director_review else '未完成'}"
             if job.storyboard_plan else "尚未交付导演方案"
         ),
         "prompt_method": (

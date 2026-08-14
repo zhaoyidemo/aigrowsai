@@ -91,6 +91,7 @@ from qijia_video.infrastructure.script_providers import (
     SCRIPT_PROMPT_VERSION,
     STORYBOARD_MAX_COMPLETION_TOKENS,
     _ASSET_BIBLE_SCHEMA,
+    _DIRECTOR_CHAPTER_CREATIVE_FIELDS,
     _SHOT_CONTEXT_V3_RESPONSE_SCHEMA,
     _VISUAL_BIBLE_RESPONSE_SCHEMA,
     _director_shot_plan_response_schema,
@@ -344,12 +345,15 @@ class QijiaVideoContractTests(unittest.TestCase):
 
         chapter_ids = ["chapter_01", "chapter_02", "chapter_03"]
         shot_plan = _director_shot_plan_response_schema(chapter_ids)
-        chapters = shot_plan["properties"]["chapters"]
-        self.assertEqual(chapters["required"], chapter_ids)
-        self.assertEqual(set(chapters["properties"]), set(chapter_ids))
-        self.assertFalse(chapters["additionalProperties"])
+        self.assertEqual(shot_plan["required"], chapter_ids)
+        self.assertEqual(set(shot_plan["properties"]), set(chapter_ids))
+        self.assertFalse(shot_plan["additionalProperties"])
         self.assertTrue(all(
-            "beat_ids" in chapters["properties"][chapter_id]["required"]
+            "beat_ids" in shot_plan["properties"][chapter_id]["required"]
+            for chapter_id in chapter_ids
+        ))
+        self.assertTrue(all(
+            "context" not in shot_plan["properties"][chapter_id]["properties"]
             for chapter_id in chapter_ids
         ))
 
@@ -1237,7 +1241,7 @@ class QijiaVideoContractTests(unittest.TestCase):
         self.assertEqual(len(script.beats), 3)
         self.assertEqual(len(plan.shots), 3)
 
-    def test_storyboard_v3_contract_rejects_non_executable_direction(self):
+    def test_storyboard_v3_contract_separates_quality_signals_from_limits(self):
         def shot(index, *, visual_type='image'):
             return {
                 'shot_id': f'shot_{index:02d}',
@@ -1280,15 +1284,21 @@ class QijiaVideoContractTests(unittest.TestCase):
         duplicate_event['shots'][1]['context']['concrete_event'] = (
             duplicate_event['shots'][0]['context']['concrete_event']
         )
-        with self.assertRaises(ValidationError):
-            StoryboardPlan.model_validate(duplicate_event)
+        duplicate_plan = StoryboardPlan.model_validate(duplicate_event)
+        self.assertEqual(
+            duplicate_plan.shots[0].context.concrete_event,
+            duplicate_plan.shots[1].context.concrete_event,
+        )
 
         unchanged_state = json.loads(json.dumps(payload))
         unchanged_state['shots'][0]['context']['end_state'] = (
             unchanged_state['shots'][0]['context']['start_state']
         )
-        with self.assertRaises(ValidationError):
-            StoryboardPlan.model_validate(unchanged_state)
+        unchanged_plan = StoryboardPlan.model_validate(unchanged_state)
+        self.assertEqual(
+            unchanged_plan.shots[0].context.start_state,
+            unchanged_plan.shots[0].context.end_state,
+        )
 
         too_many_videos = {
             **payload,
@@ -3193,6 +3203,17 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             set(first_stage["properties"]),
             {"director_treatment", "visual_bible"},
         )
+        chapter_ids = ['chapter_01', 'chapter_02', 'chapter_03']
+        shot_plan = _director_shot_plan_response_schema(chapter_ids)
+        self.assertEqual(set(shot_plan['properties']), set(chapter_ids))
+        self.assertEqual(set(shot_plan['required']), set(chapter_ids))
+        self.assertNotIn('chapters', shot_plan['properties'])
+        chapter_schema = shot_plan['properties']['chapter_01']
+        self.assertNotIn('context', chapter_schema['properties'])
+        self.assertEqual(
+            set(chapter_schema['required']),
+            {'beat_ids', 'visual_type', *_DIRECTOR_CHAPTER_CREATIVE_FIELDS},
+        )
 
     def test_quality_director_validation_names_bad_artifact_and_field_safely(self):
         raw = {
@@ -3349,14 +3370,15 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 result = director_review
             else:
                 result = {
-                    "chapters": {
-                        f"chapter_{index:02d}": {
-                            "beat_ids": group,
-                            "visual_type": "video" if index == 1 else "image",
-                            "context": context(index),
-                        }
-                        for index, group in enumerate(groups, 1)
-                    },
+                    f"chapter_{index:02d}": {
+                        "beat_ids": group,
+                        "visual_type": "video" if index == 1 else "image",
+                        **{
+                            field: context(index)[field]
+                            for field in _DIRECTOR_CHAPTER_CREATIVE_FIELDS
+                        },
+                    }
+                    for index, group in enumerate(groups, 1)
                 }
             return httpx.Response(200, json={
                 "id": f"director-{len(calls)}",
@@ -3379,7 +3401,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "【导演方法】动画解说导演",
                 durations,
                 director_skill_id="animated-explainer",
-                director_skill_version="2.3.0",
+                director_skill_version="2.4.0",
                 input_hash="b" * 64,
             )
         )
@@ -3394,7 +3416,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             [
                 "qijia_director_visual_development_v1",
                 "qijia_director_asset_development_v1",
-                "qijia_director_shot_plan_v3",
+                "qijia_director_shot_plan_v4",
                 "qijia_director_review_v1",
             ],
         )
@@ -3408,11 +3430,13 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(set(asset_schema["properties"]), set(asset_schema["required"]))
         self.assertNotIn("references", asset_schema["properties"])
-        self.assertEqual(set(second_schema["properties"]), {"chapters"})
-        chapter_schema = second_schema["properties"]["chapters"]
         expected_chapter_ids = ["chapter_01", "chapter_02", "chapter_03"]
-        self.assertEqual(chapter_schema["required"], expected_chapter_ids)
-        self.assertEqual(set(chapter_schema["properties"]), set(expected_chapter_ids))
+        self.assertEqual(second_schema["required"], expected_chapter_ids)
+        self.assertEqual(set(second_schema["properties"]), set(expected_chapter_ids))
+        self.assertNotIn(
+            "context",
+            second_schema["properties"]["chapter_01"]["properties"],
+        )
         self.assertIn("【导演方法】动画解说导演", calls[0]["messages"][0]["content"])
         self.assertIn("先不要拆镜头", calls[0]["messages"][0]["content"])
         self.assertIn("【完整交付要求】", calls[0]["messages"][0]["content"])
@@ -3453,7 +3477,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("【导演方法】", calls[1]["messages"][1]["content"])
         self.assertNotIn("【导演方法】", calls[2]["messages"][1]["content"])
         self.assertEqual(treatment.input_hash, "b" * 64)
-        self.assertEqual(bible.director_skill_version, "2.3.0")
+        self.assertEqual(bible.director_skill_version, "2.4.0")
         self.assertEqual(assets.motion_grammar, ["单一动作链", "克制跟随"])
         self.assertEqual([shot.beat_ids for shot in plan.shots], groups)
         self.assertTrue(plan.director_review.passed)
@@ -3471,7 +3495,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
         script = await TemplateScriptProvider().generate(card)
         beat_ids = [item.id for item in script.beats]
-        durations = {item.id: 5.0 for item in script.beats}
+        durations = {item.id: 6.0 for item in script.beats}
         groups = [[beat_ids[0]], beat_ids[1:3], beat_ids[3:]]
         calls: list[dict] = []
 
@@ -3528,14 +3552,23 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             }
 
         shot_payload = {
-            "chapters": {
-                f"chapter_{index:02d}": {
-                    "beat_ids": group,
-                    "visual_type": "video" if index == 1 else "image",
-                    "context": context(index),
-                }
-                for index, group in enumerate(groups, 1)
-            },
+            f"chapter_{index:02d}": {
+                "beat_ids": group,
+                "visual_type": "video",
+                "concrete_event": "主角在书桌前移动同一件关键物件。",
+            }
+            for index, group in enumerate(groups, 1)
+        }
+        revised_shot_payload = {
+            f"chapter_{index:02d}": {
+                "beat_ids": group,
+                "visual_type": "video" if index == 1 else "image",
+                **{
+                    field: context(index)[field]
+                    for field in _DIRECTOR_CHAPTER_CREATIVE_FIELDS
+                },
+            }
+            for index, group in enumerate(groups, 1)
         }
         review_payload = {
             "verdict": "pass",
@@ -3566,8 +3599,10 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 result = treatment_payload
             elif tool_name == "submit_qijia_director_asset_development_v1":
                 result = asset_payload
-            elif tool_name == "submit_qijia_director_shot_plan_v3":
+            elif tool_name == "submit_qijia_director_shot_plan_v4":
                 result = shot_payload
+            elif tool_name == "submit_qijia_director_shot_revision_v2":
+                result = revised_shot_payload
             elif tool_name == "submit_qijia_director_review_v1":
                 result = review_payload
             else:
@@ -3636,13 +3671,13 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "【导演方法】动画解说导演",
                 durations,
                 director_skill_id="animated-explainer",
-                director_skill_version="2.3.0",
+                director_skill_version="2.4.0",
                 input_hash="a" * 64,
                 has_reference_image=True,
             )
         )
 
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 6)
         self.assertEqual(len(treatment.chapter_progression), 3)
         self.assertEqual(bible.input_hash, "a" * 64)
         self.assertEqual(len(assets.references), 1)
@@ -3650,9 +3685,106 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(assets.references[0].roles, ["style"])
         self.assertEqual([shot.beat_ids for shot in plan.shots], groups)
         self.assertTrue(plan.director_review.passed)
+        self.assertEqual(
+            [shot.visual_type for shot in plan.shots],
+            ["video", "image", "image"],
+        )
+        self.assertEqual(
+            len({shot.context.concrete_event for shot in plan.shots}),
+            len(plan.shots),
+        )
+        self.assertTrue(all(
+            shot.context.subject
+            and shot.context.blocking
+            and shot.context.camera_intent
+            and shot.context.start_state != shot.context.end_state
+            for shot in plan.shots
+        ))
         serialized_calls = json.dumps(calls, ensure_ascii=False)
         self.assertNotIn('"image_url"', serialized_calls)
         self.assertNotIn('"references"', serialized_calls)
+
+    async def test_quality_director_audit_failure_becomes_advisory(self):
+        card = SourceCard(
+            **valid_card().model_dump(mode="json"),
+            id="card-director-advisory-review",
+            revision=1,
+            status="verified",
+        )
+        script = await TemplateScriptProvider().generate(card)
+        beat_ids = [item.id for item in script.beats]
+        durations = {item.id: 5.0 for item in script.beats}
+        groups = [[beat_ids[0]], beat_ids[1:3], beat_ids[3:]]
+        treatment_payload = {
+            "director_treatment": {
+                "visual_thesis": "用同一物件的位置变化承载判断标准。",
+                "audience_experience": "从眼前输赢逐步看到长期判断。",
+                "chapter_progression": ["建立冲突", "显现代价", "完成重构"],
+            },
+            "visual_bible": {
+                "core_visual_idea": "物件位置改变人物关系。",
+                "visual_world": "统一的现代编辑插画书房。",
+                "recurring_subjects": ["主角", "配角", "关键物件"],
+                "scene_anchors": ["固定书桌", "右侧窗光"],
+                "continuity_rules": ["人物造型固定", "物件位置承接"],
+                "color_material_system": "低饱和纸纹与陶土橙重点色。",
+                "composition_system": "竖屏中景与清楚负空间。",
+                "forbidden_elements": ["可读文字", "随机换脸"],
+            },
+        }
+        asset_payload = {
+            "subjects": ["主角", "配角"],
+            "locations": ["固定书房"],
+            "props": ["关键物件"],
+            "identity_locks": ["主角轮廓、服装与比例固定"],
+            "material_locks": ["纸纹、色块和侧光固定"],
+            "allowed_variations": ["动作、景别和局部构图可变"],
+            "motion_grammar": ["单一动作链", "克制跟随"],
+            "review_criteria": ["事件一眼可读", "人物与材质连续"],
+        }
+        shot_payload = {
+            f"chapter_{index:02d}": {
+                "beat_ids": group,
+                "visual_type": "image",
+                "concrete_event": f"第 {index} 章中，主角移动关键物件。",
+            }
+            for index, group in enumerate(groups, 1)
+        }
+        responses = [
+            SimpleNamespace(data=treatment_payload, model_id=PRODUCTION_TEXT_MODEL),
+            SimpleNamespace(data=asset_payload, model_id=PRODUCTION_TEXT_MODEL),
+            SimpleNamespace(data=shot_payload, model_id=PRODUCTION_TEXT_MODEL),
+            ProviderUnavailable("独立审片返回内容不符合质量审查契约"),
+        ]
+        provider = OpenRouterStoryboardProvider(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api",
+            model=PRODUCTION_TEXT_MODEL,
+        )
+
+        with patch(
+            "qijia_video.infrastructure.script_providers._openrouter_json_request",
+            new=AsyncMock(side_effect=responses),
+        ):
+            _, _, _, plan = await provider.generate_quality_director_plan(
+                script,
+                "【导演方法】动画解说导演",
+                durations,
+                director_skill_id="animated-explainer",
+                director_skill_version="2.4.0",
+                input_hash="e" * 64,
+            )
+
+        self.assertFalse(plan.director_review.passed)
+        self.assertEqual(plan.director_review.revision_count, 0)
+        self.assertEqual(
+            plan.director_review.reviewed_plan_hash,
+            storyboard_review_hash(plan),
+        )
+        self.assertIn(
+            "未返回可用结果",
+            plan.director_review.revision_requests[0]["issue"],
+        )
 
     async def test_quality_director_terms_403_is_not_retried_and_is_diagnosed(self):
         card = SourceCard(
@@ -4472,7 +4604,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.script_skill_snapshot.skill_id,
             "insight-led-scriptwriter",
         )
-        self.assertEqual(job.director_skill_snapshot.version, "2.3.0")
+        self.assertEqual(job.director_skill_snapshot.version, "2.4.0")
         self.assertEqual(job.provider_adapter_snapshot.version, "2.1.0")
         self.assertEqual(job.generation_settings.seedance_model, SEEDANCE_BALANCED_MODEL)
 
@@ -4794,7 +4926,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.director_skill_snapshot.skill_id,
             "animated-explainer",
         )
-        self.assertEqual(job.director_skill_snapshot.version, "2.3.0")
+        self.assertEqual(job.director_skill_snapshot.version, "2.4.0")
         self.assertEqual(job.director_skill_snapshot.mode, "animated_explainer")
         self.assertEqual(
             job.provider_adapter_snapshot.adapter_id,

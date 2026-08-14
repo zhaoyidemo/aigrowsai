@@ -20,7 +20,7 @@ description: 将已确认的知识、人物思想、历史或概念解说口播�
 2. 为每章设计一个具体事件：主体在可辨认环境中采取行动，引发可见反馈，并落到新状态。
 3. 写清主体调度、构图、摄影机、起止状态、连续性和参考素材职责。
 4. 图片优先；仅把连续行动、状态转变或镜头运动不可替代且能在八秒内完成的章节标为视频，全片最多三段。
-5. 依据导演、资产与风格质量规则自检，再交付 StoryboardPlan v3。
+5. 依据导演、资产与风格质量规则自检，再交付 StoryboardPlan v3；字段丰富度和审片意见用于修订，不作为中断生产的技术门禁。
 
 使用 references/scene-design.md 设计事件，使用 references/shot-design.md 写调度与摄影机，使用 references/continuity.md 管理跨章一致性，使用 references/media-policy.md 决定图片或视频。
 

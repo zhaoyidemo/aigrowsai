@@ -348,7 +348,7 @@ class QijiaVideoRuntime:
                 ),
                 "model_id": self.storyboard_provider.model,
                 "provider": self.storyboard_provider.name,
-                "detail": "视觉开发 · 正式分镜 · 隔离上下文独立审片 · 必要时修订复审",
+                "detail": "视觉开发 · 扁平正式分镜 · 隔离上下文独立审片 · 建议不阻断交付",
                 "configuration_source": MODEL_REGISTRY_SOURCE,
             },
             {
