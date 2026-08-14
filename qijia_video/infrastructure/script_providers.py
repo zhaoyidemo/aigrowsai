@@ -69,12 +69,6 @@ OPENROUTER_REASONING_EFFORT = "high"
 OPENROUTER_REQUEST_TIMEOUT_SECONDS = 600.0
 SCRIPT_MAX_COMPLETION_TOKENS = 48_000
 STORYBOARD_MAX_COMPLETION_TOKENS = 128_000
-DGRID_STREAMING_OPERATIONS = frozenset({
-    "director_treatment",
-    "storyboard_generation",
-    "director_critique",
-    "storyboard_revision",
-})
 UsageRecorder = Callable[[ProviderUsageRecord], Awaitable[None]]
 ModelT = TypeVar('ModelT', bound=BaseModel)
 
@@ -869,9 +863,17 @@ def _validate_director_artifact(
 ) -> ModelT:
     """Validate one Director artifact with safe, actionable diagnostics."""
 
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            decoded = None
+        if isinstance(decoded, dict):
+            raw = decoded
     if not isinstance(raw, dict):
         raise ProviderUnavailable(
             f'Director 第一阶段的 {artifact_name} 不是 JSON 对象'
+            f'（received_type={type(raw).__name__}）'
         )
     try:
         return model_type.model_validate({**raw, **metadata})
@@ -1625,6 +1627,62 @@ def _non_json_error_body(
     }
 
 
+def _structured_output_tool_name(schema_name: str) -> str:
+    """Return one provider-safe function name for a structured result."""
+
+    normalized = re.sub(r"[^A-Za-z0-9_-]+", "_", schema_name).strip("_")
+    return ("submit_" + (normalized or "structured_result"))[:64]
+
+
+def _dgrid_structured_output_tool(
+    *,
+    tool_name: str,
+    label: str,
+    response_schema: dict,
+) -> dict[str, Any]:
+    """Use DGrid's documented tool channel as the enforceable JSON contract."""
+
+    return {
+        "type": "function",
+        "function": {
+            "name": tool_name,
+            "description": (
+                f"提交完整的{label}结果。只调用一次，参数就是最终交付。"
+            ),
+            "parameters": response_schema,
+            "strict": True,
+        },
+    }
+
+
+def _structured_tool_arguments(
+    message: Any,
+    *,
+    expected_tool_name: str,
+) -> dict[str, Any]:
+    """Read exactly one forced tool call without accepting model prose as data."""
+
+    payload = message if isinstance(message, dict) else {}
+    raw_tool_calls = payload.get("tool_calls")
+    tool_calls = raw_tool_calls if isinstance(raw_tool_calls, list) else []
+    if len(tool_calls) != 1 or not isinstance(tool_calls[0], dict):
+        raise ProviderUnavailable("模型没有通过强制结构化工具交付结果")
+    function = tool_calls[0].get("function")
+    function = function if isinstance(function, dict) else {}
+    actual_name = _diagnostic_text(function.get("name"), 80)
+    if actual_name != expected_tool_name:
+        raise ProviderUnavailable(
+            "模型调用了错误的结构化结果工具"
+            f"（expected={expected_tool_name}，actual={actual_name or 'missing'}）"
+        )
+    try:
+        return _json_object(function.get("arguments"))
+    except ProviderUnavailable as exc:
+        raise ProviderUnavailable(
+            "模型提交的结构化工具参数不是有效 JSON 对象"
+        ) from exc
+
+
 async def _openai_sse_json_body(
     response: httpx.Response,
     *,
@@ -1639,6 +1697,7 @@ async def _openai_sse_json_body(
     finish_reason = "unknown"
     usage: dict[str, Any] = {}
     saw_event = False
+    tool_call_parts: dict[int, dict[str, Any]] = {}
 
     async for line in response.aiter_lines():
         stripped = line.strip()
@@ -1681,6 +1740,45 @@ async def _openai_sse_json_body(
         refusal = _message_text(delta.get("refusal"))
         if refusal:
             refusal_parts.append(refusal)
+        raw_tool_calls = delta.get("tool_calls")
+        if isinstance(raw_tool_calls, list):
+            for position, raw_tool_call in enumerate(raw_tool_calls):
+                if not isinstance(raw_tool_call, dict):
+                    continue
+                raw_index = raw_tool_call.get("index", position)
+                try:
+                    tool_index = max(0, int(raw_index))
+                except (TypeError, ValueError):
+                    tool_index = position
+                part = tool_call_parts.setdefault(tool_index, {
+                    "index": tool_index,
+                    "id": "",
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                })
+                part["id"] = (
+                    _diagnostic_text(raw_tool_call.get("id"), 160)
+                    or part["id"]
+                )
+                part["type"] = (
+                    _diagnostic_text(raw_tool_call.get("type"), 40)
+                    or part["type"]
+                )
+                raw_function = raw_tool_call.get("function")
+                function = (
+                    raw_function if isinstance(raw_function, dict) else {}
+                )
+                name_fragment = _diagnostic_text(function.get("name"), 80)
+                if name_fragment:
+                    current_name = part["function"]["name"]
+                    part["function"]["name"] = (
+                        current_name
+                        if current_name == name_fragment
+                        else current_name + name_fragment
+                    )
+                arguments_fragment = function.get("arguments")
+                if isinstance(arguments_fragment, str):
+                    part["function"]["arguments"] += arguments_fragment
 
     if not saw_event:
         raise ValueError("empty SSE response")
@@ -1690,6 +1788,10 @@ async def _openai_sse_json_body(
     }
     if refusal_parts:
         message["refusal"] = "".join(refusal_parts)
+    if tool_call_parts:
+        message["tool_calls"] = [
+            tool_call_parts[index] for index in sorted(tool_call_parts)
+        ]
     body: dict[str, Any] = {
         "id": response_id,
         "model": resolved_model,
@@ -1726,8 +1828,11 @@ async def _gateway_json_request(
 ) -> _OpenRouterJsonResponse:
     usage_id = f"usage_{uuid.uuid4().hex}"
     provider_label = "DGrid" if gateway == "dgrid" else "OpenRouter"
-    use_stream = (
-        gateway == "dgrid" and operation in DGRID_STREAMING_OPERATIONS
+    use_stream = gateway == "dgrid"
+    structured_tool_name = (
+        _structured_output_tool_name(schema_name)
+        if gateway == "dgrid"
+        else ""
     )
     headers = (
         dgrid_headers(api_key, title="Qijia AI Video Workbench")
@@ -1739,18 +1844,33 @@ async def _gateway_json_request(
             "X-OpenRouter-Metadata": "enabled",
         }
     )
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "response_format": {
+    }
+    if gateway == "dgrid":
+        if tools:
+            raise ProviderUnavailable(
+                "DGrid 结构化结果工具不能与业务工具同时使用"
+            )
+        payload["tools"] = [_dgrid_structured_output_tool(
+            tool_name=structured_tool_name,
+            label=label,
+            response_schema=response_schema,
+        )]
+        payload["tool_choice"] = {
+            "type": "function",
+            "function": {"name": structured_tool_name},
+        }
+    else:
+        payload["response_format"] = {
             "type": "json_schema",
             "json_schema": {
                 "name": schema_name,
                 "strict": True,
                 "schema": response_schema,
             },
-        },
-    }
+        }
     if gateway == "openrouter":
         payload["reasoning"] = {
             "effort": reasoning_effort,
@@ -2051,19 +2171,31 @@ async def _gateway_json_request(
             + (f"；request_id={trace_id}" if trace_id else "")
         )
     try:
+        structured_payload = (
+            _structured_tool_arguments(
+                message,
+                expected_tool_name=structured_tool_name,
+            )
+            if gateway == "dgrid"
+            else _json_object(content)
+        )
         return _OpenRouterJsonResponse(
-            data=_json_object(content),
+            data=structured_payload,
             model_id=str(body.get("model") or model),
         )
     except ProviderUnavailable as exc:
         if finish_reason == "length":
             detail = "输出被截断，请从失败阶段重试"
+        elif gateway == "dgrid":
+            detail = str(exc)
         elif not _message_text(content).strip():
             detail = "返回内容为空，请从失败阶段重试"
         else:
             detail = "没有返回可解析的结构化结果，请从失败阶段重试"
         raise ProviderUnavailable(
-            f"{provider_label} {label}{detail}（finish_reason={finish_reason}）"
+            f"{provider_label} {label}"
+            + ("：" if gateway == "dgrid" else "")
+            + f"{detail}（finish_reason={finish_reason}）"
             + (f"；request_id={trace_id}" if trace_id else "")
         ) from exc
 

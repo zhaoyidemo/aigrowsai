@@ -1583,26 +1583,79 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                     },
                 })
             self.assertEqual(request.url.path, "/v1/chat/completions")
-            return httpx.Response(
-                200,
-                headers={"DGrid-Request-ID": "req-dgrid-script-1"},
-                json={
+            request_body = json.loads(request.content)
+            tool_name = request_body["tool_choice"]["function"]["name"]
+            arguments = json.dumps(generated, ensure_ascii=False)
+            split_at = len(arguments) // 2
+            events = [
+                {
                     "id": "chatcmpl-dgrid-script-1",
                     "model": PRODUCTION_TEXT_MODEL,
                     "choices": [{
-                        "message": {
-                            "content": json.dumps(
-                                generated, ensure_ascii=False
-                            )
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "call-dgrid-script-1",
+                                "type": "function",
+                                "function": {
+                                    "name": tool_name,
+                                    "arguments": arguments[:split_at],
+                                },
+                            }],
                         },
-                        "finish_reason": "stop",
+                        "finish_reason": None,
                     }],
+                    "usage": None,
+                },
+                {
+                    "id": "chatcmpl-dgrid-script-1",
+                    "model": PRODUCTION_TEXT_MODEL,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "function": {
+                                    "arguments": arguments[split_at:],
+                                },
+                            }],
+                        },
+                        "finish_reason": None,
+                    }],
+                    "usage": None,
+                },
+                {
+                    "id": "chatcmpl-dgrid-script-1",
+                    "model": PRODUCTION_TEXT_MODEL,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": "tool_calls",
+                    }],
+                    "usage": None,
+                },
+                {
+                    "id": "chatcmpl-dgrid-script-1",
+                    "model": PRODUCTION_TEXT_MODEL,
+                    "choices": [],
                     "usage": {
                         "prompt_tokens": 900,
                         "completion_tokens": 300,
                         "total_tokens": 1200,
                     },
                 },
+            ]
+            stream_body = "".join(
+                f"data: {json.dumps(event)}\n\n" for event in events
+            ) + "data: [DONE]\n\n"
+            return httpx.Response(
+                200,
+                headers={
+                    "Content-Type": "text/event-stream",
+                    "DGrid-Request-ID": "req-dgrid-script-1",
+                },
+                text=stream_body,
             )
 
         provider = DGridScriptProvider(
@@ -1635,8 +1688,23 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("provider", request_body)
         self.assertNotIn("reasoning", request_body)
         self.assertNotIn("models", request_body)
-        self.assertNotIn("stream", request_body)
-        self.assertNotIn("stream_options", request_body)
+        self.assertNotIn("response_format", request_body)
+        self.assertTrue(request_body["stream"])
+        self.assertEqual(
+            request_body["stream_options"],
+            {"include_usage": True},
+        )
+        self.assertEqual(len(request_body["tools"]), 1)
+        function = request_body["tools"][0]["function"]
+        self.assertTrue(function["strict"])
+        self.assertEqual(
+            function["name"],
+            request_body["tool_choice"]["function"]["name"],
+        )
+        self.assertEqual(
+            set(function["parameters"]["properties"]),
+            {"schema_version", "video_title", "cover_text", "beats", "caption", "hashtags"},
+        )
         self.assertEqual(request_body["model"], PRODUCTION_TEXT_MODEL)
         self.assertEqual(script.video_title, "判断先于成败")
         self.assertEqual(len(usage_records), 1)
@@ -1655,6 +1723,8 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_dgrid_director_uses_sse_and_terminal_usage(self):
         calls: list[httpx.Request] = []
         usage_records: list[ProviderUsageRecord] = []
+        tool_name = "submit_test_dgrid_stream"
+        arguments = json.dumps({"ok": True})
         events = [
             {
                 "id": "chatcmpl-dgrid-director-1",
@@ -1681,7 +1751,17 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "model": "anthropic/claude-fable-5",
                 "choices": [{
                     "index": 0,
-                    "delta": {"content": '{"ok":'},
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call-dgrid-director-1",
+                            "type": "function",
+                            "function": {
+                                "name": tool_name,
+                                "arguments": arguments[:5],
+                            },
+                        }],
+                    },
                     "finish_reason": None,
                 }],
                 "usage": None,
@@ -1691,7 +1771,12 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "model": "anthropic/claude-fable-5",
                 "choices": [{
                     "index": 0,
-                    "delta": {"content": "true}"},
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": {"arguments": arguments[5:]},
+                        }],
+                    },
                     "finish_reason": None,
                 }],
                 "usage": None,
@@ -1702,7 +1787,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "choices": [{
                     "index": 0,
                     "delta": {},
-                    "finish_reason": "stop",
+                    "finish_reason": "tool_calls",
                 }],
                 "usage": None,
             },
@@ -1745,6 +1830,17 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 request_body["stream_options"],
                 {"include_usage": True},
+            )
+            self.assertNotIn("response_format", request_body)
+            self.assertEqual(len(request_body["tools"]), 1)
+            self.assertEqual(
+                request_body["tools"][0]["function"]["name"],
+                tool_name,
+            )
+            self.assertTrue(request_body["tools"][0]["function"]["strict"])
+            self.assertEqual(
+                request_body["tool_choice"],
+                {"type": "function", "function": {"name": tool_name}},
             )
             return httpx.Response(
                 200,
@@ -1800,6 +1896,8 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             calls.append(request)
             request_body = json.loads(request.content)
             self.assertTrue(request_body["stream"])
+            self.assertNotIn("response_format", request_body)
+            self.assertEqual(len(request_body["tools"]), 1)
             return httpx.Response(
                 524,
                 headers={"Content-Type": "text/html"},
@@ -1840,6 +1938,74 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(usage_records), 1)
         self.assertFalse(usage_records[0].succeeded)
         self.assertEqual(usage_records[0].http_status_code, 524)
+
+    async def test_dgrid_rejects_fable_prose_schema_drift(self):
+        calls: list[httpx.Request] = []
+        prose_payload = {
+            "title": "模型自带的方案标题",
+            "logline": "不是系统要求的结构",
+            "chapters": [],
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            request_body = json.loads(request.content)
+            self.assertIn("tools", request_body)
+            events = [
+                {
+                    "id": "chatcmpl-dgrid-drift",
+                    "model": "anthropic/claude-fable-5",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "content": json.dumps(
+                                prose_payload, ensure_ascii=False
+                            ),
+                        },
+                        "finish_reason": None,
+                    }],
+                    "usage": None,
+                },
+                {
+                    "id": "chatcmpl-dgrid-drift",
+                    "model": "anthropic/claude-fable-5",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": "stop",
+                    }],
+                    "usage": None,
+                },
+            ]
+            stream_body = "".join(
+                f"data: {json.dumps(event)}\n\n" for event in events
+            ) + "data: [DONE]\n\n"
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                text=stream_body,
+            )
+
+        with self.assertRaises(ProviderUnavailable) as caught:
+            await _openrouter_json_request(
+                gateway="dgrid",
+                api_key="test-key",
+                base_url="https://api.dgrid.ai/v1",
+                model="anthropic/claude-fable-5",
+                messages=[{"role": "user", "content": "return JSON"}],
+                label="导演视觉开发",
+                schema_name="qijia_director_treatment_v3",
+                response_schema=_director_treatment_response_schema(5),
+                max_completion_tokens=4096,
+                timeout_seconds=30,
+                transport=httpx.MockTransport(handler),
+                operation="director_treatment",
+            )
+
+        error = str(caught.exception)
+        self.assertIn("没有通过强制结构化工具交付结果", error)
+        self.assertNotIn("模型自带的方案标题", error)
+        self.assertEqual(len(calls), 1)
 
     async def test_dgrid_billing_snapshot_polls_until_entry_is_available(self):
         attempts = 0
@@ -3049,6 +3215,32 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("motif_system", message)
         self.assertNotIn("不得出现在错误消息", message)
 
+    def test_quality_director_decodes_stringified_nested_artifact(self):
+        raw = json.dumps({
+            "visual_thesis": "用同一物件的位置变化呈现判断标准。",
+            "audience_experience": "从眼前结果逐步看见长期方向。",
+            "chapter_progression": ["建立冲突", "显现代价", "完成重构"],
+            "motif_system": ["关键物件", "稳定侧光"],
+            "rhythm_strategy": "开场迅速，中段停顿观察，结尾收束。",
+            "edit_pattern": "上一章结果成为下一章起始状态。",
+            "style_application": "以克制纸纹和明确空间层次承载叙事。",
+        }, ensure_ascii=False)
+
+        artifact = _validate_director_artifact(
+            DirectorTreatment,
+            raw,
+            {
+                "schema_version": "1.0",
+                "model_id": "test/director",
+                "input_hash": "e" * 64,
+                "created_at": timestamp(),
+            },
+            artifact_name="DirectorTreatment",
+        )
+
+        self.assertEqual(len(artifact.chapter_progression), 3)
+        self.assertEqual(artifact.input_hash, "e" * 64)
+
     async def test_openrouter_quality_director_locks_world_before_shots(self):
         card = SourceCard(
             **valid_card().model_dump(mode="json"),
@@ -3250,6 +3442,195 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             plan.director_review.reviewed_plan_hash,
             storyboard_review_hash(plan),
         )
+
+    async def test_dgrid_quality_director_completes_all_three_structured_stages(self):
+        card = SourceCard(
+            **valid_card().model_dump(mode="json"),
+            id="card-dgrid-director-v4",
+            revision=1,
+            status="verified",
+        )
+        script = await TemplateScriptProvider().generate(card)
+        beat_ids = [item.id for item in script.beats]
+        durations = {item.id: 5.0 for item in script.beats}
+        groups = [[beat_ids[0]], beat_ids[1:3], beat_ids[3:]]
+        calls: list[dict] = []
+
+        treatment_payload = {
+            "director_treatment": {
+                "visual_thesis": "用同一物件的位置变化承载判断标准。",
+                "audience_experience": "从眼前输赢逐步看到长期判断。",
+                "chapter_progression": ["建立冲突", "显现代价", "完成重构"],
+                "motif_system": ["关键物件", "右侧窗光"],
+                "rhythm_strategy": "开场迅速，中段停顿观察，结尾收束。",
+                "edit_pattern": "动作结果接下一章起始状态。",
+                "style_application": "以纸纹、色块和负空间组织关系。",
+            },
+            "visual_bible": {
+                "core_visual_idea": "物件位置改变人物关系。",
+                "visual_world": "统一的现代编辑插画书房。",
+                "recurring_subjects": ["主角", "配角", "关键物件"],
+                "scene_anchors": ["固定书桌", "右侧窗光"],
+                "continuity_rules": ["人物造型固定", "物件位置承接"],
+                "color_material_system": "低饱和纸纹与陶土橙重点色。",
+                "composition_system": "竖屏中景与清楚负空间。",
+                "reference_strategy": "无参考图。",
+                "forbidden_elements": ["可读文字", "随机换脸"],
+            },
+            "asset_bible": {
+                "subjects": ["主角", "配角"],
+                "locations": ["固定书房"],
+                "props": ["关键物件"],
+                "identity_locks": ["主角轮廓、服装与比例固定"],
+                "material_locks": ["纸纹、色块和侧光固定"],
+                "allowed_variations": ["动作、景别和局部构图可变"],
+                "motion_grammar": ["单一动作链", "克制跟随"],
+                "review_criteria": ["事件一眼可读", "人物与材质连续"],
+                "references": [],
+            },
+        }
+
+        def context(index: int) -> dict:
+            return {
+                "semantic_goal": f"推进第 {index} 章判断",
+                "concrete_event": (
+                    f"第 {index} 章中，主角在书桌前移动关键物件，"
+                    "配角改变站位并给出明确反馈。"
+                ),
+                "blocking": "主角在左侧中景，配角在右后方，物件居中。",
+                "visual_metaphor": "",
+                "subject": "固定造型的主角、配角和同一关键物件",
+                "action": "主角移动物件，配角后退并给出反馈",
+                "environment": "空间骨架和右侧窗光固定的书房",
+                "composition": "竖屏中景，人物分居两侧，桌面为焦点",
+                "continuity_handoff": (
+                    "开场建立关系" if index == 1 else "承接上一章结果"
+                ),
+                "start_state": f"第 {index} 章动作尚未发生",
+                "end_state": f"第 {index} 章新关系已经可见",
+                "camera_intent": "胸口高度轻微跟随，停在桌面新关系",
+                "media_rationale": "连续动作使用视频，决定瞬间使用图片",
+                "reference_roles": [],
+            }
+
+        shot_payload = {
+            "chapters": {
+                f"chapter_{index:02d}": {
+                    "beat_ids": group,
+                    "visual_type": "video" if index == 1 else "image",
+                    "context": context(index),
+                }
+                for index, group in enumerate(groups, 1)
+            },
+        }
+        review_payload = {
+            "verdict": "pass",
+            "quality_scores": {
+                "script_fidelity": 9,
+                "visual_thesis_execution": 8,
+                "event_specificity": 8,
+                "narrative_progression": 8,
+                "continuity": 8,
+                "camera_readability": 8,
+                "media_discipline": 9,
+                "producibility": 9,
+            },
+            "strengths": ["事件、调度与章节递进清楚"],
+            "revision_requests": [],
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            calls.append(body)
+            self.assertTrue(body["stream"])
+            self.assertNotIn("response_format", body)
+            self.assertEqual(len(body["tools"]), 1)
+            tool_name = body["tool_choice"]["function"]["name"]
+            self.assertEqual(body["tools"][0]["function"]["name"], tool_name)
+            self.assertTrue(body["tools"][0]["function"]["strict"])
+            if tool_name == "submit_qijia_director_treatment_v3":
+                result = treatment_payload
+            elif tool_name == "submit_qijia_director_shot_plan_v3":
+                result = shot_payload
+            elif tool_name == "submit_qijia_director_review_v1":
+                result = review_payload
+            else:
+                raise AssertionError(f"unexpected tool: {tool_name}")
+            arguments = json.dumps(result, ensure_ascii=False)
+            events = [
+                {
+                    "id": f"chatcmpl-{len(calls)}",
+                    "model": PRODUCTION_TEXT_MODEL,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": f"call-{len(calls)}",
+                                "type": "function",
+                                "function": {
+                                    "name": tool_name,
+                                    "arguments": arguments,
+                                },
+                            }],
+                        },
+                        "finish_reason": None,
+                    }],
+                    "usage": None,
+                },
+                {
+                    "id": f"chatcmpl-{len(calls)}",
+                    "model": PRODUCTION_TEXT_MODEL,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": "tool_calls",
+                    }],
+                    "usage": None,
+                },
+                {
+                    "id": f"chatcmpl-{len(calls)}",
+                    "model": PRODUCTION_TEXT_MODEL,
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 50,
+                        "total_tokens": 150,
+                    },
+                },
+            ]
+            stream_body = "".join(
+                f"data: {json.dumps(event)}\n\n" for event in events
+            ) + "data: [DONE]\n\n"
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                text=stream_body,
+            )
+
+        provider = DGridStoryboardProvider(
+            api_key="test-key",
+            base_url="https://api.dgrid.ai/v1",
+            model=PRODUCTION_TEXT_MODEL,
+            transport=httpx.MockTransport(handler),
+        )
+        treatment, bible, assets, plan = (
+            await provider.generate_quality_director_plan(
+                script,
+                "【导演方法】动画解说导演",
+                durations,
+                director_skill_id="animated-explainer",
+                director_skill_version="2.1.0",
+                input_hash="a" * 64,
+            )
+        )
+
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(treatment.chapter_progression), 3)
+        self.assertEqual(bible.input_hash, "a" * 64)
+        self.assertEqual(assets.references, [])
+        self.assertEqual([shot.beat_ids for shot in plan.shots], groups)
+        self.assertTrue(plan.director_review.passed)
 
     async def test_quality_director_terms_403_is_not_retried_and_is_diagnosed(self):
         card = SourceCard(
