@@ -33,6 +33,7 @@ from qijia_video.contracts import (
     PersonResearchBrief,
     PersonViewpointInput,
     PreGenerationMediaMode,
+    PROVIDER_IMAGE_PROMPT_MAX_LENGTH,
     QuickSourceCardInput,
     QualityReport,
     ResearchDiagnostics,
@@ -58,6 +59,8 @@ from qijia_video.contracts import (
 from qijia_video.errors import (
     AccessDenied,
     InvalidTransition,
+    ProviderRequestNotSubmitted,
+    ProviderSubmissionUnknown,
     ProviderUnavailable,
     QualityGateFailed,
     ResourceNotFound,
@@ -71,6 +74,7 @@ from qijia_video.infrastructure.memory_repository import InMemoryAggregateReposi
 from qijia_video.infrastructure.media import FfmpegMediaPackager
 from qijia_video.infrastructure.image_providers import (
     MockImageProvider,
+    SEEDREAM_GENERATION_READ_TIMEOUT_SECONDS,
     SEEDREAM_MAX_SEED,
     SeedreamImageProvider,
 )
@@ -128,6 +132,7 @@ from qijia_video.prompt_orchestration import (
     compile_direct_script_prompt,
     compile_script_skill_prompt,
 )
+from qijia_video.provider_prompting import SEEDREAM_IMAGE_PROMPT_BUDGET
 from qijia_video.prompt_adapter_registry import default_prompt_adapter_registry
 from qijia_video.service import QijiaVideoService, REQUIRED_PACKAGE_NAMES
 from qijia_video.script_skill_registry import default_script_skill_registry
@@ -1415,6 +1420,10 @@ class SeedreamProviderContractTests(unittest.IsolatedAsyncioTestCase):
             if request.method == "POST":
                 body = json.loads(request.content)
                 self.assertEqual(
+                    request.extensions["timeout"]["read"],
+                    SEEDREAM_GENERATION_READ_TIMEOUT_SECONDS,
+                )
+                self.assertEqual(
                     body["model"], "doubao-seedream-5-0-lite-260128"
                 )
                 self.assertEqual(body["size"], "1440x2560")
@@ -1500,7 +1509,7 @@ class SeedreamProviderContractTests(unittest.IsolatedAsyncioTestCase):
             reference_image_urls=reference_urls,
         )
 
-    async def test_ambiguous_image_submit_is_not_retried(self):
+    async def test_pre_submit_connect_failure_is_safely_retried(self):
         calls = 0
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -1516,7 +1525,60 @@ class SeedreamProviderContractTests(unittest.IsolatedAsyncioTestCase):
             allowed_download_hosts=(".volces.com",),
             transport=httpx.MockTransport(handler),
         )
-        with self.assertRaisesRegex(ProviderUnavailable, "避免重复扣费"):
+        with self.assertRaisesRegex(
+            ProviderRequestNotSubmitted,
+            "请求未提交.*安全尝试 2 次",
+        ):
+            await provider.generate("测试首帧", seed=1)
+        self.assertEqual(calls, 2)
+
+    async def test_ambiguous_image_read_timeout_is_not_retried(self):
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            raise httpx.ReadTimeout("unknown", request=request)
+
+        provider = SeedreamImageProvider(
+            api_key="test-key",
+            model="doubao-seedream-5-0-lite-260128",
+            base_url="https://ark.cn-beijing.volces.com/api/v3",
+            size="1440x2560",
+            allowed_download_hosts=(".volces.com",),
+            transport=httpx.MockTransport(handler),
+        )
+        with self.assertRaisesRegex(
+            ProviderSubmissionUnknown,
+            "ReadTimeout.*600 秒.*不会自动重提",
+        ):
+            await provider.generate("测试首帧", seed=1)
+        self.assertEqual(calls, 1)
+
+    async def test_success_http_without_image_is_treated_as_ambiguous(self):
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return httpx.Response(
+                200,
+                headers={"x-request-id": "seedream-request-01"},
+                json={"model": "doubao-seedream-5-0-lite-260128", "data": []},
+            )
+
+        provider = SeedreamImageProvider(
+            api_key="test-key",
+            model="doubao-seedream-5-0-lite-260128",
+            base_url="https://ark.cn-beijing.volces.com/api/v3",
+            size="1440x2560",
+            allowed_download_hosts=(".volces.com",),
+            transport=httpx.MockTransport(handler),
+        )
+        with self.assertRaisesRegex(
+            ProviderSubmissionUnknown,
+            "成功 HTTP.*request_id=seedream-request-01",
+        ):
             await provider.generate("测试首帧", seed=1)
         self.assertEqual(calls, 1)
 
@@ -4752,6 +4814,58 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             trace_nodes["director"]["actual"]["output_summary"],
         )
 
+    async def test_seedream_style_frames_resume_from_the_last_saved_image(self):
+        class FailSecondSubmissionOnce(RecordingImageProvider):
+            name = "volcengine-seedream"
+
+            def __init__(self):
+                super().__init__()
+                self.all_prompts: list[str] = []
+                self.failed_once = False
+
+            async def generate(self, prompt: str, **kwargs):
+                self.all_prompts.append(prompt)
+                if len(self.all_prompts) == 2 and not self.failed_once:
+                    self.failed_once = True
+                    raise ProviderSubmissionUnknown(
+                        "Seedream 请求已发送但生成结果未返回；结果状态未知，"
+                        "系统不会自动重提"
+                    )
+                return await super().generate(prompt, **kwargs)
+
+        image_provider = FailSecondSubmissionOnce()
+        self.service.image_provider = image_provider
+        job = await self.service.create_direct_job(
+            "黄宗羲，以及他关于是非、利害与成败的判断。",
+            self.actor,
+        )
+        job = await self.service.generate_script(job.id, self.actor)
+        job = await self.service.approve_script(
+            job.id,
+            job.revision,
+            job.script_hash,
+            self.actor,
+        )
+
+        with self.assertRaises(ProviderSubmissionUnknown):
+            await self.service.produce(job.id, self.actor)
+
+        failed = await self.service.get_job(job.id, self.actor)
+        self.assertEqual(failed.state, JobState.FAILED)
+        self.assertEqual(len(failed.style_frame_candidates), 1)
+        first_saved_prompt = failed.style_frame_candidates[0].prompt
+        failed_usage = failed.usage_records[-1]
+        self.assertFalse(failed_usage.succeeded)
+        self.assertEqual(failed_usage.quantity, 1)
+        self.assertIn("可能计费", failed_usage.note)
+
+        recovered = await self.service.produce(job.id, self.actor)
+
+        self.assertEqual(recovered.state, JobState.MEDIA_REVIEW_REQUIRED)
+        self.assertEqual(len(recovered.style_frame_candidates), 3)
+        self.assertEqual(image_provider.all_prompts.count(first_saved_prompt), 1)
+        self.assertEqual(len(image_provider.all_prompts), 4)
+
     async def test_quality_first_reference_reaches_style_and_formal_seedream_requests(self):
         reference_path = self.root / "quality-reference.png"
         reference_path.write_bytes(MockImageProvider._PNG)
@@ -4820,6 +4934,44 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             and "参考图 2（approved_style_frame）" in prompt
             for prompt in image_provider.prompts[3:]
         ))
+        self.assertTrue(all(
+            len(prompt) <= SEEDREAM_IMAGE_PROMPT_BUDGET
+            and "生成方法：" not in prompt
+            and job.provider_adapter_snapshot.image_framework not in prompt
+            and job.provider_adapter_snapshot.reference_policy not in prompt
+            for prompt in image_provider.prompts
+        ))
+
+    async def test_first_frame_contract_is_validated_before_paid_generation(self):
+        image_provider = RecordingImageProvider()
+        self.service.image_provider = image_provider
+        job = await self.service.create_direct_job(
+            "黄宗羲，以及他关于是非、利害与成败的判断。",
+            self.actor,
+        )
+        job = await self.service.generate_script(job.id, self.actor)
+        job = await self.service.approve_script(
+            job.id, job.revision, job.script_hash, self.actor
+        )
+        job = await self.service.produce(job.id, self.actor)
+        selected = job.style_frame_candidates[0]
+        job = await self.service.select_style_frame(
+            job.id, selected.candidate_id, job.revision, self.actor
+        )
+        job = await self.service.confirm_pre_generation_media(
+            job.id, job.revision, self.actor
+        )
+        paid_call_count = len(image_provider.prompts)
+
+        with patch.object(
+            QijiaVideoService,
+            "_first_frame_prompt",
+            return_value="画" * (PROVIDER_IMAGE_PROMPT_MAX_LENGTH + 1),
+        ):
+            with self.assertRaisesRegex(ValidationError, "string_too_long"):
+                await self.service.produce(job.id, self.actor)
+
+        self.assertEqual(len(image_provider.prompts), paid_call_count)
 
     async def test_generic_source_card_requires_evidence_before_verification(self):
         card = await self.service.create_source_card(
@@ -5055,6 +5207,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "最高且唯一视觉基准" in item.prompt
             and f"{item.duration_seconds} 秒内只完成这一条动作链" in item.prompt
             and "【Director Skill 动态语言】" not in item.prompt
+            and "生成方法：" not in item.prompt
             for item in job.visual_requests
         ))
 

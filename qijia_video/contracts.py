@@ -33,6 +33,7 @@ from qijia_video.tts_options import (
 
 SCHEMA_VERSION = "1.0"
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+PROVIDER_IMAGE_PROMPT_MAX_LENGTH = 6000
 DEFAULT_VISUAL_STYLE_ID = "content-skill-default"
 H3_PROMPT_WRITING_PROFILE_ID = "h3-prompt-writing"
 DEFAULT_PROMPT_WRITING_PROFILE_ID = H3_PROMPT_WRITING_PROFILE_ID
@@ -1594,7 +1595,13 @@ class FirstFrameCandidate(ContractModel):
     )
     shot_id: str = Field(min_length=1, max_length=64)
     variant: int = Field(ge=1, le=4)
-    prompt: str = Field(min_length=1, max_length=2000)
+    # H3-derived provider prompts are richer than the legacy 2000-character
+    # storyboard prompt. The compiler applies a tighter quality budget for new
+    # jobs; this storage ceiling also preserves historical adapter snapshots.
+    prompt: str = Field(
+        min_length=1,
+        max_length=PROVIDER_IMAGE_PROMPT_MAX_LENGTH,
+    )
     seed: int = Field(ge=0, le=4294967295)
     model_id: str = Field(default="", max_length=256)
     source_url: str = Field(default="", max_length=4000)
@@ -1615,7 +1622,10 @@ class StyleFrameCandidate(ContractModel):
         pattern=r"^[A-Za-z0-9_-]+$",
     )
     variant: int = Field(ge=1, le=3)
-    prompt: str = Field(min_length=1, max_length=6000)
+    prompt: str = Field(
+        min_length=1,
+        max_length=PROVIDER_IMAGE_PROMPT_MAX_LENGTH,
+    )
     seed: int = Field(ge=0, le=(1 << 31) - 1)
     model_id: str = Field(default="", max_length=256)
     source_url: str = Field(default="", max_length=4000)

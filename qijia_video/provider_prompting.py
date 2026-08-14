@@ -12,8 +12,50 @@ from qijia_video.contracts import (
 )
 
 
+SEEDREAM_IMAGE_PROMPT_BUDGET = 4000
+
+
 def _join(*blocks: str) -> str:
     return '\n'.join(str(item or '').strip() for item in blocks if str(item or '').strip())
+
+
+def _compact_text(value: str, max_chars: int) -> str:
+    """Keep provider prompts concise without dropping whole semantic sections."""
+
+    text = ' '.join(str(value or '').split())
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 1:
+        return text[:max_chars]
+    target = max_chars - 1
+    floor = max(1, int(target * 0.6))
+    cut = max(
+        (text.rfind(mark, floor, target) for mark in ('。', '；', '，', '.', ';', ',')),
+        default=-1,
+    )
+    if cut < floor:
+        cut = target
+        return text[:cut].rstrip() + '…'
+    return text[:cut + 1].rstrip() + '…'
+
+
+def _section(label: str, *values: str, max_chars: int) -> str:
+    content = '；'.join(
+        ' '.join(str(item or '').split())
+        for item in values
+        if str(item or '').strip()
+    )
+    return _compact_text(label + content, max_chars) if content else ''
+
+
+def _bounded_image_prompt(*blocks: str) -> str:
+    prompt = _join(*blocks)
+    if len(prompt) > SEEDREAM_IMAGE_PROMPT_BUDGET:
+        raise ValueError(
+            'Seedream 图片提示词编译超出内部预算：'
+            f'{len(prompt)}>{SEEDREAM_IMAGE_PROMPT_BUDGET}'
+        )
+    return prompt
 
 
 def _shot_payload(shot: StoryboardShot) -> str:
@@ -45,18 +87,6 @@ def _legacy_adapter(adapter: ProviderAdapterSnapshot) -> bool:
     except (TypeError, ValueError):
         return True
     return major < 2
-
-
-def _uses_manifest_framework(adapter: ProviderAdapterSnapshot) -> bool:
-    """New adapters opt into their frozen H3-derived method text explicitly."""
-
-    try:
-        major, minor, *_ = (
-            int(item) for item in str(adapter.version).split('.')
-        )
-    except (TypeError, ValueError):
-        return False
-    return (major, minor) >= (2, 1)
 
 
 def _asset_anchors(asset_bible: AssetBible | None) -> str:
@@ -141,27 +171,35 @@ def compile_style_frame_prompt(
             '参考图 1（global_reference）只承担 Director 已声明的身份、场景、'
             '物件、构图或风格职责；不得自动继承其他属性。'
         )
-    return _join(
+    return _bounded_image_prompt(
         '视觉开发样片，竖屏 9:16，单幅完整画面，不是拼版、设定表或多格分镜。',
-        f'视觉命题：{treatment.visual_thesis}',
-        f'三张样片共同使用的代表性事件：{representative_scene}',
+        _section('视觉命题：', treatment.visual_thesis, max_chars=360),
+        _section(
+            '三张样片共同使用的代表性事件：',
+            representative_scene,
+            max_chars=420,
+        ),
         '不得改变这一事件的主体、场景、动作、道具和结果，只比较视觉处理。',
         emphasis,
-        '核心主体：' + '；'.join(asset_bible.subjects[:4]),
-        ('关键场景：' + '；'.join(asset_bible.locations[:3])),
-        ('关键道具：' + '；'.join(asset_bible.props[:3]) if asset_bible.props else ''),
-        (
-            f'视觉世界：{bible.visual_world}；色彩与材质：{bible.color_material_system}；'
-            f'构图系统：{bible.composition_system}'
+        _section('核心主体：', *asset_bible.subjects[:4], max_chars=260),
+        _section('关键场景：', *asset_bible.locations[:3], max_chars=220),
+        _section('关键道具：', *asset_bible.props[:3], max_chars=180),
+        _section(
+            '视觉世界：',
+            bible.visual_world,
+            '色彩与材质：' + bible.color_material_system,
+            '构图系统：' + bible.composition_system,
+            max_chars=500,
         ),
-        _asset_anchors(asset_bible),
-        '运动前状态：' + '；'.join(asset_bible.motion_grammar[:3]),
-        '验收重点：' + '；'.join(asset_bible.review_criteria[:5]),
+        _compact_text(_asset_anchors(asset_bible), 280),
+        _section('运动前状态：', *asset_bible.motion_grammar[:3], max_chars=240),
+        _section('验收重点：', *asset_bible.review_criteria[:5], max_chars=300),
+        _section('必须排除：', *bible.forbidden_elements[:5], max_chars=280),
         (
-            '必须排除：' + '；'.join(bible.forbidden_elements[:5])
-            if bible.forbidden_elements else ''
+            _compact_text(reference, 450)
+            if has_reference_image
+            else '本样片没有输入参考图，不得虚构参考素材约束。'
         ),
-        reference if has_reference_image else '本样片没有输入参考图，不得虚构参考素材约束。',
         '画面必须像最终成片中的一个成熟镜头，主体行动一眼可读，底部保留字幕安全区。'
         '不要可读文字、Logo、水印、界面、色板、标注线或无关装饰。',
     )
@@ -195,38 +233,52 @@ def compile_image_provider_prompt(
                 '输入参考图只承担本章节 reference_roles 已声明的职责；'
                 '不得自动继承未声明的人物、场景、物件、构图或风格属性。'
             )
-        return _join(
+        # adapter.image_framework and adapter.reference_policy are compiler
+        # instructions, not visible scene content. Their H3 method is executed
+        # by this structure instead of being copied into the provider prompt.
+        return _bounded_image_prompt(
             '竖屏 9:16 单幅画面。',
-            (
-                '生成方法：' + adapter.image_framework
-                if _uses_manifest_framework(adapter)
-                else ''
+            _section(
+                '决定性事件：',
+                context.concrete_event or context.semantic_goal,
+                max_chars=420,
             ),
-            f'决定性事件：{context.concrete_event or context.semantic_goal}',
-            f'主体与空间：{context.subject}；{context.blocking}',
-            f'可见动作和结果：{context.action}；画面停在 {context.end_state}',
-            f'环境：{context.environment}',
-            f'构图与摄影机：{context.composition}；{context.camera_intent}',
-            (
-                '全片视觉语言：'
-                f'{bible.visual_world}；{bible.color_material_system}；'
-                f'{bible.composition_system}'
+            _section(
+                '主体与空间：',
+                context.subject,
+                context.blocking,
+                max_chars=360,
             ),
-            _asset_anchors(asset_bible),
-            (
-                '参考职责总则：' + adapter.reference_policy
-                if has_reference_image and _uses_manifest_framework(adapter)
-                else ''
+            _section(
+                '可见动作和结果：',
+                context.action,
+                '画面停在 ' + context.end_state,
+                max_chars=360,
             ),
-            reference,
-            (
-                '保持连续：'
-                + '；'.join(
-                    [context.continuity_handoff, *bible.continuity_rules[:3]]
-                )
+            _section('环境：', context.environment, max_chars=240),
+            _section(
+                '构图与摄影机：',
+                context.composition,
+                context.camera_intent,
+                max_chars=360,
+            ),
+            _section(
+                '全片视觉语言：',
+                bible.visual_world,
+                bible.color_material_system,
+                bible.composition_system,
+                max_chars=520,
+            ),
+            _compact_text(_asset_anchors(asset_bible), 280),
+            _compact_text(reference, 520),
+            _section(
+                '保持连续：',
+                context.continuity_handoff,
+                *bible.continuity_rules[:3],
+                max_chars=300,
             ),
             '底部保留干净字幕安全区。画面中不要出现可读文字、Logo、水印或多格分镜。',
-            '硬边界：' + '；'.join(adapter.negative_rules),
+            _section('硬边界：', *adapter.negative_rules, max_chars=320),
         )
     reference = (
         '【参考素材保留协议】' + adapter.reference_policy
@@ -271,11 +323,6 @@ def compile_video_provider_prompt(
         return _join(
             '输入模式：首帧驱动的无声 I2V。首帧是最高且唯一视觉基准；其中的身份、'
             '造型、材质、空间、构图、色彩和光线全部保持，不重新设计画面。',
-            (
-                '生成方法：' + adapter.video_framework
-                if _uses_manifest_framework(adapter)
-                else ''
-            ),
             f'起始状态：{context.start_state}；{context.blocking}',
             f'主要动作链：{context.action}',
             f'环境反馈与结束状态：{context.end_state}',

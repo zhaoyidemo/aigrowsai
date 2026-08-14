@@ -25,6 +25,14 @@ class ProviderUnavailable(QijiaVideoError):
     status_code = 503
 
 
+class ProviderRequestNotSubmitted(ProviderUnavailable):
+    """The provider never received the paid request, so retrying is safe."""
+
+
+class ProviderSubmissionUnknown(ProviderUnavailable):
+    """A paid request may have been accepted, but no result was received."""
+
+
 class UsageLedgerUnavailable(ProviderUnavailable):
     """A paid provider call happened but its usage record could not persist."""
 

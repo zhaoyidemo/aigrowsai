@@ -83,6 +83,8 @@ from qijia_video.cost_analysis import (
 )
 from qijia_video.errors import (
     InvalidTransition,
+    ProviderRequestNotSubmitted,
+    ProviderSubmissionUnknown,
     ProviderUnavailable,
     QualityGateFailed,
     ResourceNotFound,
@@ -3099,6 +3101,25 @@ class QijiaVideoService:
         ] + [candidate]
         job.style_frame_candidates.sort(key=lambda item: item.variant)
 
+    @staticmethod
+    def _seedream_failure_usage(
+        exc: ProviderUnavailable,
+        *,
+        label: str,
+    ) -> tuple[float, str]:
+        if isinstance(exc, ProviderSubmissionUnknown):
+            return (
+                1,
+                f'{label}请求已发送但结果未知，可能计费，需与火山方舟账单核对；'
+                '系统未自动重提',
+            )
+        if isinstance(exc, ProviderRequestNotSubmitted):
+            return (
+                0,
+                f'{label}在连接阶段失败，请求未提交，不会产生图片生成费用',
+            )
+        return (0, f'{label}请求明确失败，未取得生成结果')
+
     async def _ensure_style_frames(
         self,
         job: VideoJob,
@@ -3153,6 +3174,15 @@ class QijiaVideoService:
                 # A/B/C share one event and one seed so the editor compares
                 # visual treatment rather than three unrelated compositions.
                 seed = comparison_seed
+                # Validate every deterministic field before the paid request.
+                # Provider output is added only after Ark returns successfully.
+                candidate_request = StyleFrameCandidate(
+                    candidate_id=candidate_id,
+                    variant=variant,
+                    prompt=prompt,
+                    seed=seed,
+                    created_at=timestamp(),
+                )
                 self._report(
                     progress,
                     message=f'正在生成视觉开发样片 {variant}/3…',
@@ -3171,7 +3201,11 @@ class QijiaVideoService:
                             prompt,
                             seed=seed,
                         )
-                except ProviderUnavailable:
+                except ProviderUnavailable as exc:
+                    failed_quantity, failed_note = self._seedream_failure_usage(
+                        exc,
+                        label='视觉开发样片',
+                    )
                     job = await self._persist_usage_record(
                         job,
                         ProviderUsageRecord(
@@ -3185,25 +3219,24 @@ class QijiaVideoService:
                             ),
                             request_id=candidate_id,
                             succeeded=False,
-                            quantity=1,
+                            quantity=failed_quantity,
                             unit='image',
-                            note='视觉开发样片请求失败或结果未知，是否计费需对账',
+                            note=failed_note,
                             occurred_at=timestamp(),
                         ),
                         actor,
                     )
                     raise
-                candidate = self._snapshot_image_cost(StyleFrameCandidate(
-                    candidate_id=candidate_id,
-                    variant=variant,
-                    prompt=prompt,
-                    seed=seed,
-                    model_id=generated.model_id,
-                    source_url=generated.url,
-                    size=generated.size,
-                    usage_total_tokens=generated.usage_total_tokens,
-                    created_at=timestamp(),
-                ))
+                candidate_payload = candidate_request.model_dump(mode='python')
+                candidate_payload.update({
+                    'model_id': generated.model_id,
+                    'source_url': generated.url,
+                    'size': generated.size,
+                    'usage_total_tokens': generated.usage_total_tokens,
+                })
+                candidate = self._snapshot_image_cost(
+                    StyleFrameCandidate.model_validate(candidate_payload)
+                )
                 self._remember_usage_record(job, ProviderUsageRecord(
                     usage_id=(
                         'usage_seedream_style_'
@@ -3357,6 +3390,16 @@ class QijiaVideoService:
                 if not candidate:
                     # Ark ImageGenerations defines Seedream seed as signed int32.
                     seed = secrets.randbits(31)
+                    # Contract drift must fail before Seedream can charge the
+                    # request. This specifically protects long H3 prompts.
+                    candidate_request = FirstFrameCandidate(
+                        candidate_id=candidate_id,
+                        shot_id=shot.shot_id,
+                        variant=variant,
+                        prompt=prompt,
+                        seed=seed,
+                        created_at=timestamp(),
+                    )
                     self._report(
                         progress,
                         message=(
@@ -3390,7 +3433,11 @@ class QijiaVideoService:
                                 prompt,
                                 seed=seed,
                             )
-                    except ProviderUnavailable:
+                    except ProviderUnavailable as exc:
+                        failed_quantity, failed_note = self._seedream_failure_usage(
+                            exc,
+                            label='图片生成',
+                        )
                         job = await self._persist_usage_record(
                             job,
                             ProviderUsageRecord(
@@ -3402,29 +3449,24 @@ class QijiaVideoService:
                                 ),
                                 request_id=candidate_id,
                                 succeeded=False,
-                                quantity=1,
+                                quantity=failed_quantity,
                                 unit="image",
-                                note=(
-                                    "图片生成请求失败或结果未知，是否计费需与"
-                                    "火山方舟账单核对"
-                                ),
+                                note=failed_note,
                                 occurred_at=timestamp(),
                             ),
                             actor,
                         )
                         raise
-                    candidate = self._snapshot_image_cost(FirstFrameCandidate(
-                        candidate_id=candidate_id,
-                        shot_id=shot.shot_id,
-                        variant=variant,
-                        prompt=prompt,
-                        seed=seed,
-                        model_id=generated.model_id,
-                        source_url=generated.url,
-                        size=generated.size,
-                        usage_total_tokens=generated.usage_total_tokens,
-                        created_at=timestamp(),
-                    ))
+                    candidate_payload = candidate_request.model_dump(mode='python')
+                    candidate_payload.update({
+                        'model_id': generated.model_id,
+                        'source_url': generated.url,
+                        'size': generated.size,
+                        'usage_total_tokens': generated.usage_total_tokens,
+                    })
+                    candidate = self._snapshot_image_cost(
+                        FirstFrameCandidate.model_validate(candidate_payload)
+                    )
                     self._remember_usage_record(job, ProviderUsageRecord(
                         usage_id=(
                             "usage_seedream_"

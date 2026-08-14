@@ -8,11 +8,17 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from qijia_video.errors import ProviderUnavailable
+from qijia_video.errors import (
+    ProviderRequestNotSubmitted,
+    ProviderSubmissionUnknown,
+    ProviderUnavailable,
+)
 from qijia_video.ports import GeneratedImage
 
 
 SEEDREAM_MAX_SEED = (1 << 31) - 1
+SEEDREAM_GENERATION_READ_TIMEOUT_SECONDS = 600.0
+SEEDREAM_PRE_SUBMIT_ATTEMPTS = 2
 
 
 class MockImageProvider:
@@ -66,6 +72,8 @@ class SeedreamImageProvider:
         allowed_download_hosts: tuple[str, ...],
         transport: httpx.AsyncBaseTransport | None = None,
         max_download_bytes: int = 30 * 1024 * 1024,
+        generation_read_timeout: float = SEEDREAM_GENERATION_READ_TIMEOUT_SECONDS,
+        pre_submit_attempts: int = SEEDREAM_PRE_SUBMIT_ATTEMPTS,
     ):
         self.api_key = str(api_key or "").strip()
         self.model = str(model or "").strip()
@@ -78,6 +86,8 @@ class SeedreamImageProvider:
         )
         self.transport = transport
         self.max_download_bytes = max(1024 * 1024, int(max_download_bytes))
+        self.generation_read_timeout = max(1.0, float(generation_read_timeout))
+        self.pre_submit_attempts = max(1, min(3, int(pre_submit_attempts)))
         if not self.model or not self.size or not self.base_url.startswith("https://"):
             raise ProviderUnavailable("Seedream API 配置不完整")
         if not self.allowed_download_hosts:
@@ -87,7 +97,7 @@ class SeedreamImageProvider:
     def configured(self) -> bool:
         return bool(self.api_key)
 
-    def _client(self, *, timeout: float = 120.0) -> httpx.AsyncClient:
+    def _client(self) -> httpx.AsyncClient:
         if not self.configured:
             raise ProviderUnavailable("真实首帧生成未配置：请设置 ARK_API_KEY")
         return httpx.AsyncClient(
@@ -96,7 +106,12 @@ class SeedreamImageProvider:
                 "Authorization": f"Bearer {self.api_key}",
                 "Accept": "application/json",
             },
-            timeout=httpx.Timeout(timeout, connect=20.0),
+            timeout=httpx.Timeout(
+                connect=20.0,
+                read=self.generation_read_timeout,
+                write=60.0,
+                pool=20.0,
+            ),
             transport=self.transport,
             follow_redirects=False,
         )
@@ -154,12 +169,39 @@ class SeedreamImageProvider:
                 raise ProviderUnavailable("Seedream 参考图必须使用 HTTPS 访问地址")
             body["image"] = references
         async with self._client() as client:
-            try:
-                response = await client.post("/images/generations", json=body)
-            except (httpx.TimeoutException, httpx.RequestError) as exc:
-                raise ProviderUnavailable(
-                    "Seedream 提交结果未知；为避免重复扣费，禁止自动重提"
-                ) from exc
+            for attempt in range(1, self.pre_submit_attempts + 1):
+                try:
+                    response = await client.post("/images/generations", json=body)
+                    break
+                except (
+                    httpx.ConnectTimeout,
+                    httpx.ConnectError,
+                    httpx.PoolTimeout,
+                ) as exc:
+                    # These failures happen before an HTTP request can be
+                    # submitted. Retrying them cannot duplicate a paid image.
+                    if attempt < self.pre_submit_attempts:
+                        continue
+                    raise ProviderRequestNotSubmitted(
+                        "Seedream 无法建立连接，请求未提交"
+                        f"（{type(exc).__name__}，已安全尝试 {attempt} 次）；"
+                        "不会产生图片生成扣费，可安全重试"
+                    ) from exc
+                except httpx.RequestError as exc:
+                    # Read/write/protocol failures can happen after Ark accepted
+                    # the synchronous generation request. ImageGenerations does
+                    # not return a queryable task id, so blind resubmission is
+                    # intentionally forbidden.
+                    timeout_note = (
+                        f"，读取等待上限 {self.generation_read_timeout:g} 秒"
+                        if isinstance(exc, httpx.ReadTimeout)
+                        else ""
+                    )
+                    raise ProviderSubmissionUnknown(
+                        "Seedream 请求已发送但生成结果未返回"
+                        f"（{type(exc).__name__}{timeout_note}）；结果状态未知，"
+                        "系统不会自动重提。已成功保存的其他图片不会重跑"
+                    ) from exc
         if response.status_code >= 400:
             raise self._response_error(response)
         try:
@@ -177,7 +219,12 @@ class SeedreamImageProvider:
                 usage_total_tokens=max(0, int(usage.get("total_tokens") or 0)),
             )
         except (KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
-            raise ProviderUnavailable("Seedream 响应缺少可下载的图片") from exc
+            request_id = response.headers.get("x-request-id", "")
+            suffix = f"；request_id={request_id}" if request_id else ""
+            raise ProviderSubmissionUnknown(
+                "Seedream 已返回成功 HTTP，但响应缺少可下载图片；"
+                f"结果状态未知，系统不会自动重提{suffix}"
+            ) from exc
 
     def _download_url_allowed(self, value: str) -> bool:
         parsed = urlparse(value)
