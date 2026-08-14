@@ -144,7 +144,6 @@ def compile_style_frame_prompt(
     return _join(
         '视觉开发样片，竖屏 9:16，单幅完整画面，不是拼版、设定表或多格分镜。',
         f'视觉命题：{treatment.visual_thesis}',
-        f'风格落实：{treatment.style_application}',
         f'三张样片共同使用的代表性事件：{representative_scene}',
         '不得改变这一事件的主体、场景、动作、道具和结果，只比较视觉处理。',
         emphasis,
@@ -152,8 +151,8 @@ def compile_style_frame_prompt(
         ('关键场景：' + '；'.join(asset_bible.locations[:3])),
         ('关键道具：' + '；'.join(asset_bible.props[:3]) if asset_bible.props else ''),
         (
-            f'视觉世界：{bible.visual_world}；{bible.color_material_system}；'
-            f'{bible.composition_system}'
+            f'视觉世界：{bible.visual_world}；色彩与材质：{bible.color_material_system}；'
+            f'构图系统：{bible.composition_system}'
         ),
         _asset_anchors(asset_bible),
         '运动前状态：' + '；'.join(asset_bible.motion_grammar[:3]),

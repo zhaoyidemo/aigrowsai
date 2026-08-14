@@ -42,6 +42,6 @@ Remotion 位于仓库根目录 `video_renderer/`，只读取 `render_manifest.js
 
 新增脚本创作能力时扩展或替换唯一 Script Skill，不在它前面叠加 Content Skill 或 Prompt Adapter；新增导演方法时扩展或替换唯一 Director Skill；新增画风时创建 Visual Style；替换媒体模型时创建 Provider Adapter。Script Skill 只负责作品内容，Director Skill 是视觉叙事决策唯一负责人，Visual Style 是其资产与美术系统，Provider Adapter 只负责编译模型语言。旧字段、Content Skill、H3 前置适配器与 Prompt Writing Profile 只用于历史快照兼容。
 
-`animated-explainer@2.1.0` 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中 Animated Explainer 的具体事件、主体调度与连续性原则；人类文档和来源说明与模型运行时指令分开保存，未引入其研究、脚本、语音或 CLI 流程。MiniMax H3 的借鉴范围限定在导演之后的多模态参考角色和供应商提示词表达，不参与脚本选题与论证。
+`animated-explainer@2.2.0` 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中 Animated Explainer 的具体事件、主体调度与连续性原则；人类文档和来源说明与模型运行时指令分开保存，未引入其研究、脚本、语音或 CLI 流程。MiniMax H3 的借鉴范围限定在导演之后的多模态参考角色和供应商提示词表达，不参与脚本选题与论证。
 
 完整部署、配置、测试和数据边界见仓库根目录 `README.md`。

@@ -673,10 +673,6 @@ _DIRECTOR_TREATMENT_FIELDS = (
     'visual_thesis',
     'audience_experience',
     'chapter_progression',
-    'motif_system',
-    'rhythm_strategy',
-    'edit_pattern',
-    'style_application',
 )
 _ASSET_BIBLE_FIELDS = (
     'subjects',
@@ -2872,13 +2868,15 @@ class OpenRouterStoryboardProvider:
             + '\n\n'
             '【第一阶段：视觉开发】先不要拆镜头。根据完整口播和真实时长，建立一条'
             '能够随论证推进的视觉命题，而不是逐句配图。锁定重复主体、场景、道具、'
-            '材质、视觉母题、章节递进、剪辑节奏、运动规则和验收标准。'
+            '材质、视觉规则、章节递进、运动规则和验收标准。'
             'chapter_progression 的每一项对应第二阶段的一个视觉章节；数量必须落在输入给定'
             '范围内，本阶段只锁定每章的叙事任务，不设计具体事件、调度或摄影机。\n\n'
             '【完整交付要求】必须同时交付三组可以直接约束下一阶段的结果：'
-            '全片视觉方案要写清视觉命题、观众体验、章节递进、重复母题、节奏、剪辑和风格落地；'
+            'DirectorTreatment 只写视觉命题、观众体验和章节递进；'
             '全片视觉规则要写清视觉世界、重复主体、场景锚点、连续性、色彩材质、构图、参考策略和禁用元素；'
             '资产规则要列出可复用人物、地点、道具、身份锁、材质锁、允许变化、运动规则和至少两条可判定的验收标准。'
+            '三组结果必须职责分离：重复视觉系统、剪辑连续性与风格落地属于 VisualBible，'
+            '可复用资产与运动规则属于 AssetBible，不得在 DirectorTreatment 中重复定义。'
             '所有必填文字和必填列表都必须有实质内容，不得用“同上”“保持一致”“按脚本”代替；'
             '没有参考图时 references 必须是空数组。\n\n'
             '参考素材采用职责分离：'
@@ -2923,7 +2921,7 @@ class OpenRouterStoryboardProvider:
                 {'role': 'user', 'content': treatment_user_content},
             ],
             label='导演视觉开发',
-            schema_name='qijia_director_treatment_v3',
+            schema_name='qijia_director_treatment_v4',
             response_schema=_director_treatment_response_schema(
                 max_director_chapters
             ),

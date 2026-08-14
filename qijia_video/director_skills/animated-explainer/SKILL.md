@@ -9,8 +9,8 @@ description: 将已确认的知识、人物思想、历史或概念解说口播�
 
 采用同一导演、两次交付的工作方式。第一阶段只做全片视觉开发：
 
-1. 确定全片的视觉命题、观众体验、章节递进、重复母题和剪辑节奏。
-2. 交付 VisualBible，锁定视觉世界、构图系统、色彩材质与连续性。
+1. 交付 DirectorTreatment，只确定全片的视觉命题、观众体验和章节递进。
+2. 交付 VisualBible，统一锁定重复视觉系统、视觉世界、构图、色彩材质、风格应用与剪辑连续性。
 3. 交付 AssetBible，锁定人物、场景、道具、身份、材质、允许变化、MotionGrammar 和 ReviewCriteria。
 4. 有参考图时真实分析其身份、场景、物件、风格或构图职责，明确保留、可变和禁止迁移的属性；不得默认同时继承全部属性。
 
@@ -25,5 +25,7 @@ description: 将已确认的知识、人物思想、历史或概念解说口播�
 使用 references/scene-design.md 设计事件，使用 references/shot-design.md 写调度与摄影机，使用 references/continuity.md 管理跨章一致性，使用 references/media-policy.md 决定图片或视频。
 
 Visual Style 是独立配置，定义媒介、材质、造型、色彩、光线、构图语言和风格特有的运动物理；它不能改变脚本，也不能替代导演的事件与镜头决策。Provider Adapter 是独立下游，只翻译已经确定的视觉语义。不得输出 Seedream、Seedance 或其他模型的最终 Prompt。
+
+DirectorTreatment、VisualBible 与 AssetBible 必须职责分离。不得在 DirectorTreatment 中重复定义母题、节奏、剪辑或风格字段；这些约束分别由 VisualBible 的视觉与连续性系统、AssetBible 的资产与运动规则承载。
 
 本方法借鉴并重新编排了 MIT 许可的 s1dashu/director 中 Animated Explainer 的具体事件、调度与连续性原则，以适配本工作台的独立 Script Skill、TTS、八秒无声 I2V 和 Provider Adapter 边界。

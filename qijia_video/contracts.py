@@ -1295,13 +1295,26 @@ class DirectorTreatment(ContractModel):
     visual_thesis: str = Field(min_length=1, max_length=1200)
     audience_experience: str = Field(min_length=1, max_length=800)
     chapter_progression: list[str] = Field(min_length=3, max_length=10)
-    motif_system: list[str] = Field(min_length=1, max_length=12)
-    rhythm_strategy: str = Field(min_length=1, max_length=1000)
-    edit_pattern: str = Field(min_length=1, max_length=1000)
-    style_application: str = Field(min_length=1, max_length=1200)
     model_id: str = Field(default="", max_length=256)
     input_hash: str = Field(default="", pattern=r"^$|^[a-f0-9]{64}$")
     created_at: str = Field(default="", max_length=64)
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_overlapping_fields(cls, value: Any) -> Any:
+        """Read old jobs without preserving fields now owned by the visual bibles."""
+
+        if not isinstance(value, dict):
+            return value
+        legacy_fields = {
+            "motif_system",
+            "rhythm_strategy",
+            "edit_pattern",
+            "style_application",
+        }
+        if not legacy_fields.intersection(value):
+            return value
+        return {key: item for key, item in value.items() if key not in legacy_fields}
 
 
 class AssetBible(ContractModel):

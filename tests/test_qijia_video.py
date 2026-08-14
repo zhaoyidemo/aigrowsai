@@ -1994,7 +1994,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 model="anthropic/claude-fable-5",
                 messages=[{"role": "user", "content": "return JSON"}],
                 label="导演视觉开发",
-                schema_name="qijia_director_treatment_v3",
+                schema_name="qijia_director_treatment_v4",
                 response_schema=_director_treatment_response_schema(5),
                 max_completion_tokens=4096,
                 timeout_seconds=30,
@@ -3151,8 +3151,14 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(treatment["visual_thesis"]["minLength"], 1)
         self.assertEqual(treatment["visual_thesis"]["maxLength"], 1200)
-        self.assertEqual(treatment["motif_system"]["minItems"], 1)
-        self.assertEqual(treatment["motif_system"]["maxItems"], 12)
+        self.assertEqual(
+            set(treatment),
+            {"visual_thesis", "audience_experience", "chapter_progression"},
+        )
+        self.assertEqual(
+            set(first_stage["properties"]["director_treatment"]["required"]),
+            {"visual_thesis", "audience_experience", "chapter_progression"},
+        )
         self.assertEqual(visual_bible["recurring_subjects"]["minItems"], 1)
         self.assertEqual(visual_bible["continuity_rules"]["minItems"], 2)
         self.assertEqual(visual_bible["continuity_rules"]["maxItems"], 16)
@@ -3190,11 +3196,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         raw = {
             "visual_thesis": "不得出现在错误消息里的模型原文",
             "audience_experience": "逐步理解同一选择的长期后果。",
-            "chapter_progression": ["建立冲突", "显现代价", "完成重构"],
-            "motif_system": [],
-            "rhythm_strategy": "开场迅速，中段停顿，结尾收束。",
-            "edit_pattern": "动作结果承接下一章。",
-            "style_application": "以统一纸张材质承载视觉叙事。",
+            "chapter_progression": ["建立冲突", "显现代价"],
         }
 
         with self.assertRaises(ProviderUnavailable) as caught:
@@ -3212,7 +3214,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
 
         message = str(caught.exception)
         self.assertIn("DirectorTreatment", message)
-        self.assertIn("motif_system", message)
+        self.assertIn("chapter_progression", message)
         self.assertNotIn("不得出现在错误消息", message)
 
     def test_quality_director_decodes_stringified_nested_artifact(self):
@@ -3240,6 +3242,11 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(artifact.chapter_progression), 3)
         self.assertEqual(artifact.input_hash, "e" * 64)
+        serialized = artifact.model_dump(mode="json")
+        self.assertNotIn("motif_system", serialized)
+        self.assertNotIn("rhythm_strategy", serialized)
+        self.assertNotIn("edit_pattern", serialized)
+        self.assertNotIn("style_application", serialized)
 
     async def test_openrouter_quality_director_locks_world_before_shots(self):
         card = SourceCard(
@@ -3280,10 +3287,6 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "visual_thesis": "用同一物件的位置变化承载判断标准的变化。",
                 "audience_experience": "从眼前输赢逐步看到长期判断。",
                 "chapter_progression": ["建立冲突", "显现代价", "完成重构"],
-                "motif_system": ["关键物件", "右侧窗光"],
-                "rhythm_strategy": "开场迅速，中段停顿观察，结尾收束。",
-                "edit_pattern": "动作结果接下一章起始状态。",
-                "style_application": "现代编辑插画，以纸纹、色块和负空间组织关系。",
             },
             "visual_bible": {
                 "core_visual_idea": "物件位置改变人物关系。",
@@ -3337,7 +3340,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("max_completion_tokens", body)
             self.assertNotIn("models", body)
             schema_name = body["response_format"]["json_schema"]["name"]
-            if schema_name == "qijia_director_treatment_v3":
+            if schema_name == "qijia_director_treatment_v4":
                 result = treatment_payload
             elif schema_name == "qijia_director_review_v1":
                 result = director_review
@@ -3386,7 +3389,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [item["response_format"]["json_schema"]["name"] for item in calls],
             [
-                "qijia_director_treatment_v3",
+                "qijia_director_treatment_v4",
                 "qijia_director_shot_plan_v3",
                 "qijia_director_review_v1",
             ],
@@ -3461,10 +3464,6 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "visual_thesis": "用同一物件的位置变化承载判断标准。",
                 "audience_experience": "从眼前输赢逐步看到长期判断。",
                 "chapter_progression": ["建立冲突", "显现代价", "完成重构"],
-                "motif_system": ["关键物件", "右侧窗光"],
-                "rhythm_strategy": "开场迅速，中段停顿观察，结尾收束。",
-                "edit_pattern": "动作结果接下一章起始状态。",
-                "style_application": "以纸纹、色块和负空间组织关系。",
             },
             "visual_bible": {
                 "core_visual_idea": "物件位置改变人物关系。",
@@ -3548,7 +3547,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             tool_name = body["tool_choice"]["function"]["name"]
             self.assertEqual(body["tools"][0]["function"]["name"], tool_name)
             self.assertTrue(body["tools"][0]["function"]["strict"])
-            if tool_name == "submit_qijia_director_treatment_v3":
+            if tool_name == "submit_qijia_director_treatment_v4":
                 result = treatment_payload
             elif tool_name == "submit_qijia_director_shot_plan_v3":
                 result = shot_payload
@@ -4450,7 +4449,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.script_skill_snapshot.skill_id,
             "insight-led-scriptwriter",
         )
-        self.assertEqual(job.director_skill_snapshot.version, "2.1.0")
+        self.assertEqual(job.director_skill_snapshot.version, "2.2.0")
         self.assertEqual(job.provider_adapter_snapshot.version, "2.1.0")
         self.assertEqual(job.generation_settings.seedance_model, SEEDANCE_BALANCED_MODEL)
 
@@ -4772,7 +4771,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.director_skill_snapshot.skill_id,
             "animated-explainer",
         )
-        self.assertEqual(job.director_skill_snapshot.version, "2.1.0")
+        self.assertEqual(job.director_skill_snapshot.version, "2.2.0")
         self.assertEqual(job.director_skill_snapshot.mode, "animated_explainer")
         self.assertEqual(
             job.provider_adapter_snapshot.adapter_id,

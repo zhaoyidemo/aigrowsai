@@ -278,14 +278,6 @@ class TemplateStoryboardProvider:
                 '揭开决定关系的机制',
                 '让选择产生可见后果',
             ],
-            motif_system=['贯穿全片的核心主体', '状态持续变化的关键物件'],
-            rhythm_strategy='关键判断使用稳定构图，转折处以明确动作改变画面状态。',
-            edit_pattern='以动作结果或构图方向承接章节，独立论证节点允许克制硬切。',
-            style_application=(
-                '纸材厚度、纤维、接触阴影和逐格运动共同承担解释。'
-                if is_paper
-                else '编辑插画用层次、留白和克制运动承担解释。'
-            ),
             model_id=self.name,
             input_hash=input_hash,
             created_at=timestamp(),
