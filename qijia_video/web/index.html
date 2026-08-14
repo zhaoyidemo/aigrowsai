@@ -166,12 +166,12 @@
           <section id="manual-reference-input" class="reference-input" aria-labelledby="reference-input-title">
             <div class="reference-input-heading">
               <div>
-                <strong id="reference-input-title" class="question-line"><span class="question-number">3</span>有需要保持一致的人物、场景或画面风格吗？</strong>
+                <strong id="reference-input-title" class="question-line"><span class="question-number">3</span>有喜欢的画面风格参考吗？</strong>
                 <span>上传 1 张参考图（可选）</span>
               </div>
               <button id="remove-reference-image" class="reference-remove" type="button" hidden>移除</button>
             </div>
-            <div id="reference-dropzone" class="reference-dropzone" role="button" tabindex="0" aria-label="选择人物、场景或风格参考图">
+            <div id="reference-dropzone" class="reference-dropzone" role="button" tabindex="0" aria-label="选择风格参考图">
               <input id="reference-image-input" name="reference_image" type="file" accept="image/jpeg,image/png,image/webp" hidden>
               <div id="reference-empty" class="reference-empty">
                 <span class="reference-add">+</span>
@@ -182,7 +182,7 @@
                 <span id="reference-file-name"></span>
               </div>
             </div>
-            <p class="field-hint">上传后，参考图会发送给 DGrid 上的 Claude Fable 5 导演模型进行职责分析，并发送给火山引擎 Seedream 生成 3 张视觉样片和正式首帧。系统只保留导演声明的人物、服装、物件、场景、构图或风格属性，不会把图片内容当作事实依据。请勿上传不希望交由这两个服务处理的敏感图片。JPG、PNG 或 WebP，最大 10 MB。</p>
+            <p class="field-hint">上传图固定作为全局风格参考，只发送给火山引擎 Seedream 生成 3 张视觉样片和正式首帧，不发送给 DGrid 导演模型，也不作为人物、场景或事实依据。请勿上传不希望交由 Seedream 处理的敏感图片。JPG、PNG 或 WebP，最大 10 MB。</p>
           </section>
 
           <div id="manual-intake-actions" class="actions source-form-actions">
@@ -284,7 +284,7 @@
           </section>
           <section id="job-reference-image" class="job-reference-image" hidden>
             <img id="job-reference-preview" alt="本任务的全局参考图">
-            <div><strong>参考图已由导演解析</strong><span>只保留被明确指定的人物、场景、物件或风格属性，不会自动照搬全部内容</span></div>
+            <div><strong>参考图已设为全局风格参考</strong><span>仅供 Seedream 继承媒介、色彩、材质、光线与造型语言，不作为人物、场景或事实依据</span></div>
           </section>
           <section id="seedance-usage-summary" class="usage-summary" aria-label="AI 生成用量" hidden>
             <div class="usage-stat">

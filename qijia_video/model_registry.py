@@ -18,12 +18,13 @@ PRODUCTION_TEXT_INPUT_USD_PER_MILLION = 10.0
 PRODUCTION_TEXT_OUTPUT_USD_PER_MILLION = 50.0
 # At script review, the three Script Skill requests have already happened:
 # writer draft, advisory editor, and final writer.
-# Director normally runs visual development, formal chapters and independent
-# review. One failed review adds one bounded revision plus one final review.
-QUALITY_DIRECTOR_REQUEST_COUNT = 3
-QUALITY_DIRECTOR_REQUEST_COUNT_RANGE = (3, 5)
-QUALITY_DIRECTOR_INPUT_TOKEN_RANGE = (18_000, 240_000)
-QUALITY_DIRECTOR_OUTPUT_TOKEN_RANGE = (26_000, 368_000)
+# Director normally runs focused visual direction, asset continuity, formal
+# chapters and independent review. One failed review adds one bounded revision
+# plus one final review.
+QUALITY_DIRECTOR_REQUEST_COUNT = 4
+QUALITY_DIRECTOR_REQUEST_COUNT_RANGE = (4, 6)
+QUALITY_DIRECTOR_INPUT_TOKEN_RANGE = (24_000, 280_000)
+QUALITY_DIRECTOR_OUTPUT_TOKEN_RANGE = (28_000, 400_000)
 SEEDANCE_EFFICIENT_MODEL = "doubao-seedance-1-0-pro-fast-251015"
 SEEDANCE_BALANCED_MODEL = "doubao-seedance-1-5-pro-251215"
 SEEDANCE_FLAGSHIP_MODEL = "doubao-seedance-2-0-260128"

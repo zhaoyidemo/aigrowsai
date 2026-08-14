@@ -96,7 +96,7 @@ def compile_director_instruction(
         '服装、物件、地点、风格或构图职责；这些职责不得自动混用，参考图也不得覆盖'
         '已确认脚本中的事实。'
         if has_reference_image
-        else '没有全局参考图，请依据已确认脚本和视觉语言建立完整、连续的视觉世界。'
+        else '本次导演工作不接收外部参考图，请依据已确认脚本和视觉语言建立完整、连续的视觉世界。'
     )
     if director.mode == 'legacy-style-director':
         compiled = _join(

@@ -426,7 +426,7 @@ class QijiaVideoRuntime:
                 },
                 "usd_to_cny_rate": USD_TO_CNY_RATE,
                 "basis": (
-                    "按 Claude Fable 5 公开价和 Director 正常三次、审片修订时最多五次的 "
+                    "按 Claude Fable 5 公开价和 Director 正常四次、审片修订时最多六次的 "
                     "token 区间预估；实际调用以 DGrid billing-json 计费快照为准"
                 ),
             },

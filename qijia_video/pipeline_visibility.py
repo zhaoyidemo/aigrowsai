@@ -139,7 +139,7 @@ def production_pipeline(runtime) -> dict:
         _node(
             "director", 5, "ai_colleague", "AI 同事", "视觉导演",
             director_skill["display_name"],
-            "先建立视觉命题与资产圣经，再按真实 TTS 时长导演分镜并独立审片。",
+            "先分别锁定视觉方向与资产连续性，再按真实 TTS 时长导演分镜并独立审片。",
             "确认脚本、逐段真实时长、视觉风格与参考图",
             "DirectorTreatment、VisualBible、AssetBible、StoryboardPlan",
             capabilities=[_capability(
@@ -148,11 +148,12 @@ def production_pipeline(runtime) -> dict:
             models=[_model(
                 _provider_model_id(runtime.storyboard_provider),
                 runtime.storyboard_provider.name,
-                "视觉开发、分镜、审片与必要修订",
+                "视觉方向、资产连续性、分镜、审片与必要修订",
             )],
-            calls="正常 3 次，最多 5 次",
+            calls="正常 4 次，最多 6 次",
             operations=[
-                "director_treatment", "storyboard_generation",
+                "director_visual_development", "director_asset_development",
+                "storyboard_generation",
                 "director_critique", "storyboard_revision",
             ],
             progress_stages=["storyboard"],

@@ -94,7 +94,7 @@ from qijia_video.infrastructure.script_providers import (
     _SHOT_CONTEXT_V3_RESPONSE_SCHEMA,
     _VISUAL_BIBLE_RESPONSE_SCHEMA,
     _director_shot_plan_response_schema,
-    _director_treatment_response_schema,
+    _director_visual_development_response_schema,
     _normalized_script_editor_feedback,
     _openrouter_completion_limit_key,
     _openrouter_json_request,
@@ -335,7 +335,7 @@ class QijiaVideoContractTests(unittest.TestCase):
             )
 
     def test_quality_director_locks_one_payload_per_chapter_slot(self):
-        four_chapter_treatment = _director_treatment_response_schema(4)
+        four_chapter_treatment = _director_visual_development_response_schema(4)
         progression = four_chapter_treatment["properties"]["director_treatment"][
             "properties"
         ]["chapter_progression"]
@@ -1994,8 +1994,8 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 model="anthropic/claude-fable-5",
                 messages=[{"role": "user", "content": "return JSON"}],
                 label="导演视觉开发",
-                schema_name="qijia_director_treatment_v4",
-                response_schema=_director_treatment_response_schema(5),
+                schema_name="qijia_director_visual_development_v1",
+                response_schema=_director_visual_development_response_schema(5),
                 max_completion_tokens=4096,
                 timeout_seconds=30,
                 transport=httpx.MockTransport(handler),
@@ -3135,10 +3135,14 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bible.input_hash, "a" * 64)
 
     def test_quality_director_provider_schema_matches_domain_contract(self):
-        first_stage = _director_treatment_response_schema(4)
+        first_stage = _director_visual_development_response_schema(4)
+        self.assertNotIn(
+            'reference_strategy',
+            first_stage['properties']['visual_bible']['properties'],
+        )
         treatment = first_stage["properties"]["director_treatment"]["properties"]
         visual_bible = first_stage["properties"]["visual_bible"]["properties"]
-        asset_bible = first_stage["properties"]["asset_bible"]["properties"]
+        asset_bible = _ASSET_BIBLE_SCHEMA["properties"]
 
         self.assertEqual(
             treatment["chapter_progression"],
@@ -3165,13 +3169,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(asset_bible["subjects"]["minItems"], 1)
         self.assertEqual(asset_bible["review_criteria"]["minItems"], 2)
         self.assertEqual(asset_bible["review_criteria"]["maxItems"], 20)
-        self.assertEqual(asset_bible["references"]["maxItems"], 8)
-        self.assertEqual(
-            asset_bible["references"]["items"]["properties"]["roles"]["items"][
-                "enum"
-            ],
-            ["identity", "wardrobe", "object", "location", "style", "composition"],
-        )
+        self.assertNotIn("references", asset_bible)
         serialized = json.dumps(first_stage, ensure_ascii=False)
         self.assertNotIn('"$ref"', serialized)
         self.assertNotIn('"$defs"', serialized)
@@ -3189,7 +3187,11 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             set(_ASSET_BIBLE_SCHEMA["properties"]),
-            set(first_stage["properties"]["asset_bible"]["properties"]),
+            set(_ASSET_BIBLE_SCHEMA["required"]),
+        )
+        self.assertEqual(
+            set(first_stage["properties"]),
+            {"director_treatment", "visual_bible"},
         )
 
     def test_quality_director_validation_names_bad_artifact_and_field_safely(self):
@@ -3299,17 +3301,16 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "reference_strategy": "无参考图。",
                 "forbidden_elements": ["可读文字", "随机换脸"],
             },
-            "asset_bible": {
-                "subjects": ["主角", "配角"],
-                "locations": ["固定书房"],
-                "props": ["关键物件"],
-                "identity_locks": ["主角轮廓、服装与比例固定"],
-                "material_locks": ["纸纹、色块和侧光固定"],
-                "allowed_variations": ["动作、景别和局部构图可变"],
-                "motion_grammar": ["单一动作链", "克制跟随"],
-                "review_criteria": ["事件一眼可读", "人物与材质连续"],
-                "references": [],
-            },
+        }
+        asset_payload = {
+            "subjects": ["主角", "配角"],
+            "locations": ["固定书房"],
+            "props": ["关键物件"],
+            "identity_locks": ["主角轮廓、服装与比例固定"],
+            "material_locks": ["纸纹、色块和侧光固定"],
+            "allowed_variations": ["动作、景别和局部构图可变"],
+            "motion_grammar": ["单一动作链", "克制跟随"],
+            "review_criteria": ["事件一眼可读", "人物与材质连续"],
         }
         director_review = {
             "verdict": "pass",
@@ -3340,8 +3341,10 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("max_completion_tokens", body)
             self.assertNotIn("models", body)
             schema_name = body["response_format"]["json_schema"]["name"]
-            if schema_name == "qijia_director_treatment_v4":
+            if schema_name == "qijia_director_visual_development_v1":
                 result = treatment_payload
+            elif schema_name == "qijia_director_asset_development_v1":
+                result = asset_payload
             elif schema_name == "qijia_director_review_v1":
                 result = director_review
             else:
@@ -3376,27 +3379,35 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "【导演方法】动画解说导演",
                 durations,
                 director_skill_id="animated-explainer",
-                director_skill_version="2.1.0",
+                director_skill_version="2.3.0",
                 input_hash="b" * 64,
             )
         )
 
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         self.assertEqual(
             [item["reasoning"]["effort"] for item in calls],
-            ["xhigh", "xhigh", "high"],
+            ["xhigh", "xhigh", "xhigh", "high"],
         )
         self.assertEqual(
             [item["response_format"]["json_schema"]["name"] for item in calls],
             [
-                "qijia_director_treatment_v4",
+                "qijia_director_visual_development_v1",
+                "qijia_director_asset_development_v1",
                 "qijia_director_shot_plan_v3",
                 "qijia_director_review_v1",
             ],
         )
         first_schema = calls[0]["response_format"]["json_schema"]["schema"]
-        second_schema = calls[1]["response_format"]["json_schema"]["schema"]
+        asset_schema = calls[1]["response_format"]["json_schema"]["schema"]
+        second_schema = calls[2]["response_format"]["json_schema"]["schema"]
         self.assertNotIn("shots", first_schema["properties"])
+        self.assertEqual(
+            set(first_schema["properties"]),
+            {"director_treatment", "visual_bible"},
+        )
+        self.assertEqual(set(asset_schema["properties"]), set(asset_schema["required"]))
+        self.assertNotIn("references", asset_schema["properties"])
         self.assertEqual(set(second_schema["properties"]), {"chapters"})
         chapter_schema = second_schema["properties"]["chapters"]
         expected_chapter_ids = ["chapter_01", "chapter_02", "chapter_03"]
@@ -3405,8 +3416,9 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("【导演方法】动画解说导演", calls[0]["messages"][0]["content"])
         self.assertIn("先不要拆镜头", calls[0]["messages"][0]["content"])
         self.assertIn("【完整交付要求】", calls[0]["messages"][0]["content"])
-        self.assertIn("至少两条可判定的验收标准", calls[0]["messages"][0]["content"])
-        self.assertIn("已经锁定，不能重新发明视觉世界", calls[1]["messages"][0]["content"])
+        self.assertIn("【资产连续性开发】", calls[1]["messages"][0]["content"])
+        self.assertIn("review_criteria", calls[1]["messages"][0]["content"])
+        self.assertIn("已经锁定，不能重新发明视觉世界", calls[2]["messages"][0]["content"])
         for body in calls:
             system_prompt = body["messages"][0]["content"]
             for internal_term in (
@@ -3422,13 +3434,16 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             ):
                 self.assertNotIn(internal_term, system_prompt)
         treatment_input = json.loads(calls[0]["messages"][1]["content"])
-        shot_input = json.loads(calls[1]["messages"][1]["content"])
+        asset_input = json.loads(calls[1]["messages"][1]["content"])
+        shot_input = json.loads(calls[2]["messages"][1]["content"])
         self.assertEqual(treatment_input["input_type"], "visual_development")
-        self.assertFalse(treatment_input["reference_image_attached"])
+        self.assertNotIn("reference_image_attached", treatment_input)
         self.assertEqual(
             treatment_input["chapter_count_bounds"],
             {"minimum": 3, "maximum": len(beat_ids)},
         )
+        self.assertEqual(asset_input["input_type"], "asset_continuity_development")
+        self.assertNotIn("reference_strategy", asset_input["locked_visual_world"])
         self.assertEqual(shot_input["input_type"], "chapter_planning")
         self.assertEqual(
             [item["chapter_id"] for item in shot_input["locked_chapter_slots"]],
@@ -3436,8 +3451,9 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("【导演方法】", calls[0]["messages"][1]["content"])
         self.assertNotIn("【导演方法】", calls[1]["messages"][1]["content"])
+        self.assertNotIn("【导演方法】", calls[2]["messages"][1]["content"])
         self.assertEqual(treatment.input_hash, "b" * 64)
-        self.assertEqual(bible.director_skill_version, "2.1.0")
+        self.assertEqual(bible.director_skill_version, "2.3.0")
         self.assertEqual(assets.motion_grammar, ["单一动作链", "克制跟随"])
         self.assertEqual([shot.beat_ids for shot in plan.shots], groups)
         self.assertTrue(plan.director_review.passed)
@@ -3446,7 +3462,7 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             storyboard_review_hash(plan),
         )
 
-    async def test_dgrid_quality_director_completes_all_three_structured_stages(self):
+    async def test_dgrid_quality_director_completes_all_four_structured_calls(self):
         card = SourceCard(
             **valid_card().model_dump(mode="json"),
             id="card-dgrid-director-v4",
@@ -3476,17 +3492,16 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "reference_strategy": "无参考图。",
                 "forbidden_elements": ["可读文字", "随机换脸"],
             },
-            "asset_bible": {
-                "subjects": ["主角", "配角"],
-                "locations": ["固定书房"],
-                "props": ["关键物件"],
-                "identity_locks": ["主角轮廓、服装与比例固定"],
-                "material_locks": ["纸纹、色块和侧光固定"],
-                "allowed_variations": ["动作、景别和局部构图可变"],
-                "motion_grammar": ["单一动作链", "克制跟随"],
-                "review_criteria": ["事件一眼可读", "人物与材质连续"],
-                "references": [],
-            },
+        }
+        asset_payload = {
+            "subjects": ["主角", "配角"],
+            "locations": ["固定书房"],
+            "props": ["关键物件"],
+            "identity_locks": ["主角轮廓、服装与比例固定"],
+            "material_locks": ["纸纹、色块和侧光固定"],
+            "allowed_variations": ["动作、景别和局部构图可变"],
+            "motion_grammar": ["单一动作链", "克制跟随"],
+            "review_criteria": ["事件一眼可读", "人物与材质连续"],
         }
 
         def context(index: int) -> dict:
@@ -3547,8 +3562,10 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
             tool_name = body["tool_choice"]["function"]["name"]
             self.assertEqual(body["tools"][0]["function"]["name"], tool_name)
             self.assertTrue(body["tools"][0]["function"]["strict"])
-            if tool_name == "submit_qijia_director_treatment_v4":
+            if tool_name == "submit_qijia_director_visual_development_v1":
                 result = treatment_payload
+            elif tool_name == "submit_qijia_director_asset_development_v1":
+                result = asset_payload
             elif tool_name == "submit_qijia_director_shot_plan_v3":
                 result = shot_payload
             elif tool_name == "submit_qijia_director_review_v1":
@@ -3619,17 +3636,23 @@ class RealProviderContractTests(unittest.IsolatedAsyncioTestCase):
                 "【导演方法】动画解说导演",
                 durations,
                 director_skill_id="animated-explainer",
-                director_skill_version="2.1.0",
+                director_skill_version="2.3.0",
                 input_hash="a" * 64,
+                has_reference_image=True,
             )
         )
 
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         self.assertEqual(len(treatment.chapter_progression), 3)
         self.assertEqual(bible.input_hash, "a" * 64)
-        self.assertEqual(assets.references, [])
+        self.assertEqual(len(assets.references), 1)
+        self.assertEqual(assets.references[0].reference_id, "global_reference")
+        self.assertEqual(assets.references[0].roles, ["style"])
         self.assertEqual([shot.beat_ids for shot in plan.shots], groups)
         self.assertTrue(plan.director_review.passed)
+        serialized_calls = json.dumps(calls, ensure_ascii=False)
+        self.assertNotIn('"image_url"', serialized_calls)
+        self.assertNotIn('"references"', serialized_calls)
 
     async def test_quality_director_terms_403_is_not_retried_and_is_diagnosed(self):
         card = SourceCard(
@@ -4449,7 +4472,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.script_skill_snapshot.skill_id,
             "insight-led-scriptwriter",
         )
-        self.assertEqual(job.director_skill_snapshot.version, "2.2.0")
+        self.assertEqual(job.director_skill_snapshot.version, "2.3.0")
         self.assertEqual(job.provider_adapter_snapshot.version, "2.1.0")
         self.assertEqual(job.generation_settings.seedance_model, SEEDANCE_BALANCED_MODEL)
 
@@ -4771,7 +4794,7 @@ class QijiaVideoWorkflowTests(unittest.IsolatedAsyncioTestCase):
             job.director_skill_snapshot.skill_id,
             "animated-explainer",
         )
-        self.assertEqual(job.director_skill_snapshot.version, "2.2.0")
+        self.assertEqual(job.director_skill_snapshot.version, "2.3.0")
         self.assertEqual(job.director_skill_snapshot.mode, "animated_explainer")
         self.assertEqual(
             job.provider_adapter_snapshot.adapter_id,
@@ -7447,10 +7470,10 @@ class QijiaVideoPermissionTests(unittest.TestCase):
         self.assertEqual(
             text_model_pricing["director_after_script_approval"],
             {
-                "request_count": 3,
-                "request_count_range": [3, 5],
-                "input_token_range": [18000, 240000],
-                "output_token_range": [26000, 368000],
+                "request_count": 4,
+                "request_count_range": [4, 6],
+                "input_token_range": [24000, 280000],
+                "output_token_range": [28000, 400000],
             },
         )
         self.assertIn("DGrid billing-json", text_model_pricing["basis"])

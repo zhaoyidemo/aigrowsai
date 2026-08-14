@@ -666,7 +666,6 @@ _VISUAL_BIBLE_FIELDS = (
     'continuity_rules',
     'color_material_system',
     'composition_system',
-    'reference_strategy',
     'forbidden_elements',
 )
 _DIRECTOR_TREATMENT_FIELDS = (
@@ -683,7 +682,6 @@ _ASSET_BIBLE_FIELDS = (
     'allowed_variations',
     'motion_grammar',
     'review_criteria',
-    'references',
 )
 
 _VISUAL_BIBLE_RESPONSE_SCHEMA = _domain_output_schema(
@@ -698,15 +696,13 @@ _ASSET_BIBLE_SCHEMA = _domain_output_schema(
     AssetBible,
     _ASSET_BIBLE_FIELDS,
 )
-
-_DIRECTOR_TREATMENT_RESPONSE_SCHEMA = {
+_DIRECTOR_VISUAL_DEVELOPMENT_RESPONSE_SCHEMA = {
     'type': 'object',
     'properties': {
         'director_treatment': _DIRECTOR_TREATMENT_SCHEMA,
         'visual_bible': _VISUAL_BIBLE_RESPONSE_SCHEMA,
-        'asset_bible': _ASSET_BIBLE_SCHEMA,
     },
-    'required': ['director_treatment', 'visual_bible', 'asset_bible'],
+    'required': ['director_treatment', 'visual_bible'],
     'additionalProperties': False,
 }
 
@@ -805,10 +801,10 @@ _DIRECTOR_V3_RESPONSE_SCHEMA = {
 }
 
 
-def _director_treatment_response_schema(max_chapters: int) -> dict:
+def _director_visual_development_response_schema(max_chapters: int) -> dict:
     """Bind the Director's chapter decision to the available semantic beats."""
 
-    schema = deepcopy(_DIRECTOR_TREATMENT_RESPONSE_SCHEMA)
+    schema = deepcopy(_DIRECTOR_VISUAL_DEVELOPMENT_RESPONSE_SCHEMA)
     progression = schema['properties']['director_treatment']['properties'][
         'chapter_progression'
     ]
@@ -2827,7 +2823,7 @@ class OpenRouterStoryboardProvider:
         director_skill_id: str,
         director_skill_version: str,
         input_hash: str,
-        reference_image_url: str = '',
+        has_reference_image: bool = False,
         on_usage: UsageRecorder | None = None,
     ) -> tuple[DirectorTreatment, VisualBible, AssetBible, StoryboardPlan]:
         """Develop and plan in isolated calls, then audit with one bounded revision."""
@@ -2853,34 +2849,21 @@ class OpenRouterStoryboardProvider:
             }
             for item in script.beats
         ]
-        reference_instruction = (
-            '本次附有一张 global_reference。请真实观察图片后，只声明它实际适合'
-            '承担的 identity、wardrobe、object、location、style 或 composition '
-            '职责；不得默认继承全部属性。references 中 reference_id 固定写 '
-            'global_reference，并明确 preserve、allow_change 与 forbidden_transfer。'
-            if reference_image_url
-            else '本次没有参考图，返回结果中的 references 必须为空数组。'
-        )
         treatment_system_prompt = (
-            '你是知识短视频视觉导演。当前只做全片视觉开发：建立导演处理、'
-            '视觉世界和可复用资产，并锁定章节推进数量；不写脚本，也不设计具体事件。\n\n'
+            '你是知识短视频视觉导演。当前只做全片视觉方向开发：建立导演处理与'
+            '视觉世界，并锁定章节推进数量；不写脚本，不设计具体事件，也不列资产清单。\n\n'
             + director_instruction
             + '\n\n'
-            '【第一阶段：视觉开发】先不要拆镜头。根据完整口播和真实时长，建立一条'
+            '【视觉方向开发】先不要拆镜头。根据完整口播和真实时长，建立一条'
             '能够随论证推进的视觉命题，而不是逐句配图。锁定重复主体、场景、道具、'
-            '材质、视觉规则、章节递进、运动规则和验收标准。'
+            '材质、视觉规则与章节递进。'
             'chapter_progression 的每一项对应第二阶段的一个视觉章节；数量必须落在输入给定'
             '范围内，本阶段只锁定每章的叙事任务，不设计具体事件、调度或摄影机。\n\n'
-            '【完整交付要求】必须同时交付三组可以直接约束下一阶段的结果：'
+            '【完整交付要求】必须同时交付两组职责清楚的创作结果：'
             'DirectorTreatment 只写视觉命题、观众体验和章节递进；'
-            '全片视觉规则要写清视觉世界、重复主体、场景锚点、连续性、色彩材质、构图、参考策略和禁用元素；'
-            '资产规则要列出可复用人物、地点、道具、身份锁、材质锁、允许变化、运动规则和至少两条可判定的验收标准。'
-            '三组结果必须职责分离：重复视觉系统、剪辑连续性与风格落地属于 VisualBible，'
-            '可复用资产与运动规则属于 AssetBible，不得在 DirectorTreatment 中重复定义。'
-            '所有必填文字和必填列表都必须有实质内容，不得用“同上”“保持一致”“按脚本”代替；'
-            '没有参考图时 references 必须是空数组。\n\n'
-            '参考素材采用职责分离：'
-            + reference_instruction
+            '全片视觉规则要写清视觉世界、重复主体、场景锚点、连续性、色彩材质、构图和禁用元素；'
+            '重复视觉系统、剪辑连续性与风格落地只属于 VisualBible，不得在 DirectorTreatment 中重复定义。'
+            '所有必填文字和必填列表都必须有实质内容，不得用“同上”“保持一致”“按脚本”代替。'
         )
         try:
             assert_provider_neutral_runtime_prompt(treatment_system_prompt)
@@ -2889,7 +2872,6 @@ class OpenRouterStoryboardProvider:
         treatment_input = json.dumps(
             {
                 'input_type': 'visual_development',
-                'reference_image_attached': bool(reference_image_url),
                 'chapter_count_bounds': {
                     'minimum': 3,
                     'maximum': max_director_chapters,
@@ -2899,15 +2881,6 @@ class OpenRouterStoryboardProvider:
             ensure_ascii=False,
             indent=2,
         )
-        treatment_user_content: str | list[dict] = treatment_input
-        if reference_image_url:
-            treatment_user_content = [
-                {'type': 'text', 'text': treatment_input},
-                {
-                    'type': 'image_url',
-                    'image_url': {'url': reference_image_url},
-                },
-            ]
         treatment_response = await _openrouter_json_request(
             gateway=self.gateway,
             api_key=self.api_key,
@@ -2918,17 +2891,17 @@ class OpenRouterStoryboardProvider:
                     'role': 'system',
                     'content': treatment_system_prompt,
                 },
-                {'role': 'user', 'content': treatment_user_content},
+                {'role': 'user', 'content': treatment_input},
             ],
-            label='导演视觉开发',
-            schema_name='qijia_director_treatment_v4',
-            response_schema=_director_treatment_response_schema(
+            label='导演视觉方向开发',
+            schema_name='qijia_director_visual_development_v1',
+            response_schema=_director_visual_development_response_schema(
                 max_director_chapters
             ),
             max_completion_tokens=64_000,
             timeout_seconds=self.timeout_seconds,
             transport=self.transport,
-            operation='director_treatment',
+            operation='director_visual_development',
             on_usage=on_usage,
             reasoning_effort='xhigh',
         )
@@ -2944,11 +2917,18 @@ class OpenRouterStoryboardProvider:
             },
             artifact_name='DirectorTreatment',
         )
+        reference_strategy = (
+            'global_reference 只作为图片生成阶段的全局风格参考；保留媒介、色彩、材质、'
+            '光线与造型语言，人物身份、服装、场景、物件、构图和动作均可改变。'
+            if has_reference_image
+            else '没有外部参考图；以本视觉规则和已确认视觉样片作为全片统一基准。'
+        )
         visual_bible = _validate_director_artifact(
             VisualBible,
             treatment_response.data.get('visual_bible'),
             {
                 'schema_version': '1.0',
+                'reference_strategy': reference_strategy,
                 'director_skill_id': director_skill_id,
                 'director_skill_version': director_skill_version,
                 'model_id': treatment_response.model_id,
@@ -2957,24 +2937,101 @@ class OpenRouterStoryboardProvider:
             },
             artifact_name='VisualBible',
         )
+        reference_assignments = (
+            [{
+                'reference_id': 'global_reference',
+                'roles': ['style'],
+                'applies_to': ['all_shots'],
+                'retention_level': 'strong',
+                'preserve': ['媒介语言', '色彩关系', '材质质感', '光线气质', '造型语言'],
+                'allow_change': ['人物身份', '服装', '场景', '物件', '构图', '动作'],
+                'forbidden_transfer': ['可读文字', 'Logo', '水印', '人物身份', '事实主张'],
+            }]
+            if has_reference_image
+            else []
+        )
+        locked_visual_world = visual_bible.model_dump(
+            mode='json',
+            exclude={
+                'schema_version',
+                'reference_strategy',
+                'director_skill_id',
+                'director_skill_version',
+                'model_id',
+                'input_hash',
+                'created_at',
+            },
+        )
+        asset_system_prompt = (
+            '你仍是同一位知识短视频视觉导演。全片视觉方向和视觉世界已经锁定。'
+            '当前只做资产连续性开发：不修改视觉命题、章节递进或视觉世界，也不设计镜头。\n\n'
+            + director_instruction
+            + '\n\n'
+            '【资产连续性开发】只交付一份扁平、完整、可直接检查的资产规则：'
+            'subjects 列出需要跨章节复用的主体；locations 列出可辨认的地点；'
+            'props 列出贯穿道具，没有则明确返回空数组；'
+            'identity_locks 写明身份、轮廓、服装或比例中不可漂移的部分；'
+            'material_locks 写明材质、色彩、光线与接触关系中不可漂移的部分；'
+            'allowed_variations 写明允许随章节变化的属性，没有则明确返回空数组；'
+            'motion_grammar 写明适合当前视觉语言的动作物理；'
+            'review_criteria 至少给出两条可以从最终画面直接判定的标准。'
+            '每个必填字段必须独立填写真实内容，不得用“同上”“保持一致”“按视觉规则”代替。'
+        )
+        try:
+            assert_provider_neutral_runtime_prompt(asset_system_prompt)
+        except ValueError as exc:
+            raise ProviderUnavailable('导演资产指令编译失败') from exc
+        asset_input = json.dumps(
+            {
+                'input_type': 'asset_continuity_development',
+                'locked_visual_direction': treatment.model_dump(mode='json'),
+                'locked_visual_world': locked_visual_world,
+                'script_beats': beat_payload,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        asset_response = await _openrouter_json_request(
+            gateway=self.gateway,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model,
+            messages=[
+                {'role': 'system', 'content': asset_system_prompt},
+                {'role': 'user', 'content': asset_input},
+            ],
+            label='导演资产连续性开发',
+            schema_name='qijia_director_asset_development_v1',
+            response_schema=_ASSET_BIBLE_SCHEMA,
+            max_completion_tokens=32_000,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+            operation='director_asset_development',
+            on_usage=on_usage,
+            reasoning_effort='xhigh',
+        )
         asset_bible = _validate_director_artifact(
             AssetBible,
-            treatment_response.data.get('asset_bible'),
+            asset_response.data,
             {
                 'schema_version': '1.0',
-                'model_id': treatment_response.model_id,
+                'references': reference_assignments,
+                'model_id': asset_response.model_id,
                 'input_hash': input_hash,
-                'created_at': now,
+                'created_at': timestamp(),
             },
             artifact_name='AssetBible',
         )
-        if bool(asset_bible.references) != bool(reference_image_url):
-            raise ProviderUnavailable('Director 返回的参考素材职责与实际输入不一致')
-        if reference_image_url and any(
-            item.reference_id != 'global_reference'
-            for item in asset_bible.references
-        ):
-            raise ProviderUnavailable('Director 返回了未知参考素材 ID')
+        locked_assets = asset_bible.model_dump(
+            mode='json',
+            exclude={
+                'schema_version',
+                'references',
+                'model_id',
+                'input_hash',
+                'created_at',
+            },
+        )
         chapter_count = len(treatment.chapter_progression)
         if not 3 <= chapter_count <= max_director_chapters:
             raise ProviderUnavailable(
@@ -3007,8 +3064,8 @@ class OpenRouterStoryboardProvider:
             {
                 'input_type': 'chapter_planning',
                 'locked_visual_direction': treatment.model_dump(mode='json'),
-                'locked_visual_world': visual_bible.model_dump(mode='json'),
-                'locked_assets': asset_bible.model_dump(mode='json'),
+                'locked_visual_world': locked_visual_world,
+                'locked_assets': locked_assets,
                 'locked_chapter_slots': [
                     {
                         'chapter_id': chapter_id,
@@ -3141,8 +3198,8 @@ class OpenRouterStoryboardProvider:
                 {
                     'input_type': 'independent_storyboard_review',
                     'locked_visual_direction': treatment.model_dump(mode='json'),
-                    'locked_visual_world': visual_bible.model_dump(mode='json'),
-                    'locked_assets': asset_bible.model_dump(mode='json'),
+                    'locked_visual_world': locked_visual_world,
+                    'locked_assets': locked_assets,
                     'script_beats': beat_payload,
                     'chapters': plan_chapters(candidate),
                 },
@@ -3207,8 +3264,8 @@ class OpenRouterStoryboardProvider:
                 {
                     'input_type': 'storyboard_revision',
                     'locked_visual_direction': treatment.model_dump(mode='json'),
-                    'locked_visual_world': visual_bible.model_dump(mode='json'),
-                    'locked_assets': asset_bible.model_dump(mode='json'),
+                    'locked_visual_world': locked_visual_world,
+                    'locked_assets': locked_assets,
                     'locked_chapter_slots': [
                         {
                             'chapter_id': chapter_id,

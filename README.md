@@ -7,13 +7,13 @@
 ## v4 职责边界
 
 - Script Skill：`insight-led-scriptwriter@1.2.0` 直接读取原始请求与用户材料。DGrid 上的 `anthropic/claude-fable-5` 依次完成主编初稿、非阻断编辑建议和主编终稿；编辑只提供建议，没有评分或否决权。唯一业务交付是等待创作者确认的 `ScriptDraft`，不包含视觉决策。
-- Director Skill：脚本人工确认且 TTS 完成后，`animated-explainer@2.2.0` 使用同一 DGrid Claude Fable 5。前两次调用分别锁定 `DirectorTreatment + VisualBible + AssetBible` 和固定 `chapter_01...chapter_N` 槽位内的 `StoryboardPlan + ShotContextIR`；第三次使用隔离上下文独立审片。只有审片发现关键问题时才允许一次定向修订并再次复审，因此正常 3 次、最多 5 次。人类文档、来源说明与媒体平台语法不会进入模型请求。
+- Director Skill：脚本人工确认且 TTS 完成后，`animated-explainer@2.3.0` 使用同一 DGrid Claude Fable 5。视觉方向与资产连续性分别通过扁平结构化调用锁定，再填充固定 `chapter_01...chapter_N` 槽位内的 `StoryboardPlan + ShotContextIR`，最后使用隔离上下文独立审片。只有审片发现关键问题时才允许一次定向修订并再次复审，因此正常 4 次、最多 6 次。上传参考图不进入 DGrid。人类文档、来源说明与媒体平台语法不会进入模型请求。
 - DGrid 传输层：脚本、导演和选题编辑只发送单一 `anthropic/claude-fable-5` 模型请求，不携带备用模型列表。请求只使用 DGrid 官方 Chat Completions 字段；最终脚本和导演产物执行必要结构校验，内部编辑建议采用宽容解析，缺失或格式偏差不会阻断脚本交付。
 - Visual Style：四套风格只定义资产、材质、造型、色彩、构图、运动语法和验收标准，不选择论点，也不改写导演事件。
-- H3 Provider Adapter：只在脚本与导演之后工作，把参考图职责整理为多模态 Context IR，并把冻结的导演产物连同版本化图片/视频框架、负向边界和真实视频时长编译为 Seedream/Seedance 自然语言提示词；不参与脚本创作。三张视觉开发样片固定比较同一代表性事件；若用户上传参考图，三张样片都按 Director 声明的职责使用原图。正式首帧再按固定顺序同时输入原图与已选样片，分别保持身份/场景和已确认风格。
+- H3 Provider Adapter：只在脚本与导演之后工作，把创建页上传图固定为全局风格参考，并把冻结的导演产物连同版本化图片/视频框架、负向边界和真实视频时长编译为 Seedream/Seedance 自然语言提示词；不参与脚本创作。三张视觉开发样片固定比较同一代表性事件；若用户上传参考图，原图只发送给 Seedream。正式首帧再按固定顺序同时输入原图与已选样片，分别保持原图风格与已确认视觉基线。
 - 媒体生产：先生成三张视觉开发样片，由编辑锁定一张，再为未上传自有素材的章节调用 Seedream 5 Lite 和测试期默认 Seedance 1.5 Pro。样片确认是正式批量生成前唯一新增的人工质量门。
 
-两种纸艺 Visual Style、电影级风格化 3D Visual Style 与 H3 Provider Adapter 借鉴了 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 的多模态提示词结构、参考职责分离、纸张拼贴、纸艺定格和风格化三维动画方法；这里只提炼通用制作原则，不复刻特定工作流或品牌风格，不耦合 MiniMax 模型，也不新增 MiniMax API Key。`animated-explainer@2.2.0` 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中具体事件、调度、摄影机与连续性原则，不引入其研究、脚本、语音或 CLI 链路。
+两种纸艺 Visual Style、电影级风格化 3D Visual Style 与 H3 Provider Adapter 借鉴了 [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) 的多模态提示词结构、参考职责分离、纸张拼贴、纸艺定格和风格化三维动画方法；这里只提炼通用制作原则，不复刻特定工作流或品牌风格，不耦合 MiniMax 模型，也不新增 MiniMax API Key。`animated-explainer@2.3.0` 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中具体事件、调度、摄影机与连续性原则，不引入其研究、脚本、语音或 CLI 链路。
 
 生产新任务只冻结 `input_snapshot`、`script_skill_snapshot`、`director_skill_snapshot`、`visual_style_snapshot` 与 `provider_adapter_snapshot`；`skill_snapshot` 和 `prompt_adapter_snapshot` 必须为空。Content Skill、旧 H3 Script Adapter 与 Prompt Writing Profile 只用于读取、恢复 v1/v2/v3 历史任务，并采用按需加载，不进入或阻塞 v4 创建链路。只有 Visual Style 是公开选择，目录接口为 `GET /api/qijia-video/visual-styles`。
 
@@ -38,7 +38,7 @@
   → Director 第二阶段按真实 TTS 时长交付 StoryboardPlan 与 ShotContextIR
   → 独立 Director Critic 审片；必要时只做一次定向修订与复审
   → 图片为默认媒介；仅在连续动作不可替代时使用视频，全片最多 3 段但不要求凑满
-  → H3 Provider Adapter 编译三张 Seedream 视觉开发样片；若有上传参考图则按已声明职责共同使用 → 人工锁定一张
+  → H3 Provider Adapter 编译三张 Seedream 视觉开发样片；若有上传参考图则仅作为全局风格参考共同使用 → 人工锁定一张
   → 按文字分镜连续上传自有图片 / 视频，并一次确认视觉与素材安排
   → H3 Provider Adapter 只为未上传素材的章节编译 Seedream 5 Lite / Seedance 1.5 Pro 提示词；正式首帧按序使用原图与已选样片
   → Remotion 合成 480P / 720P / 1080P 竖屏成片（新任务默认 1080P）
@@ -112,7 +112,7 @@ TikHub 文档的示例响应没有提供稳定的业务 `data` 样例，因此�
 
 报表只显示人民币，“已计成本”统一计算为：`供应商回传金额 + 有计价依据的估算`。所有原始 USD 成本固定按 `1 USD = ¥6.7` 换算，底层账本仍保存供应商原始币种和金额，便于对账。供应商未回传金额、Token 缺失或网络结果未知的调用显示为“待对账”，不会按 0 元伪装成完整成本。页面提供团队效果、10 倍目标进度、视频排行、时间趋势、供应商、生产阶段、创建人、每项内容、最近调用明细，以及成本与效果两份 CSV 导出。
 
-默认估算依据为 TikHub 选题研究及短链解析 `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、TikHub 抖音效果回流 `$0.002/成功请求`（`¥0.0134/成功请求`）、Claude Fable 5 公开价 `$10/百万输入 tokens + $50/百万输出 tokens`、Seedream `¥0.22/张`、Seedance 1.0 Pro Fast 无声视频 `¥4.2/百万 tokens`、Seedance 1.5 Pro 无声视频 `¥8/百万 tokens`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。脚本确认页使用三次已发生脚本调用的 DGrid 计费快照，并补入尚未执行的 Director 正常 3 次、审片修订时最多 5 次的 token 区间预估；画面用量卡同时计入 3 张视觉样片、所有正式首帧及全部 Seedance 版本。DGrid 调用发生后始终以 `billing-json` 的不可变计费快照取代公开价估算。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[DGrid request billing](https://docs.dgrid.ai/api-reference/usage-and-billing/get-request-billing-details) 和[火山引擎豆包大模型计价](https://www.volcengine.com/product/doubao/)为准。
+默认估算依据为 TikHub 选题研究及短链解析 `$0.001/成功请求`（报表显示 `¥0.0067/成功请求`）、TikHub 抖音效果回流 `$0.002/成功请求`（`¥0.0134/成功请求`）、Claude Fable 5 公开价 `$10/百万输入 tokens + $50/百万输出 tokens`、Seedream `¥0.22/张`、Seedance 1.0 Pro Fast 无声视频 `¥4.2/百万 tokens`、Seedance 1.5 Pro 无声视频 `¥8/百万 tokens`、Seedance 2.0 无视频输入 `¥46/百万 tokens`、豆包语音 `¥5/万字符`。脚本确认页使用三次已发生脚本调用的 DGrid 计费快照，并补入尚未执行的 Director 正常 4 次、审片修订时最多 6 次的 token 区间预估；画面用量卡同时计入 3 张视觉样片、所有正式首帧及全部 Seedance 版本。DGrid 调用发生后始终以 `billing-json` 的不可变计费快照取代公开价估算。价格可用 `QIJIA_TOPIC_TIKHUB_ESTIMATED_USD_PER_SUCCESS`、`QIJIA_VIDEO_TIKHUB_PERFORMANCE_USD_PER_SUCCESS`、`QIJIA_VIDEO_SEEDREAM_PRICE_PER_IMAGE`、`QIJIA_VIDEO_SEEDANCE_10_FAST_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_15_PRICE_PER_MILLION`、`QIJIA_VIDEO_SEEDANCE_20_PRICE_PER_MILLION` 和 `QIJIA_VIDEO_TTS_PRICE_PER_10000_CHARACTERS` 覆盖；每次可计价调用保存当时快照，之后改价不会重写新账本记录。最终仍以 [TikHub 账单说明](https://docs.tikhub.io/4579905m0)、[DGrid request billing](https://docs.dgrid.ai/api-reference/usage-and-billing/get-request-billing-details) 和[火山引擎豆包大模型计价](https://www.volcengine.com/product/doubao/)为准。
 
 范围刻意只包含模型与数据 API，不包含 Railway、TOS、带宽、人工、税费和购买积分手续费。切换 DGrid 前的历史脚本与分镜可能只保存 OpenRouter `usage`，当前账本继续按原 Provider 展示且不会改写；更早缺少用量记录的金额无法可靠反推。历史图片、视频和语音仅在有保存产物或 Token 时按当前配置补算，并明确标记为历史估算。
 

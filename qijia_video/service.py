@@ -2509,7 +2509,12 @@ class QijiaVideoService:
             return compile_director_instruction(
                 job.director_skill_snapshot,
                 visual_style=job.visual_style_snapshot,
-                has_reference_image=cls._has_reference_image(job),
+                # Quality-first uploads are a Seedream-only style reference.
+                # The Director receives no image or image-derived metadata.
+                has_reference_image=(
+                    cls._has_reference_image(job)
+                    and job.pipeline_version != PipelineVersion.QUALITY_FIRST
+                ),
             )
         settings = cls._generation_settings(job)
         return compile_storyboard_base_style(
@@ -2681,22 +2686,8 @@ class QijiaVideoService:
                 )
                 if not callable(generate_quality_director_plan):
                     raise ProviderUnavailable(
-                        '当前分镜 Provider 不支持 v4 两阶段导演契约'
+                        '当前分镜 Provider 不支持 v4 分阶段导演契约'
                     )
-                source_card = self._source_card_for_job(job)
-                reference_asset = (
-                    AssetRef.model_validate(source_card.reference_assets[0])
-                    if source_card.reference_assets
-                    else None
-                )
-                reference_image_url = (
-                    await self.storage.signed_get_url(
-                        reference_asset,
-                        expires=21600,
-                    )
-                    if reference_asset
-                    else ''
-                )
                 (
                     director_treatment,
                     visual_bible,
@@ -2709,7 +2700,7 @@ class QijiaVideoService:
                     director_skill_id=job.director_skill_snapshot.skill_id,
                     director_skill_version=job.director_skill_snapshot.version,
                     input_hash=expected_hash,
-                    reference_image_url=reference_image_url,
+                    has_reference_image=self._has_reference_image(job),
                     on_usage=persist_director_usage,
                 )
             else:

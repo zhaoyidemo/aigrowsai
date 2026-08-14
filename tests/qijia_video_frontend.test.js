@@ -334,13 +334,13 @@ test('model knowledge boundary is visible without a pre-script planning artifact
 
 test('creation intake hides internal architecture behind creator-facing choices', () => {
   assert.match(page, /同一场景的真实样片，只比较视觉语言/);
-  assert.match(page, /有需要保持一致的人物、场景或画面风格吗/);
-  assert.match(page, /人物、服装、物件、场景、构图或风格属性/);
+  assert.match(page, /有喜欢的画面风格参考吗/);
+  assert.match(page, /媒介、色彩、材质、光线与造型语言/);
   const referenceStart = page.indexOf('id="manual-reference-input"');
   const referenceEnd = page.indexOf('id="manual-intake-actions"');
   const referenceSection = page.slice(referenceStart, referenceEnd);
   assert.match(referenceSection, /DGrid/);
-  assert.match(referenceSection, /Claude Fable 5/);
+  assert.doesNotMatch(referenceSection, /Claude Fable 5/);
   assert.match(referenceSection, /火山引擎 Seedream/);
   assert.match(referenceSection, /敏感图片/);
   assert.doesNotMatch(referenceSection, /ShotContextIR|Director Skill/);
@@ -403,9 +403,10 @@ test('creation intake offers one optional global reference image without extra f
   assert.match(page, /id="reference-image-input"/);
   assert.match(page, /accept="image\/jpeg,image\/png,image\/webp"/);
   assert.match(page, /上传 1 张参考图（可选）/);
-  assert.match(page, /发送给 DGrid 上的 Claude Fable 5 导演模型进行职责分析/);
+  assert.match(page, /不发送给 DGrid 导演模型/);
+  assert.match(page, /只发送给火山引擎 Seedream/);
   assert.match(page, /发送给火山引擎 Seedream 生成 3 张视觉样片和正式首帧/);
-  assert.match(page, /不会把图片内容当作事实依据/);
+  assert.match(page, /不作为人物、场景或事实依据/);
   assert.doesNotMatch(page, /id="reference-image-input"[^>]*multiple/);
   assert.match(app, /referenceImageFile/);
   assert.match(app, /\/jobs\/creative-request-with-reference/);

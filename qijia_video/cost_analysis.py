@@ -28,6 +28,8 @@ STAGE_LABELS = {
     "director_critique": "导演独立审片",
     "storyboard_revision": "导演分镜修订",
     "director_treatment": "导演视觉开发",
+    "director_visual_development": "导演视觉方向开发",
+    "director_asset_development": "导演资产连续性开发",
     "storyboard_generation": "分镜生成",
     "tts_synthesis": "旁白合成",
     "tts_preview": "配音试听",

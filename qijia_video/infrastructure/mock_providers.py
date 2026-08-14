@@ -255,7 +255,7 @@ class TemplateStoryboardProvider:
         director_skill_id: str,
         director_skill_version: str,
         input_hash: str,
-        reference_image_url: str = '',
+        has_reference_image: bool = False,
         on_usage=None,
     ) -> tuple[DirectorTreatment, VisualBible, AssetBible, StoryboardPlan]:
         bible, plan = await self.generate_director_plan(
@@ -294,7 +294,7 @@ class TemplateStoryboardProvider:
                     forbidden_transfer=['可读文字、Logo、偶然背景和事实主张'],
                 )
             ]
-            if reference_image_url
+            if has_reference_image
             else []
         )
         asset_bible = AssetBible(

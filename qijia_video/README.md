@@ -7,7 +7,7 @@
 - `skill_registry.py`：Skill 校验、按内容格式路由、公开目录与任务不可变快照；
 - `prompt_adapters/`、`prompt_adapter_registry.py`：只供历史 v3 快照恢复并按需加载；v4 不执行 H3 前置改写；
 - `script_skills/`、`script_skill_registry.py`：版本化脚本方法；v4 的 `insight-led-scriptwriter` 统领主编、非阻断编辑建议与终稿，只对外交付最终 `ScriptDraft`；
-- `director_skills/`、`director_skill_registry.py`、`director_prompting.py`：版本化 Director Skill，基于确认脚本与真实 TTS 时长，先交付 `DirectorTreatment + VisualBible + AssetBible`，再交付 `StoryboardPlan + ShotContextIR`，最后由隔离上下文独立审片并在必要时完成一次受控修订；
+- `director_skills/`、`director_skill_registry.py`、`director_prompting.py`：版本化 Director Skill，基于确认脚本与真实 TTS 时长，先分别交付 `DirectorTreatment + VisualBible` 与扁平 `AssetBible`，再交付 `StoryboardPlan + ShotContextIR`，最后由隔离上下文独立审片并在必要时完成一次受控修订；
 - `visual_styles/`、`visual_style_registry.py`：独立 Visual Style，定义媒介、资产设计、材质、色彩、光线、运动语法和可观察的审美验收标准；
 - `provider_adapters/`、`provider_adapter_registry.py`、`provider_prompting.py`：在导演之后以 H3 多模态方法分配参考图角色，并把冻结视觉语义编译为当前图片/视频模型的自然提示词；
 - `prompt_orchestration.py`：v4 只组合原始输入、用户材料与 Script Skill；同时保留历史链路编译能力；
@@ -32,9 +32,9 @@ Remotion 位于仓库根目录 `video_renderer/`，只读取 `render_manifest.js
 
 新任务只接受创作者真正能决定的原始请求、核对材料、Visual Style、可选视觉参考、画质、配音和视频模型规格。v4 不创建 Content Policy、EvidencePolicy、CreativeBrief、EditorialPlan、研究简报或 H3 前置产物；Script Skill、Director Skill、Visual Style 与 Provider Adapter 版本由服务端冻结。三次脚本请求均不携带搜索工具：DGrid 上的 `anthropic/claude-fable-5` 先写主编初稿，再由隔离上下文提供不评分、不裁决的编辑建议，最后由主编决定是否采纳并交付终稿。编辑建议缺失、格式偏差或请求失败均不会阻断终稿。
 
-脚本确认后，TTS 按 `ScriptBeat` 分别合成、实测每段音频并零间隔拼成唯一完整旁白。Director Skill 前两次使用 DGrid 上的 `anthropic/claude-fable-5`：第一阶段确定导演处理、全片视觉圣经、资产圣经和合法章节数量，第二阶段只能逐一填充已锁定的 `chapter_01...chapter_N` 槽位，再完成具体事件、主体调度、摄影机、连续性与图片/视频媒介设计；第三次使用隔离上下文独立审片，必要时追加一次定向修订和一次复审。系统随后以 H3 Provider Adapter `2.1.0` 的冻结方法生成 3 张同事件风格样片并暂停，用户选定一张后才批量生成正式镜头。若用户上传参考图，三张样片都把原图作为 `global_reference` 发送给 Seedream；正式首帧再按“原图、已选样片”的固定顺序同时输入，并分别遵守身份/场景职责与已确认风格职责。
+脚本确认后，TTS 按 `ScriptBeat` 分别合成、实测每段音频并零间隔拼成唯一完整旁白。Director Skill 使用 DGrid 上的 `anthropic/claude-fable-5`：前两次以独立扁平契约分别确定视觉方向和资产连续性，第三次逐一填充已锁定的 `chapter_01...chapter_N` 槽位，第四次使用隔离上下文独立审片，必要时追加一次定向修订和一次复审。上传参考图不进入 DGrid。系统随后以 H3 Provider Adapter `2.1.0` 的冻结方法生成 3 张同事件风格样片并暂停，用户选定一张后才批量生成正式镜头。若用户上传参考图，工作台将其固定为 `global_reference` 风格参考并只发送给 Seedream；正式首帧再按“原图、已选样片”的固定顺序同时输入，分别保持原图风格与已确认视觉基线。
 
-脚本确认页的整单区间包含已经发生的三次脚本 DGrid 计费快照、未来 Director 正常 3 次至最多 5 次的公开价预估、完整 TTS、3 张视觉样片、全部预计正式首帧和最多三段 Seedance。后续画面用量卡只汇总 Seedream 与 Seedance，但同时覆盖视觉样片、正式首帧和所有视频版本；脚本、Director 与 TTS 保留在任务总账，任何无价格调用均显示为待对账。
+脚本确认页的整单区间包含已经发生的三次脚本 DGrid 计费快照、未来 Director 正常 4 次至最多 6 次的公开价预估、完整 TTS、3 张视觉样片、全部预计正式首帧和最多三段 Seedance。后续画面用量卡只汇总 Seedream 与 Seedance，但同时覆盖视觉样片、正式首帧和所有视频版本；脚本、Director 与 TTS 保留在任务总账，任何无价格调用均显示为待对账。
 
 创建页以自然语言主输入为第一动作，只保留视觉风格这个常用选择，并用同一场景的真实样片进行比较。脚本、导演、选题编辑、图片、视频与配音的具体型号只在 `model_registry.py` 管理，Railway 不提供型号覆盖入口。页面通过 `/capabilities.production_pipeline` 展示后端解析出的真实生产架构，明确区分 AI 同事、创作方法、生成模型、生产工具和人工质量门；任务详情则通过冻结快照、生成产物与用量账本展示本次真实执行、模型、调用和成本。两层信息均只读，不形成第二套前端配置或新的确认门槛。
 
@@ -42,6 +42,6 @@ Remotion 位于仓库根目录 `video_renderer/`，只读取 `render_manifest.js
 
 新增脚本创作能力时扩展或替换唯一 Script Skill，不在它前面叠加 Content Skill 或 Prompt Adapter；新增导演方法时扩展或替换唯一 Director Skill；新增画风时创建 Visual Style；替换媒体模型时创建 Provider Adapter。Script Skill 只负责作品内容，Director Skill 是视觉叙事决策唯一负责人，Visual Style 是其资产与美术系统，Provider Adapter 只负责编译模型语言。旧字段、Content Skill、H3 前置适配器与 Prompt Writing Profile 只用于历史快照兼容。
 
-`animated-explainer@2.2.0` 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中 Animated Explainer 的具体事件、主体调度与连续性原则；人类文档和来源说明与模型运行时指令分开保存，未引入其研究、脚本、语音或 CLI 流程。MiniMax H3 的借鉴范围限定在导演之后的多模态参考角色和供应商提示词表达，不参与脚本选题与论证。
+`animated-explainer@2.3.0` 借鉴并重新编排了 MIT 许可的 [s1dashu/director](https://github.com/s1dashu/director) 中 Animated Explainer 的具体事件、主体调度与连续性原则；人类文档和来源说明与模型运行时指令分开保存，未引入其研究、脚本、语音或 CLI 流程。MiniMax H3 的借鉴范围限定在导演之后的多模态参考角色和供应商提示词表达，不参与脚本选题与论证。
 
 完整部署、配置、测试和数据边界见仓库根目录 `README.md`。

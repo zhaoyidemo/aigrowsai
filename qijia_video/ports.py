@@ -77,7 +77,7 @@ class StoryboardProvider(Protocol):
         director_skill_id: str,
         director_skill_version: str,
         input_hash: str,
-        reference_image_url: str = "",
+        has_reference_image: bool = False,
         on_usage=None,
     ) -> tuple[
         DirectorTreatment,
